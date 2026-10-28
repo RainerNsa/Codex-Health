@@ -1,0 +1,11 @@
+{
+  "id": "seed.hard_stop.ventilator",
+  "kind": "hard_stop",
+  "legal_basis": "SEED EXAMPLE, not a real rule: facility has no ventilator capability (clinical capability basis, master-plan §7 seed rule). Replace when the pilot facility's criteria document arrives.",
+  "protected_input": false,
+  "legal_reviewer": null,
+  "enabled": true,
+  "inputs": ["ventilator_use", "facility.accepts_ventilator"],
+  "expression": "ventilator_use is yes AND facility.accepts_ventilator is false",
+  "version": 1
+}

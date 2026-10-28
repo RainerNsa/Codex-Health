@@ -1,0 +1,167 @@
+# CI for Codex Health. Four jobs, all required for merge (set in branch protection on main):
+#   checks            lint, typecheck, tests, the check self-tests and the CONSTRAINTS checks in --ci mode
+#   constraints-guard a PR that touches a constraint surface must carry the `constraints-change` label,
+#                     and a PR that touches CONSTRAINTS.md may touch nothing outside the guarded set (§0.2)
+#   terraform         fmt and validate for every root under infra/terraform/envs, no backend, no cloud credentials
+#   db-checks         roles + migrations against a throwaway postgres:16 as codex_migrator, then the db tests
+#                     and the RLS/grant SQL checks; a SKIP is a failure here
+# No job has cloud credentials. Nothing here applies infrastructure or calls an AI endpoint.
+# Third-party actions are pinned by commit SHA (the tag after the # is the human-readable version).
+name: CI
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened, labeled, unlabeled]
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+  pull-requests: read
+
+concurrency:
+  group: ci-${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  NODE_VERSION: '24'
+
+jobs:
+  checks:
+    name: checks
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - run: npm run lint --if-present
+      - run: npm run typecheck --if-present
+      - run: npm test
+      - name: CONSTRAINTS check self-tests
+        run: npm test --prefix scripts/checks
+      - name: Infrastructure static checks
+        run: node --test infra/scripts/
+      - name: CONSTRAINTS checks (--ci; after the tests so the canary sweep sees their logs and artefacts)
+        # --ci: a SKIP from a must-run check (secrets, bedrock-only, prohibited-claims, legal-basis) fails the job.
+        run: node scripts/checks/run-all.mjs --ci
+
+  constraints-guard:
+    name: constraints-guard
+    runs-on: ubuntu-latest
+    if: github.event_name == 'pull_request'
+    steps:
+      - name: Require the constraints-change label when a constraint surface changes
+        uses: actions/github-script@60a0d83039c74a4aee543508d2ffcb1c3799cdea # v7.0.1
+        with:
+          script: |
+            // Every surface that decides what the checks prove or how they run (CONSTRAINTS.md §0, §3, §8).
+            const GUARDED_PREFIXES = [
+              'scripts/checks/', 'scripts/dev/', 'packages/db/sql/', 'packages/db/migrations/',
+              '.github/workflows/', 'infra/',
+            ];
+            const GUARDED_FILES = ['CONSTRAINTS.md', '.gitleaks.toml', '.claude/settings.json', 'eslint.config.js'];
+            const guarded = (f) => GUARDED_FILES.includes(f) || GUARDED_PREFIXES.some((p) => f.startsWith(p));
+            const pr = context.payload.pull_request;
+            const files = await github.paginate(github.rest.pulls.listFiles, {
+              owner: context.repo.owner, repo: context.repo.repo, pull_number: pr.number, per_page: 100,
+            });
+            const names = files.map((f) => f.filename);
+            const touched = names.filter(guarded);
+            const outside = names.filter((f) => !guarded(f));
+            const labels = pr.labels.map((l) => l.name);
+            if (touched.length === 0) {
+              core.info('No constraint surface touched.');
+              return;
+            }
+            if (touched.includes('CONSTRAINTS.md') && outside.length > 0) {
+              // CONSTRAINTS.md §0.2: a change to this file in the same PR as the feature that was failing is refused.
+              core.setFailed(
+                `This PR changes CONSTRAINTS.md together with files outside the constraint surface. ` +
+                `Open the CONSTRAINTS.md change as its own constraints-change PR first:\n  ${outside.join('\n  ')}`,
+              );
+              return;
+            }
+            if (labels.includes('constraints-change')) {
+              core.info(`Constraint surface touched with label present:\n  ${touched.join('\n  ')}`);
+            } else {
+              core.setFailed(
+                `This PR changes a constraint surface but lacks the "constraints-change" label ` +
+                `(needs a security-lead review):\n  ${touched.join('\n  ')}`,
+              );
+            }
+
+  terraform:
+    name: terraform (${{ matrix.root }})
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        root: [org, dev, test, prod]
+    env:
+      TF_IN_AUTOMATION: 'true'
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: hashicorp/setup-terraform@b9cd54a3c349d3f38e8881555d616ced269862dd # v3.1.2
+        with:
+          terraform_version: '1.9.8'
+      - name: terraform fmt -check
+        run: terraform fmt -check -recursive -diff infra/terraform
+      - name: terraform init -backend=false
+        working-directory: infra/terraform/envs/${{ matrix.root }}
+        run: terraform init -backend=false -input=false
+      - name: terraform validate
+        working-directory: infra/terraform/envs/${{ matrix.root }}
+        run: terraform validate -no-color
+
+  db-checks:
+    name: db-checks
+    runs-on: ubuntu-latest
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_DB: codex_ci
+          POSTGRES_USER: codex_ci
+          # Bootstrap superuser of a throwaway container that lives for this job only; used once, to create the
+          # roles below. A repo secret overrides the placeholder if set.
+          POSTGRES_PASSWORD: ${{ secrets.CI_DB_PASSWORD || 'ci-ephemeral-not-a-credential' }}
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 10
+    env:
+      PG_BOOTSTRAP_URL: postgres://codex_ci:${{ secrets.CI_DB_PASSWORD || 'ci-ephemeral-not-a-credential' }}@localhost:5432/codex_ci
+      # Migrations, tests and checks run as the NOSUPERUSER NOBYPASSRLS owner, exactly as locally, so FORCE RLS
+      # binds the owner and a superuser cannot mask a missing policy. Password is the local placeholder from
+      # packages/db/sql/init/001_roles_and_database.sql.
+      DATABASE_URL: postgres://codex_migrator:migrator-local-only@localhost:5432/codex_ci
+    steps:
+      - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
+      - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
+        with:
+          node-version: ${{ env.NODE_VERSION }}
+          cache: npm
+      - run: npm ci
+      - name: Create the database roles (the init SQL docker-compose mounts, minus CREATE DATABASE)
+        # psql ships on the ubuntu-latest runner image. The service database already exists, so the init file is
+        # replayed up to its CREATE DATABASE line and the ownership/connect grants are applied to codex_ci.
+        run: |
+          sed -n '/^CREATE DATABASE/q;p' packages/db/sql/init/001_roles_and_database.sql \
+            | psql "$PG_BOOTSTRAP_URL" -X -v ON_ERROR_STOP=1 -f -
+          psql "$PG_BOOTSTRAP_URL" -X -v ON_ERROR_STOP=1 \
+            -c 'ALTER DATABASE codex_ci OWNER TO codex_migrator' \
+            -c 'REVOKE CONNECT ON DATABASE codex_ci FROM PUBLIC' \
+            -c 'GRANT CONNECT ON DATABASE codex_ci TO codex_app, codex_worker'
+      - name: Apply migrations as codex_migrator
+        run: node packages/db/migrate.mjs
+      - name: Database tests (cross-facility isolation, audit immutability, checks return zero rows)
+        run: npm test -w @codex-health/db
+      - name: RLS enumeration and grant checks
+        # Exit 0 only. A SKIP (2) here means DATABASE_URL was lost, which is a CI bug, not a pass.
+        run: node scripts/checks/db-grants.mjs

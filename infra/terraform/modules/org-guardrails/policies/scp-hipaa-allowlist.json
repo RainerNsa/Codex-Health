@@ -1,0 +1,48 @@
+{
+  "Version": "2012-10-17",
+  "Statement": [
+    {
+      "Sid": "DenyServicesOutsideHipaaEligibleAllowlist",
+      "Effect": "Deny",
+      "NotAction": [
+        "ec2:*",
+        "rds:*",
+        "s3:*",
+        "sqs:*",
+        "kms:*",
+        "cognito-idp:*",
+        "bedrock:*",
+        "textract:*",
+        "cloudwatch:*",
+        "logs:*",
+        "iam:*",
+        "sts:*",
+        "ecs:*",
+        "ecr:*",
+        "secretsmanager:*",
+        "dynamodb:*",
+        "cloudtrail:*",
+        "budgets:*",
+        "tag:*"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyBedrockInvocationLogging",
+      "Effect": "Deny",
+      "Action": [
+        "bedrock:PutModelInvocationLoggingConfiguration"
+      ],
+      "Resource": "*"
+    },
+    {
+      "Sid": "DenyDisablingCloudTrail",
+      "Effect": "Deny",
+      "Action": [
+        "cloudtrail:StopLogging",
+        "cloudtrail:DeleteTrail"
+      ],
+      "Resource": "*"
+    }
+  ]
+}

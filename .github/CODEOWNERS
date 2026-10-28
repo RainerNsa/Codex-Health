@@ -1,0 +1,17 @@
+# Code owners for Codex Health. Sole founder and owner: @RainerNsa, who also holds the security hat at M0
+# (ops/talking-points F6). When a second engineer or a security lead exists, add their handle to the
+# constraint-surface lines below. Later entries win for a matching path. Branch protection on main requires
+# review from owners.
+
+*                               @RainerNsa
+
+# Constraint surfaces: a second pair of eyes from security on every change.
+/CONSTRAINTS.md                 @RainerNsa
+/scripts/checks/                @RainerNsa
+/packages/db/                   @RainerNsa
+/infra/                         @RainerNsa
+/.github/                       @RainerNsa
+/.gitleaks.toml                 @RainerNsa
+/.claude/settings.json          @RainerNsa
+/eslint.config.js               @RainerNsa
+/scripts/dev/                   @RainerNsa

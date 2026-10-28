@@ -1,0 +1,30 @@
+# gitleaks configuration for Codex Health. Extends the built-in default rules.
+# scripts/checks/secrets.mjs runs gitleaks with this file when gitleaks is installed, otherwise its
+# own regex fallback. Keep the two in step: a pattern added here should be added there too.
+title = "codex-health"
+
+[extend]
+useDefault = true
+
+[[rules]]
+id = "supabase-secret-key"
+description = "Supabase secret (service) key, new sb_secret_ format"
+regex = '''\bsb_secret_[A-Za-z0-9_-]{20,}'''
+
+[[rules]]
+id = "anthropic-api-key"
+description = "Anthropic API key (must never appear: product AI calls go only to Bedrock)"
+regex = '''\bsk-ant-[A-Za-z0-9_-]{20,}'''
+
+[allowlist]
+description = "Paths that legitimately contain key-shaped text"
+paths = [
+  '''^package-lock\.json$''',
+  '''^\.gitleaks\.toml$''',
+  '''(^|/)node_modules/''',
+]
+regexes = [
+  # Documented placeholders only; real values never appear in the repo.
+  '''<[A-Z_]+>''',
+  '''example\.invalid''',
+]

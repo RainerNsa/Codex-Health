@@ -1,0 +1,51 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:codex-health:schema:fact.v0",
+  "title": "Fact v0",
+  "description": "One source-linked, three-valued fact extracted from a referral packet or entered by a user (dev-alignment 0.2). The baseline fact key list is fixed in SPEC.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "key",
+    "value",
+    "source",
+    "quote",
+    "document_id",
+    "page",
+    "as_of_date",
+    "is_critical",
+    "specially_protected"
+  ],
+  "properties": {
+    "key": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "description": "Fact name from the baseline list, snake_case."
+    },
+    "value": { "enum": ["yes", "no", "unknown"] },
+    "source": { "enum": ["ai", "user"] },
+    "quote": {
+      "type": ["string", "null"],
+      "description": "Verbatim supporting text. Required when source is ai and value is yes or no."
+    },
+    "document_id": { "type": ["string", "null"] },
+    "page": { "type": ["integer", "null"], "minimum": 1 },
+    "as_of_date": {
+      "type": ["string", "null"],
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
+      "description": "Date the fact was true as of (YYYY-MM-DD), from the source, not the clock."
+    },
+    "is_critical": { "type": "boolean" },
+    "specially_protected": { "type": "boolean" }
+  },
+  "if": {
+    "properties": { "source": { "const": "ai" }, "value": { "enum": ["yes", "no"] } }
+  },
+  "then": {
+    "properties": {
+      "quote": { "type": "string", "minLength": 1 },
+      "document_id": { "type": "string", "minLength": 1 },
+      "page": { "type": "integer" }
+    }
+  }
+}

@@ -1,0 +1,7 @@
+# Copy to backend.hcl (gitignored) and fill in. Used as:
+#   terraform init -backend-config=backend.hcl
+bucket         = "<TF_STATE_BUCKET>"
+key            = "codex-health/dev/terraform.tfstate"
+region         = "us-east-1"
+dynamodb_table = "<TF_STATE_LOCK_TABLE>"
+encrypt        = true

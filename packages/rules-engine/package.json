@@ -1,0 +1,21 @@
+{
+  "name": "@codex-health/rules-engine",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Pure deterministic admissions rules engine. Types and resolution order only until SPEC.md §rules (M2).",
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts"
+  },
+  "scripts": {
+    "lint": "eslint --config ../../eslint.config.js src test",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "fast-check": "^3.23.0",
+    "typescript": "^5.8.0",
+    "vitest": "^3.0.0"
+  }
+}

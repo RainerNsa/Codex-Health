@@ -1,0 +1,42 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:codex-health:schema:rule.v0",
+  "title": "Rule record v0",
+  "description": "One versioned facility rule (dev-alignment 2.8). expression is an opaque string until SPEC.md §rules fixes the DSL. A hard_stop rule that reads a protected input must carry a legal_reviewer.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "id",
+    "kind",
+    "legal_basis",
+    "protected_input",
+    "legal_reviewer",
+    "enabled",
+    "inputs",
+    "expression",
+    "version"
+  ],
+  "properties": {
+    "id": { "type": "string", "pattern": "^[a-z][a-z0-9_.]*$" },
+    "kind": { "enum": ["hard_stop", "review", "favorable"] },
+    "legal_basis": { "type": "string", "minLength": 1 },
+    "protected_input": {
+      "type": "boolean",
+      "description": "True when any input is a protected field (payer source, psychiatric/behavioral, substance use, bariatric, homelessness, guardianship, disability-related)."
+    },
+    "legal_reviewer": { "type": ["string", "null"], "minLength": 1 },
+    "enabled": { "type": "boolean" },
+    "inputs": {
+      "type": "array",
+      "minItems": 1,
+      "uniqueItems": true,
+      "items": { "type": "string", "pattern": "^[a-z][a-z0-9_.]*$" }
+    },
+    "expression": { "type": "string", "minLength": 1 },
+    "version": { "type": "integer", "minimum": 1 }
+  },
+  "if": {
+    "properties": { "kind": { "const": "hard_stop" }, "protected_input": { "const": true } }
+  },
+  "then": { "properties": { "legal_reviewer": { "type": "string" } } }
+}

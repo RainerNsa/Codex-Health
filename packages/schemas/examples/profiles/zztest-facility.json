@@ -1,0 +1,12 @@
+{
+  "facility_id": "fac_zztest_0001",
+  "name": "ZZTEST Facility (synthetic)",
+  "version": 1,
+  "capabilities": {
+    "accepts_ventilator": false,
+    "accepts_tracheostomy": true,
+    "accepts_dialysis": true,
+    "ventilator_beds": 0,
+    "isolation_rooms": 2
+  }
+}

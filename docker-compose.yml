@@ -1,0 +1,43 @@
+# Local development only. Synthetic data only (see CONSTRAINTS.md and docs/local-development.md).
+# Both ports bind to 127.0.0.1 so nothing is reachable from the LAN.
+# Images are pinned to a minor tag so every developer runs the same engine
+# (RDS is postgres16; LocalStack 3.x matches the healthcheck below). Bump both
+# deliberately, in a PR that says why.
+services:
+  postgres:
+    image: postgres:16.9
+    environment:
+      # Bootstrap superuser for the container only. The app never uses it.
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres-local-only
+      POSTGRES_DB: postgres
+    ports:
+      - "127.0.0.1:5432:5432"
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+      # Creates roles codex_migrator / codex_app / codex_worker and database codex_health on first start.
+      - ./packages/db/sql/init:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d postgres"]
+      interval: 2s
+      timeout: 3s
+      retries: 30
+
+  localstack:
+    image: localstack/localstack:3.8
+    environment:
+      SERVICES: s3,sqs
+      AWS_DEFAULT_REGION: us-east-1
+    ports:
+      - "127.0.0.1:4566:4566"
+    volumes:
+      # Creates bucket codex-health-documents-local and queues codex-healthcessing(-dlq) once LocalStack is ready.
+      - ./scripts/dev/localstack-init:/etc/localstack/init/ready.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:4566/_localstack/health | grep -qE '\"sqs\": \"(available|running)\"'"]
+      interval: 3s
+      timeout: 5s
+      retries: 30
+
+volumes:
+  pgdata:

@@ -1,0 +1,8 @@
+{
+  "_comment": "Synthetic canary identifiers. Every golden packet embeds all three; no log, artefact, snapshot or local data file may contain any of them. Matching is case-insensitive. Changing these is a constraints-change (see CONSTRAINTS.md).",
+  "canaries": [
+    { "kind": "name", "value": "ZZTEST CANARY-ALPHA" },
+    { "kind": "mrn", "value": "MRN-ZZCANARY-0000001" },
+    { "kind": "dob", "value": "1899-02-30" }
+  ]
+}

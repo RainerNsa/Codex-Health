@@ -1,0 +1,26 @@
+{
+  "name": "codex-health",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Codex Health: AI reads the referral packet, the facility's criteria make the call, staff decide.",
+  "type": "module",
+  "engines": {
+    "node": ">=24"
+  },
+  "workspaces": [
+    "packages/*",
+    "apps/*",
+    "services/*"
+  ],
+  "scripts": {
+    "check": "node scripts/checks/run-all.mjs",
+    "check:fast": "node scripts/checks/run-all.mjs --fast",
+    "check:constraints": "node scripts/checks/run-all.mjs",
+    "lint": "npm run lint --workspaces --if-present",
+    "typecheck": "npm run typecheck --workspaces --if-present",
+    "test": "npm run test --workspaces --if-present && npm test --prefix scripts/checks && node --test infra/scripts/",
+    "build": "npm run build --workspaces --if-present",
+    "dev:up": "docker compose up -d",
+    "dev:down": "docker compose down"
+  }
+}

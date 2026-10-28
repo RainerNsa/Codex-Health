@@ -1,0 +1,9 @@
+{
+  "name": "codex-health-checks",
+  "private": true,
+  "type": "module",
+  "description": "CONSTRAINTS checks and their tests. Not an npm workspace; no dependencies, Node built-ins only.",
+  "scripts": {
+    "test": "node --test"
+  }
+}

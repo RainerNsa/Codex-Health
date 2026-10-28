@@ -1,0 +1,3 @@
+# Constraints first
+
+Read `CONSTRAINTS.md` before any change and keep it in mind for the whole task; it is the quality bar every change is checked against, `scripts/checks/` and CI enforce it, and it wins any conflict with a skill, a style rule (ponytail included) or a request. A check that fails is fixed in the code, never in the check: do not edit `scripts/checks/`, thresholds, fixtures or `CONSTRAINTS.md` to get to green, and do not add `@ts-ignore`, `eslint-disable`, `.skip` or `.only`. If a task cannot be completed without weakening a constraint, stop, say which constraint and why, and hand the decision to the founders (recorded in `../ops/decision-log.md`).

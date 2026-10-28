@@ -1,0 +1,30 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:codex-health:schema:facility-profile.v0",
+  "title": "Facility profile v0",
+  "description": "Typed capability keys a facility's rules read (dev-alignment 0.3). A key that is absent evaluates to unknown and the trace names the empty key, so no capability key is required. Key list is provisional until the pilot facility's criteria document arrives.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["facility_id", "name", "version", "capabilities"],
+  "properties": {
+    "facility_id": { "type": "string", "minLength": 1 },
+    "name": { "type": "string", "minLength": 1 },
+    "version": { "type": "integer", "minimum": 1 },
+    "capabilities": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "accepts_ventilator": { "type": "boolean" },
+        "accepts_tracheostomy": { "type": "boolean" },
+        "accepts_dialysis": { "type": "boolean" },
+        "accepts_bariatric": { "type": "boolean" },
+        "accepts_iv_antibiotics": { "type": "boolean" },
+        "accepts_isolation": { "type": "boolean" },
+        "ventilator_beds": { "type": "integer", "minimum": 0 },
+        "bariatric_beds": { "type": "integer", "minimum": 0 },
+        "isolation_rooms": { "type": "integer", "minimum": 0 },
+        "max_patient_weight_kg": { "type": "integer", "minimum": 0 }
+      }
+    }
+  }
+}

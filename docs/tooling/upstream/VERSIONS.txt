@@ -1,0 +1,8 @@
+agent-skills 0.6.13
+ponytail 5.3.2
+OmniRoute 3.8.52
+fetched 2026-10-22 from GitHub default branches
+
+switched 2026-10-22: hand-copied packs removed from .claude/; both tools now installed as Claude Code plugins at project scope (.claude/settings.json enabledPlugins) and user scope
+agent-skills plugin commit aeac41d4d005999432bb7312f7ff06383a91d59d
+ponytail plugin commit 09c434ab73ca43761c5d8b0c5d341926c2fba710
