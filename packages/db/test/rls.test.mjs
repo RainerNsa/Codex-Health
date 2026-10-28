@@ -1,6 +1,7 @@
 // Cross-facility isolation, organisation isolation, audit immutability, the hash chain and provisioning
 // coupling, against a migrated local database (SPEC §12 XF-1, XF-2, XF-9, XF-10; I3, I4). Skips cleanly
-// without DATABASE_URL on a developer machine and FAILS without it in CI (a skipped gate is not green).
+// without DATABASE_URL on a developer machine and in the CI `checks` job, and FAILS without it where a
+// database is promised (the CI db-checks job sets REQUIRE_DATABASE): a skipped gate is not green.
 // Every subtest runs in its own savepoint over one outer transaction that is rolled back at the end.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
@@ -8,7 +9,7 @@ import pg from 'pg';
 import { runChecks } from '../check.mjs';
 
 const url = process.env.DATABASE_URL;
-if (!url && process.env.CI) throw new Error('DATABASE_URL must be set in CI: the database suite may not be skipped there');
+if (!url && process.env.REQUIRE_DATABASE) throw new Error('DATABASE_URL must be set here: the database suite may not be skipped in the db-checks job');
 
 // Fixed, obviously synthetic ids: 2 orgs x 2 facilities (dev-alignment 1.9 seed shape).
 // The "...e..." range is reserved for this test; scripts/dev/seed-synthetic.mjs uses "...a001/f0a1..."

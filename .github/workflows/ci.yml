@@ -141,6 +141,8 @@ jobs:
       # binds the owner and a superuser cannot mask a missing policy. Password is the local placeholder from
       # packages/db/sql/init/001_roles_and_database.sql.
       DATABASE_URL: postgres://codex_migrator:migrator-local-only@localhost:5432/codex_ci
+      # The db test suite skips without DATABASE_URL on a developer machine; here that would be a silent hole.
+      REQUIRE_DATABASE: '1'
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
