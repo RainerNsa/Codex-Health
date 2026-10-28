@@ -9,7 +9,7 @@ This file is the quality and safety bar for Codex Health. Every number in it has
 
 1. **CONSTRAINTS.md wins.** Where it conflicts with ponytail (any level), with `CLAUDE.md` or `AGENTS.md`, with any skill, command, persona, prompt or agent instruction, or with a task handed to an agent by a workflow script, this file wins. The audit hash chain, RLS, verbatim quote verification, the version stamps and override reasons are required, not extras to cut.
 2. **No agent may weaken it.** An agent that cannot make a change pass stops and reports; it does not lower a threshold, remove a check from a stage, add an exception, skip a test, add a suppression comment or edit this file. A change that touches this file in the same PR as the feature that was failing is refused.
-3. **Who may change it:** both founders plus the security lead, together, through a PR labelled `constraints-change`, with the reason in the PR description. Tightening may be proposed by anyone; the same three approve it. Exceptions (section 7) follow the same path, since an exception is a weakening with a date on it.
+3. **Who may change it:** the founder (Rainer, sole founder and owner since 2026-10-23, holding the security hat until a security lead is named; `../ops/OPERATIONS.md`), through a PR labelled `constraints-change`, with the reason in the PR description, after the security-auditor persona's review is attached. When a second engineer or security lead exists, they approve too. Tightening may be proposed by anyone; the same people approve it. Exceptions (section 7) follow the same path, since an exception is a weakening with a date on it.
 4. Checks and scripts mirror this file, not the other way round. If a script and this file drift, this file is right and the script is a bug.
 
 ## 1. Invariants (must always hold)
@@ -79,10 +79,10 @@ Applies per hard-stop field, on the extraction evaluation set (a separate artefa
 | Lower 95% confidence bound on that recall | ≥ 0.90 | Stops a small, lucky sample passing; the bound is what the number means on real packets |
 | Invented-value rate | 0 | An invented value is a fabricated fact with a quote attached; one is a pilot-stop event |
 | Unknown → No rate | 0 | Invariant I1: silence is Unknown, never No |
-| Positive fixtures per field | ≥ 25 | Below this, one miss moves recall by 4 points and the bound cannot be stated |
-| Near-miss negative fixtures per field | ≥ 25 | "Vent-dependent in ICU, weaned before discharge", "trach, decannulated": the cases that produce a false positive hard stop and a wrongful Do Not Admit |
+| Positive fixtures per field | ≥ 30 | At 30 positives with zero misses the exact one-sided 95% lower bound is 0.905, so the recall and bound rows can both be met; at 25 it is 0.887 and the gate could never pass (ruling R4, 2026-10-22; applied 2026-10-29) |
+| Near-miss negative fixtures per field | ≥ 30 | "Vent-dependent in ICU, weaned before discharge", "trach, decannulated": the cases that produce a false positive hard stop and a wrongful Do Not Admit |
 
-Method decision (engineering, until QA or a founder overrules): the confidence bound is the exact (Clopper-Pearson) one-sided 95% lower bound. Arithmetic note for the founders: at exactly 25 positives with zero misses that bound is 0.887, below 0.90, so the gate cannot pass at the fixture floor; it first passes at 29 positives with zero misses (0.902), and with one miss needs 46 positives (0.901). Either the fixture minimum rises to 30, or the bound drops to 0.88. Listed as an open question; until answered the stricter reading holds (≥ 25 authored, zero misses, bound ≥ 0.90, so effectively ≥ 29 positives per field).
+Method decision (engineering, until QA or the founder overrules): the confidence bound is the exact (Clopper-Pearson) one-sided 95% lower bound. Arithmetic: with zero misses the bound is 0.887 at 25 positives, 0.902 at 29 and 0.905 at 30; with one miss it needs 46 positives (0.901). The floor was raised from 25 to 30 rather than the bound lowered to 0.88 (R4), so the gate is reachable at the floor with zero misses and the bound keeps its meaning. QA authors to 30 per field; the extraction-evaluation set is a separate artefact from the case library (SPEC §15).
 
 Gate commands arrive with the eval harness (M4/M5, owned by Team B/QA) and are added to section 3 then.
 
