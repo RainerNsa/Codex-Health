@@ -1,7 +1,7 @@
 # Codex Health — Core Specification
 
 Status: **M0 draft — to be completed with `/spec` and the founder interview.**
-Version: v0.1 (2026-10-28; §12 decided, §11 re-pointed at the workshop). Sources: `../research/planning/master-plan.md`, `../research/dev-alignment.md` (§1 accepted changes, §2 rulings, §4 founder items), `../ops/COO-BRIEF.md`. The brief is cited as §n.
+Version: v0.2 (2026-10-28; §12–§15 decided, §11 re-pointed at the workshop). Sources: `../research/planning/master-plan.md`, `../research/dev-alignment.md` (§1 accepted changes, §2 rulings, §4 founder items), `../ops/COO-BRIEF.md`. The brief is cited as §n.
 
 Sections marked **decided** are in force. Sections marked **PENDING** name what is missing and who decides. Nothing here is product code; see `CONSTRAINTS.md` for what every change is checked against.
 
@@ -77,7 +77,7 @@ Organisations and first Admins are created only through an audited internal admi
 
 The JSON Schemas are owned by the schemas agent and versioned under `packages/schemas/`. This section fixes what they must express; the files are the source of truth for field names.
 
-- **Extraction fact v0** (`packages/schemas/extraction-fact.v0.json`, 0.2): typed, tri-state value; `is_critical` (provisional, derived set wins); `as_of_date`; `source = ai | user` with a note for user; `specially_protected` flag; evidence = document, page, verbatim quote, verified flag, page-render coordinates; `single_source` flag on hard-stop "No" values; confidence band as a label only. Baseline fact list = §5 Step 5 plus the clinical additions in 0.2; medications are typed records (route, frequency, duration).
+- **Extraction fact v0** (`packages/schemas/schemas/fact.v0.json`, 0.2): typed, tri-state value; `is_critical` (provisional, derived set wins); `as_of_date`; `source = ai | user` with a note for user; `specially_protected` flag; evidence = document, page, verbatim quote, verified flag, page-render coordinates; `single_source` flag on hard-stop "No" values; confidence band as a label only. Baseline fact list = §5 Step 5 plus the clinical additions in 0.2; medications are typed records (route, frequency, duration).
 - **Facility profile v0** (`packages/schemas/facility-profile.v0.json`, 0.3): typed keys, boolean and count, including counts per constrained bed type; an empty key is Unknown; a profile-completeness checklist drives the facility-settings screen (ruling D2). Static counts only; no daily census (declined X1).
 - **Rule record v0** (`packages/schemas/rule-record.v0.json`): the twelve §6 fields plus `legal_basis` (required), `protected_input`, `legal_reviewer`; rule kind = hard_stop | review | favorable | payer; per-facility on/off; True/False/Unknown test cases per rule. Examples live under `packages/schemas/examples/rules/` and are checked by `legal-basis.mjs`.
 - **Referral**: `referral_type` (skilled default; long-term, bed-hold readmission, respite, hospice) readable by rules; MVP set is **PENDING: founders (§4 item 11); engineering default is skilled only.**
@@ -157,17 +157,118 @@ Trust boundaries: **B1** internet to browser; **B2** browser to API (Cognito SRP
 
 M1: XF-1/XF-2 extended to every tenant table, XF-6, XF-9, XF-10 and the platform audit chain, the co-sign test, the queue policy, per-job worker credentials, CloudTrail and GuardDuty, log groups, restricted KMS and bucket policies. M3: XF-5, XF-11, upload quarantine, idle timeout. M4: XF-3, XF-4, XF-8, XF-12, XF-13. M5: XF-7a/b. M8: the snapshot-restore drill and the security questionnaire pack, which answers "how is tenant data isolated" by pointing at this table and the green suite.
 
-## 13. §15 standard → test-type matrix (dev-alignment 0.6)
+## 13. §15 standard → test-type matrix (dev-alignment 0.6) — decided 2026-10-28
 
-**PENDING: Team B/QA at M0.** One row per §15 standard: test kind, first-passing milestone, evidence artefact. Standards 7 and 11 are scripted usability protocols with ≥ 3 admissions staff and a written definition of "assistance"; standard 1 passes only after criteria are encoded at M7.
+The brief's twelve readiness standards (§15) are the release bar. "All twelve have automated tests" is replaced by this table: each standard names its test kind, the milestone at which it first passes, and the artefact that proves it. A standard passes only when its artefact exists and is linked from the milestone exit record in `../ops/decision-log.md`. At M8 this table, with evidence links filled in, is the pre-PHI checklist (QA review, M8).
 
-## 14. Pilot event model (dev-alignment 0.5)
+**Assistance**, for standards 7 and 11: any communication to the tester during a scripted task from anyone present (developer, agent, facilitator, clinician or another tester), other than reading the task aloud. Answering a question, pointing at a control, or explaining an error counts as assistance and fails the task. A tester who abandons a task, or exceeds the protocol's per-step time cap, also fails it. Sessions are recorded; the tester, not the facilitator, signs the assistance log. **Admissions staff** means a person currently doing admissions screening at a skilled nursing facility; the professionals recruited under F6 qualify only if they do.
 
-**PENDING: Team B specifies at M0, builds at M1.** Per-stage timestamps (received, uploaded, processed, review start/end, finalized), per-user review time, evidence-view events per decisive fact, confirmations, corrections, overrides, raw vs verified recommendation snapshots, `pilot_actual_outcome`, `disagreement_cause` (six §16 codes plus "factor outside tool scope: bed, census, relationship"), adjudicator verdict and notes. Per-facility `pilot_mode` (lagged, blinded, assisted) with lagged semantics per ruling D9.
+| # | §15 standard | Test kind | First passes | Evidence artefact |
+| --- | --- | --- | --- | --- |
+| 1 | Every admissions criterion has been tested | Rule CI: every rule record in the enabled rule set has a True, a False and an Unknown case and all three pass (CONSTRAINTS §4.2) | Seeds at M2; the full set only after the criteria workshop (§11) is encoded. That milestone (M7) is unscheduled under F3 | Rule-coverage report from rule CI listing every rule id with its three cases |
+| 2 | Every hard-stop rule has at least one passing and one failing test | Same gate as 1, restricted to `kind = hard_stop`; plus the generative property "a correction that makes a hard stop true flips to Do Not Admit with the AI value retained" (2.3) | M2 for the seed hard stops; the full set with row 1 | Rule-coverage report; property-test run log |
+| 3 | Missing information cannot silently produce an Admit | Generative property tests over random facts and rule sets: no Admit while any critical fact is Unknown, in conflict, or processing is incomplete (I1); **and no Admit when the confirmed set is empty or every fact is Unknown, whatever `favorable_rule_required` is set to** (otherwise an empty rule set with the flag off admits an all-Unknown packet through step 5); outcome-resolution table test (§4) | M2 (engine); M4 end-to-end on the slice | Property-test run log; the §4 table test; one end-to-end fixture with a critical Unknown ending in Needs Review `missing_info` |
+| 4 | Contradictory information is visibly flagged | Pipeline test: two documents with opposing values on one fact produce a `conflict` item, never a resolved value (§3); UI test: the review screen renders the §19 contradictory-information state from a test flag (3.2) | M4 (pipeline, slice facts); M5 (timeline-aware, 5.4) | Golden packets with labelled conflicts (§15 label schema `conflicts`); the UI state test's screenshot, taken on a canary-free non-golden fixture, since `canary-phi.mjs` treats snapshot directories as log sinks |
+| 5 | Uploaded documents cannot be accessed by unauthorized users | Storage and API tests XF-11, XF-12 (§12); bucket policy and block-public-access static tests; signed-URL TTL test (§4.2) | Static tests today; XF-11 M3; XF-3, XF-12, XF-13 M4 (LocalStack until the F5 sandbox) | Cross-facility suite run log; `infra/scripts` test log |
+| 6 | One facility cannot access another facility's information | Cross-facility suite XF-1, XF-2, XF-5, XF-9 as every role, the worker role and the database role directly; `db-grants.mjs` enumeration (I3) | XF-1 today on three tables and XF-2 on `referrals`; every table M1; XF-5 M3; the "zero files" half of I3 is row 5's XF-3 | Suite run log in the CI `db-checks` job; `rls-enumeration.sql` zero rows |
+| 7 | Users can complete the full workflow without developer assistance | Scripted usability protocol (2.10): the fifteen §21 steps on a synthetic packet, time-on-task per step, assistance as defined above, comprehension probe per §19 state, evidence-view rate per decisive fact before Finalize. Passes when **every** tester in a cohort of ≥ 3 admissions staff completes all fifteen steps unassisted; a cohort is named before the session and nobody is dropped from it afterwards | Session 1 at M2 (manual-entry slice, one reviewer), session 2 at M4, session 3 at M6, the three-person pass at M8. Until F6 names a reviewer, each session is recorded as **"standard 7 not met: no admissions staff available"**, never as passed by proxy | Session protocol, per-tester task sheet, time-on-task table, assistance log |
+| 8 | The recommendation can be traced to triggered criteria | Engine test: every evaluation lists the triggered rule ids, their inputs and values; replay property test reproduces the stored snapshot exactly from the pinned versions (I6) | M2 (engine trace); M4 (rendered on the recommendation screen) | Property-test run log; one stored evaluation snapshot with its trace |
+| 9 | Major findings can be traced to referral evidence | Pipeline test: every AI-sourced Yes/No fact carries a verbatim quote that verifies against the page text, or is Unknown (I2); evidence carries document, page and page-render coordinates; UI test: fact → rendered page image with highlight (5.1) | M4 (slice facts, exact-match quotes on clean generator output); M5 (all facts, scan-degraded output, normalisation rules and both 5.6 metrics) | Quote-verification pass rate and false-pass rate from the eval harness; golden-packet labels with quote spans (§15) |
+| 10 | Overrides are documented | Database and API tests: an override without a non-blank reason is rejected server-side; a hard stop → Admit override without a second, different Admin is rejected by the database CHECK and trigger; the override row carries the reason, approver identity and role title, and the audit row carries that row's id and hash, never the text (I4, I5) | M1 (schema and database tests); M6 (screen) | Database test log; one override row with its audit row in the synthetic demo org |
+| 11 | Errors are visible and understandable | Every §19 state (loading, error, processing failure, missing information, contradictory information, override confirmation) reachable by a test flag with a snapshot test (3.2); comprehension probe in the usability protocol: for each of the six states, the tester states the cause and the next action, scored against a written answer key; passes when every cohort tester scores all six | Snapshot tests M3 (on canary-free fixtures, as row 4); the probe with the row-7 cohort at M8, recorded **"not met: no admissions staff"** until F6 names them, as row 7 | Snapshot test log; comprehension-probe sheet and answer key per tester |
+| 12 | Failed processing does not produce a misleading recommendation | Fault-injection tests per pipeline stage (4.3, 5.7): a failed or unprocessed document, empty OCR on a page with content, evidence pointing at a non-existent page, and a stuck job each leave the referral in `partial_failure` with outcome Needs Review `processing_incomplete` (§4 step 1); a worker crash leaves no half-written facts (XF-4); idempotent re-processing | M4 (document failure, crash, idempotency); M5 (OCR and evidence injections) | Fault-injection run log; one end-to-end fixture per failing stage |
 
-## 15. Golden-packet label schema (dev-alignment 0.4)
+Rows 5 and 6 are also security evidence (§12.4). Rows 7 and 11 are the only standards a human must witness; nothing substitutes for the three admissions staff.
 
-**PENDING: Team B/QA at M0.** Per field: value, document, page, quote span; per packet: expected outcome, triggered rules, missing and conflicting items. The extraction-evaluation set (≥ 25 positive and ≥ 25 near-miss negative fixtures per hard-stop field) is a separate artefact from the 17-type case library. Gate numbers are in `CONSTRAINTS.md` §4.1.
+## 14. Pilot event model (dev-alignment 0.5) — decided 2026-10-28; built at M1 (events), M6 (pilot fields)
+
+The pilot track is parked under F4 (no facility). The event model is specified anyway because the same events feed the usability sessions (§13 rows 7 and 11), the CONSTRAINTS §6 measurements, and every §17 metric; the pilot-only fields in 14.3 are built at M6 only if a facility exists by then.
+
+### 14.1 Events
+
+One table, `product_events`, tenant-scoped by `facility_id` under RLS, append-only like `audit_log` but **not** hash-chained. It carries ids, timestamps, durations and enum codes, never a fact value, a quote or a name. It is still PHI-bearing (a timestamp per referral is a date of service), so it sits in the short purge class with the referral (§9) and leaves the system only as aggregates (6.7). Every row: `facility_id`, `referral_id`, `actor` (user id or `worker:<job id>`), `event`, `at`, and an `attrs` JSON object whose keys are limited to the allowlist below; a row with any other key is rejected by a CHECK at M1.
+
+| Event | When | `attrs` keys (ids and numbers only) | Emitter |
+| --- | --- | --- | --- |
+| `referral.received` | A referral is created; `received_at` is what the user says the hospital sent it, defaulting to creation time | `received_at` | API |
+| `referral.uploaded` | Each document upload completes | `document_id`, `pages`, `bytes` | API |
+| `document.processed` / `document.failed` | A document leaves the pipeline | `document_id`, `pages_ocr`, `stage` (on failure), `duration_ms` | worker |
+| `referral.ready` | Status enters `ready_for_review` | `evaluation_id`, `outcome`, `sub_reasons[]`, `blocking_count` | worker |
+| `review.started` / `review.ended` | A Reviewer or Admin opens or leaves the review screens; `ended` carries the active time so idle time on a shared workstation is excluded | `screen`, `active_ms` | web |
+| `evidence.viewed` | The page image for a fact is opened | `fact_key`, `document_id`, `page`, `decisive` (bool: feeds a triggered rule or hard-stop input) | web |
+| `fact.confirmed` / `fact.corrected` / `fact.entered` | Confirmation of an AI value; a correction; a user-entered fact. No values: even a tri-state code is the fact, and for a `specially_protected` key it is the protected fact, so `fact_key` is omitted for those | `fact_key` (omitted when specially protected), `decisive` | API |
+| `evaluation.created` | Every re-evaluation after a fact change or new document; `raw` is true for the pre-correction AI-only snapshot (1.5, 4.2) | `evaluation_id`, `previous_evaluation_id`, `raw`, `outcome`, `changed_fact_count` | API |
+| `decision.finalized` / `decision.amended` | A decision row is written or amended; `decisive_fact_count` is the size of the minimum confirmation set (2.7) at that moment and `decisive_viewed_count` the number of those facts with at least one `evidence.viewed` before this event | `decision_id`, `evaluation_id`, `outcome`, `override` (bool), `cosigner_present` (bool), `decisive_fact_count`, `decisive_viewed_count` | API |
+| `referral.held` / `referral.info_requested` / `referral.escalated` | State changes from `ready_for_review` (§5) | `department` (enum, escalation only), `items_requested` (count) | API |
+| `pilot.outcome_recorded` / `pilot.adjudicated` | 14.3 fields written | `decision_id`, `cause`, `verdict` | API |
+
+Per-stage timestamps (received, uploaded, processed, review start and end, finalized) are derived from these events, never stored twice. Per-user review time is the sum of `active_ms` over `review.*` pairs per referral per user. The evidence-view rate per decisive fact before Finalize (§13 row 7) is `decisive_viewed_count / decisive_fact_count` on `decision.finalized`, computed server-side at that moment because `decisive` on a view event is stamped at view time and can change after a correction.
+
+### 14.2 Snapshots
+
+Every evaluation is an immutable row (I6). The pipeline writes the **raw** snapshot before any human touches a fact; every correction or new document produces a new **verified** snapshot; a decision pins exactly one. The pilot compares the raw and the verified outcome separately against the actual decision (6.7), so neither may be overwritten.
+
+### 14.3 Pilot-only fields (M6, if a facility exists)
+
+On the decision row:
+
+- `pilot_actual_outcome`: `admitted | declined | withdrawn | pending`, entered by staff after the facility's own process decides.
+- `disagreement_cause`: one of seven codes: `incorrect_extraction`, `missing_information`, `incorrect_rule_logic`, `facility_specific_exception`, `human_judgment`, `error_in_existing_process` (the six §16 causes) and `outside_tool_scope` (bed, census, relationship; the seventh from 0.5). Required when the pinned outcome and `pilot_actual_outcome` disagree.
+- `adjudicator_verdict`: `tool_correct | process_correct | both_wrong | indeterminate` and `adjudicator_id` on the decision row (6-year class, codes and ids only); `adjudicator_notes` is free text and therefore lives in a separate notes table on the short purge class, excluded from export; `reliability_sample` (bool) marks the 10–20% of agreements and every disagreement a second adjudicator also judges.
+
+Per facility: `pilot_mode` = `lagged | blinded | assisted`, default `lagged` for a facility flagged `pilot` (R5) and `assisted` otherwise, so the R8 demo organisation shows its recommendation. **Lagged semantics (ruling D9):** the engine runs at processing time and the evaluation is sealed and audited then, so the recommendation provably predates the facility's decision; it is hidden from every user by permission until `pilot_actual_outcome` is entered, then revealed. `blinded` shows it only to users flagged `pilot_reviewer`; `assisted` shows it to all Reviewers and Admins.
+
+### 14.4 What the model answers
+
+§17 speed from the stage timestamps; §17 accuracy from raw-vs-verified agreement, `disagreement_cause` and adjudication; §17 reliability from `document.failed` and re-processing counts; adoption from referral counts per facility; the CONSTRAINTS §6 Needs Review rate from `referral.ready`; every number leaves the system only through the aggregate CSV (6.7).
+
+## 15. Golden-packet label schema (dev-alignment 0.4) — decided 2026-10-28; schema file at M1
+
+A golden packet is a synthetic referral packet plus a label file that says what a correct system must find in it. Labels live in `packages/schemas/schemas/golden-packet-label.v0.json` (M1, schemas as data) with examples under `packages/schemas/examples/golden/`. Committed per packet: the label, the generator inputs, and the per-page **reference text** (the ground truth the generator rendered, as `pages/<n>.txt`). The rendered PDF is never committed (`.gitignore`); the generator (4.5, M4) reproduces it from the inputs.
+
+Two artefacts, never mixed:
+
+- **The case library** (the 17 Phase 9 case types, two packets each): tests that the whole workflow reaches the right outcome for each kind of referral. Its labels carry the packet-level fields below; per-field labels are optional.
+- **The extraction-evaluation set**: tests per-field recall on hard-stop fields against the CONSTRAINTS §4.1 gate. Its labels carry every per-field element; it lives in its own directory so the gate cannot be padded with case-library packets. QA authors ≥ 30 positive and ≥ 30 near-miss negative fixtures per hard-stop field (R4); the enforced floor is whatever `CONSTRAINTS.md` §4.1 says, ≥ 25 today, and raising it to 30 is a pending `constraints-change` PR now that a remote exists.
+
+### 15.1 Per packet
+
+| Field | Meaning |
+| --- | --- |
+| `packet_id`, `set` (`case_library` \| `extraction_eval`), `case_type` (one of the 17 types, case library only), `generator_version` | Identity; the generator version pins layout, fax cover, rotation and scan degradation (4.5) |
+| (no canary field) | Every packet embeds the three canary strings from `scripts/checks/canary-strings.json`; the schema test asserts all three occur in the packet's committed reference text, so the claim cannot be written, only proven |
+| `referral_date`, `referral_type` | Recency windows run from `referral_date` (§3); `referral_type` per §8 |
+| `documents[]`: `document_id`, `type`, `pages`, `expected_status` (`processed` \| `failed` \| `unreadable` \| `not_applicable`) | Document classification (5.5) and the §4 step-1 behaviour; a `failed` document is how §13 row 12 fixtures are labelled |
+| `facility_profile_ref`, `rule_set_ref` | Which synthetic profile and rule set the expected outcome was computed against; both pinned by version. Case-library packets must carry a per-field label (15.2) for every fact the referenced rule set reads, so rule CI has its inputs |
+| `expected.outcome`, `expected.clinical_outcome`, `expected.financial_status`, `expected.sub_reasons[]` | The §4 result for this packet under the referenced profile and rules |
+| `expected.triggered_rules[]` | Rule ids that must fire, each with the fact keys it fired on |
+| `expected.missing[]` | Fact keys that must be Unknown and reported as missing |
+| `expected.conflicts[]`: `fact_key`, `values[]` of {`document_id`, `page`, `value`, `as_of_date`} | Facts with opposing values across documents; the system must surface all values and choose none (§3) |
+| `adversarial`: `planted_visible[]`, `invisible_text[]`, `xss_values[]`, `instruction_text[]`, `identity_mismatch_pages[]` | Which fields or pages carry an attack (§12 XF-7a/b, 5.3). An adversarial packet's twin is the same `packet_id` with `_clean` suffix; the differential suite asserts on facts and quotes, not outcome (5.7) |
+
+### 15.2 Per field (required in the extraction-evaluation set; optional in the case library)
+
+One entry per fact key the packet is labelled for, using the fact v0 field names:
+
+| Field | Meaning |
+| --- | --- |
+| `key` | Fact key from the baseline list (§8) |
+| `value` | `yes` \| `no` \| `unknown`; `unknown` is a legitimate label: the packet is silent, and the extractor must say so (I1) |
+| `document_id`, `page` | Where the evidence is; null when `value = unknown` |
+| `quote` | The verbatim supporting text as it appears in the page's committed reference text (`pages/<n>.txt`), not OCR output |
+| `span`: `start`, `end` | Character offsets of `quote` in that reference text, so the 5.6 pass rate on correct facts can be scored against OCR drift without a human |
+| `negative_quotes[]` | Passages that are verbatim-present on the page but do not support `value`, plus fabricated passages that are not on the page at all; the 5.6 false-pass rate is scored on these (the human-labelled evidence-support fixtures) |
+| `as_of_date` | The date the fact is true as of, from the document |
+| `polarity` | `positive` \| `near_miss_negative` \| `absent`; near-miss negatives are the "weaned before discharge", "decannulated" cases the gate counts separately (§4.1) |
+| `is_critical`, `specially_protected` | Mirrors the fact schema, so a label can assert the flags the extractor must set |
+| `typed_value` | For non-tri-state facts (counts, medication records; §8 and R2): the structured value; its schema arrives with the R2 slice |
+
+### 15.3 How the labels are used
+
+- The eval harness (4.5, 5.7) produces a 3×3 confusion matrix per `key` from `value`, scores quote verification from `span`, and computes the §4.1 gate numbers per hard-stop field over the extraction-evaluation set only.
+- Rule CI never reads a packet: it runs the engine on the per-field labels and the referenced profile and compares with the `expected` block (free, offline; 2.9).
+- Every label file passes the schema test in `packages/schemas/test/` before it is merged: schema-valid; all three canary strings present in the reference text; every `quote` equal to the reference text at its `span`; every `negative_quotes[]` entry either present on the page or marked `fabricated`. The reference text makes this enforceable from M1, before the generator exists.
+- Labels are authored by QA from the generator's ground truth, reviewed by the clinician once F6 names one; until then the clinical lead agent proxies and the label says `reviewed_by: "agent-proxy"`, which the M5 gate reports as provisional.
 
 ## 16. Open founder decisions
 
