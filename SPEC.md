@@ -1,7 +1,7 @@
 # Codex Health — Core Specification
 
-Status: **M0 draft — to be completed with `/spec` and the founder interview.**
-Version: v0.3 (2026-10-28; §12–§15 decided, §8 reflects the R2 schema slice, §11 re-pointed at the workshop). Sources: `../research/planning/master-plan.md`, `../research/dev-alignment.md` (§1 accepted changes, §2 rulings, §4 founder items), `../ops/COO-BRIEF.md`. The brief is cited as §n.
+Status: **M1 (started 2026-10-29).** Sections are completed with `/spec` as each milestone consumes them.
+Version: v0.4 (2026-10-29; M1 started; §5 transition table and actor matrix decided). Sources: `../research/planning/master-plan.md`, `../research/dev-alignment.md` (§1 accepted changes, §2 rulings, §4 founder items), `../ops/COO-BRIEF.md`. The brief is cited as §n.
 
 Sections marked **decided** are in force. Sections marked **PENDING** name what is missing and who decides. Nothing here is product code; see `CONSTRAINTS.md` for what every change is checked against.
 
@@ -47,13 +47,45 @@ Evaluated in this fixed order; the first match wins.
 - The engine emits, per evaluation: outcome, sub-reason codes, triggered rules with evidence, missing and conflicting items, a ranked list of blocking facts ("would be Admit if X confirmed"), and `clinical_outcome` and `financial_status` as separate fields (1.5). Whether a payer Unknown still blocks the clinical answer stays on merged behaviour until the founders decide (§4 item 10).
 - Protected inputs (payer source, psychiatric or behavioral history, substance use, bariatric, homelessness, guardianship, disability-related) route only to Needs Review, never Do Not Admit, unless a rule carries recorded legal approval (2.8).
 
-## 5. Referral state machine (decided states; transitions proposed)
+## 5. Referral state machine (decided 2026-10-29)
 
 States (ruling D1): `draft`, `processing`, `partial_failure`, `ready_for_review`, `on_hold`, `info_requested`, `escalated`, `finalized`, `amended`.
 
-Main path: `draft → processing → ready_for_review → finalized`. `processing → partial_failure` when any document fails; `partial_failure → processing` on re-upload or replace, or `→ ready_for_review` once every failed document is processed or marked `not_applicable` with a reason (1.4). From `ready_for_review`: `→ on_hold`, `→ info_requested`, `→ escalated` (with a department tag and note, decision 10), each returning `→ processing` when documents are added or `→ ready_for_review` when facts are entered manually. `finalized → amended` only by an audited amendment that creates a new decision record; the original is unchanged (decision 11).
+Main path: `draft → processing → ready_for_review → finalized`. The flow loops: documents can be added and facts entered at any point before finalize, and every such change re-evaluates (§14.2). Every fact change (human correction or new document) produces a new immutable evaluation snapshot; a decision pins exactly one `evaluation_id`; the pre-correction raw snapshot is always retained (1.2).
 
-Every fact change (human correction or new document) produces a new immutable evaluation snapshot; a decision pins exactly one `evaluation_id`; the pre-correction raw snapshot is always retained (1.2). The full transition table with guards and the actor allowed per transition is **PENDING: Team B at M1, before the schema lands.**
+### 5.1 Transition table
+
+Guards are enforced in the API at M3 and, where marked **DB**, by a CHECK or trigger from the M1 schema. Every transition writes one audit row (`action` = the transition name) and emits the §14 event named. `Reviewer` means the Reviewer or Admin role at the referral's facility; `Admin` means that role only; `worker` is the pipeline. Viewers and the internal admin role have no transition.
+
+| # | From | To | Trigger | Guard | Actor | §14 event |
+| --- | --- | --- | --- | --- | --- | --- |
+| T1 | `draft` | `processing` | Submit for processing | ≥ 1 document uploaded; `referral_type` set | Reviewer | `referral.uploaded` (per document) |
+| T2 | `processing` | `ready_for_review` | Pipeline finishes | Every document `processed` or `not_applicable`; a raw evaluation snapshot was written | worker | `document.processed`, `referral.ready` |
+| T3 | `processing` | `partial_failure` | Pipeline finishes with a failure | ≥ 1 document `failed` or `unreadable`; partial results for the rest are published (3.4) | worker | `document.failed` |
+| T4 | `partial_failure` | `processing` | Re-upload or replace a failed document | The replaced document is one that failed | Reviewer | `referral.uploaded` |
+| T5 | `partial_failure` | `ready_for_review` | Mark every failed document `not_applicable` | Reason required per document (1.4); no document left `failed`; the engine re-evaluates synchronously (no OCR needed) | Reviewer | `evaluation.created` |
+| T6 | `ready_for_review`, `on_hold`, `info_requested`, `escalated` | `processing` | Add, replace or append a document | Upload caps and magic-byte check pass (3.5) | Reviewer | `referral.uploaded` |
+| T7 | `ready_for_review`, `on_hold`, `info_requested`, `escalated` | `ready_for_review` | Confirm, correct or enter a fact | User facts carry a note (§8); a correction never deletes the AI value | Reviewer | `fact.*`, `evaluation.created` |
+| T8 | `ready_for_review` | `on_hold` | Hold | Note required | Reviewer | `referral.held` |
+| T9 | `ready_for_review` | `info_requested` | Request information | ≥ 1 requested item, drafted from the ranked blocking facts (6.1) | Reviewer | `referral.info_requested` |
+| T10 | `ready_for_review` | `escalated` | Escalate | Department tag and note required (decision 10) | Reviewer | `referral.escalated` |
+| T11 | `on_hold`, `info_requested`, `escalated` | `ready_for_review` | Resume with no new information | Note required | Reviewer | `review.started` |
+| T12 | `ready_for_review` | `finalized` | Finalize | Minimum confirmation set confirmed (2.7); decision pins the current `evaluation_id`; **DB:** override reason non-blank when the decision differs from the outcome (I5); **DB:** hard stop → Admit requires a co-signing Admin who is a different user (I5); single-source hard-stop facts confirmed against the page image (XF-7b, M5); a user correction that flipped a hard-stop input also requires the co-sign (open question 24, engineering default) | Reviewer; co-sign Admin | `decision.finalized` |
+| T13 | `finalized`, `amended` | `amended` | Amend | New decision record with reason; the original decision row is untouched (decision 11); **DB:** the original is never updated | Admin (engineering default; Reviewers may finalize but not amend) | `decision.amended` |
+
+No transition deletes a referral, returns a referral to `draft`, or leaves `finalized` except by T13. A referral in `on_hold`, `info_requested` or `escalated` keeps its last evaluation visible. The request-info return path (§16, founder item 15) is both T6 (information comes back as documents) and T7 (it comes back by phone, entered as a user fact); which one the M4 test exercises is the open founder item.
+
+### 5.2 Actor matrix
+
+| Actor | May trigger | Never |
+| --- | --- | --- |
+| Reviewer (role `admissions_reviewer`) | T1, T4–T12 | T13; co-sign |
+| Admin (role `facility_admin`) | Everything a Reviewer may, plus T13 and the T12 co-sign (as a different user from the finalizer) | Co-sign own finalize |
+| Viewer | None | Any transition |
+| worker | T2, T3 | Any human transition; any write outside `status`, `updated_at`, documents, facts, evaluations, audit |
+| Internal admin role (1.13) | None on referrals | Any referral write; its scope is organisations and first Admins, under the platform audit chain (§12 XF-10) |
+
+The `referrals` grant for `codex_worker` is already limited to `status` and `updated_at` (migration 0001); the worker's allowed target states are enforced by a trigger in the M1 schema. Status values are the enum in migration 0001; the table above is data for the API at M3 (`packages/schemas/schemas/referral-transitions.v0.json`, written with the M3 slice so it is not speculative now).
 
 ## 6. Roles and permissions (decided)
 
