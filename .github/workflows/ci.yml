@@ -43,7 +43,7 @@ jobs:
       - name: CONSTRAINTS check self-tests
         run: npm test --prefix scripts/checks
       - name: Infrastructure static checks
-        run: node --test infra/scripts/
+        run: node --test "infra/scripts/*.test.mjs"
       - name: CONSTRAINTS checks (--ci; after the tests so the canary sweep sees their logs and artefacts)
         # --ci: a SKIP from a must-run check (secrets, bedrock-only, prohibited-claims, legal-basis) fails the job.
         run: node scripts/checks/run-all.mjs --ci

@@ -18,7 +18,7 @@
     "check:constraints": "node scripts/checks/run-all.mjs",
     "lint": "npm run lint --workspaces --if-present",
     "typecheck": "npm run typecheck --workspaces --if-present",
-    "test": "npm run test --workspaces --if-present && npm test --prefix scripts/checks && node --test infra/scripts/",
+    "test": "npm run test --workspaces --if-present && npm test --prefix scripts/checks && node --test \"infra/scripts/*.test.mjs\"",
     "build": "npm run build --workspaces --if-present",
     "dev:up": "docker compose up -d",
     "dev:down": "docker compose down"
