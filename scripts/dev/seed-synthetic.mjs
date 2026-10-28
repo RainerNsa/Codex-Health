@@ -29,11 +29,14 @@ await c.connect();
 try {
   await c.query('BEGIN');
   for (const o of ORGS) {
+    // Provisioning writes must be bound to the organisation they create (migration 0002, provisioning_audit).
+    await c.query("SELECT set_config('app.organization_id', $1, true)", [o.id]);
     await c.query('INSERT INTO organizations (id, name) VALUES ($1, $2) ON CONFLICT (id) DO NOTHING', [o.id, o.name]);
   }
   for (const f of FACILITIES) {
     // FORCE RLS applies to the owner too: scope each facility's rows to itself before inserting.
     await c.query("SELECT set_config('app.facility_id', $1, true)", [f.id]);
+    await c.query("SELECT set_config('app.organization_id', $1, true)", [f.org]);
     await c.query(
       'INSERT INTO facilities (facility_id, organization_id, name) VALUES ($1, $2, $3) ON CONFLICT (facility_id) DO NOTHING',
       [f.id, f.org, f.name],
@@ -41,6 +44,7 @@ try {
   }
   await c.query("SELECT set_config('app.facility_id', $1, true)", [FACILITIES[0].id]);
   for (const u of USERS) {
+    await c.query("SELECT set_config('app.organization_id', $1, true)", [u.org]);
     await c.query(
       'INSERT INTO users (id, organization_id, email, display_name) VALUES ($1, $2, $3, $4) ON CONFLICT (id) DO NOTHING',
       [u.id, u.org, u.email, u.name],
