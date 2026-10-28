@@ -13,7 +13,7 @@ decision lands in an append-only hash-chained audit log.
 3. `README.md`: where things live (the layout tree there is the map of this repo).
 4. `.claude/rules/`: short always-on rules (`constraints-first.md`, `data-policy.md`).
 
-Milestone now: **M0** (spec, constraints, foundations). No product logic is written yet.
+Milestone now: **M1** (skeleton, tenancy, data model; started 2026-10-29). M0 closed 2026-10-29 (`../ops/decision-log.md`). No `evaluate()` and no PHI path exists yet; M1 builds the data model, the audit chain, provisioning, anchoring and the CI gates, one slice at a time.
 
 ## Non-negotiables
 
