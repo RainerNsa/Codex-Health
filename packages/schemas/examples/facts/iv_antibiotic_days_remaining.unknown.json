@@ -1,0 +1,12 @@
+{
+  "key": "iv_antibiotic_days_remaining",
+  "value": { "type": "count", "value": null },
+  "source": "ai",
+  "evidence": null,
+  "note": null,
+  "as_of_date": null,
+  "is_critical": true,
+  "specially_protected": false,
+  "single_source": false,
+  "confidence_band": "low"
+}

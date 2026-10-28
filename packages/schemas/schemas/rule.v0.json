@@ -2,11 +2,12 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:codex-health:schema:rule.v0",
   "title": "Rule record v0",
-  "description": "One versioned facility rule (dev-alignment 2.8). expression is an opaque string until SPEC.md §rules fixes the DSL. A hard_stop rule that reads a protected input must carry a legal_reviewer.",
+  "description": "One versioned rule (brief \u00a76; dev-alignment 2.8; ruling R2). The twelve \u00a76 fields map to: name, id, kind (category), inputs (required input), expression (exact condition), result (implied by kind per SPEC \u00a74: hard_stop \u2192 do_not_admit, review \u2192 needs_review with sub_reason, favorable \u2192 admit, payer \u2192 financial_status), priority, exceptions, explanation, next_action, effective_date, version. expression is an opaque string until SPEC \u00a710 fixes the DSL at M2. A hard_stop, payer or favorable rule that reads a protected input must carry a structured legal_reviewer (payer source is a protected input by definition, so every payer rule has protected_input true). A review rule on a protected input needs none: it can only route to Needs Review. Every rule carries at least one true, one false and one unknown test case (CONSTRAINTS \u00a74.2). Per-facility on/off lives in facility_rule_settings, not here.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "id",
+    "name",
     "kind",
     "legal_basis",
     "protected_input",
@@ -14,29 +15,320 @@
     "enabled",
     "inputs",
     "expression",
-    "version"
+    "sub_reason",
+    "department",
+    "priority",
+    "exceptions",
+    "explanation",
+    "next_action",
+    "effective_date",
+    "version",
+    "tests"
   ],
   "properties": {
-    "id": { "type": "string", "pattern": "^[a-z][a-z0-9_.]*$" },
-    "kind": { "enum": ["hard_stop", "review", "favorable"] },
-    "legal_basis": { "type": "string", "minLength": 1 },
+    "id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_.]*$"
+    },
+    "name": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
+    "kind": {
+      "enum": [
+        "hard_stop",
+        "review",
+        "favorable",
+        "payer"
+      ]
+    },
+    "legal_basis": {
+      "type": "string",
+      "minLength": 1,
+      "pattern": "\\S"
+    },
     "protected_input": {
       "type": "boolean",
       "description": "True when any input is a protected field (payer source, psychiatric/behavioral, substance use, bariatric, homelessness, guardianship, disability-related)."
     },
-    "legal_reviewer": { "type": ["string", "null"], "minLength": 1 },
-    "enabled": { "type": "boolean" },
+    "legal_reviewer": {
+      "description": "Recorded legal approval of this rule's content. Required as an object for a hard_stop or payer rule with protected_input.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "name",
+            "firm",
+            "date",
+            "memo_ref"
+          ],
+          "properties": {
+            "name": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "firm": {
+              "type": "string",
+              "minLength": 1,
+              "pattern": "\\S"
+            },
+            "date": {
+              "type": "string",
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+            },
+            "memo_ref": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Reference to the counsel memo, never its text.",
+              "pattern": "\\S"
+            }
+          }
+        }
+      ]
+    },
+    "enabled": {
+      "type": "boolean"
+    },
     "inputs": {
       "type": "array",
       "minItems": 1,
       "uniqueItems": true,
-      "items": { "type": "string", "pattern": "^[a-z][a-z0-9_.]*$" }
+      "items": {
+        "type": "string",
+        "pattern": "^[a-z][a-z0-9_.]*$"
+      },
+      "description": "Fact keys and facility.<profile key>s the expression reads."
     },
-    "expression": { "type": "string", "minLength": 1 },
-    "version": { "type": "integer", "minimum": 1 }
+    "expression": {
+      "type": "string",
+      "minLength": 1
+    },
+    "sub_reason": {
+      "enum": [
+        "clinical",
+        "financial",
+        "leadership",
+        null
+      ],
+      "description": "Needs Review sub-reason for a review rule (2.6); null for other kinds."
+    },
+    "department": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "description": "Escalation department tag when sub_reason is leadership (decision 10); null otherwise."
+    },
+    "priority": {
+      "type": "integer",
+      "minimum": 1,
+      "description": "Display order within a kind; the outcome order in SPEC \u00a74 is fixed and does not read this."
+    },
+    "exceptions": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      },
+      "description": "Facility-specific exceptions in words (\u00a76). An exception that changes logic is a separate rule."
+    },
+    "explanation": {
+      "type": "string",
+      "minLength": 1,
+      "description": "User-facing explanation shown with the trace.",
+      "pattern": "\\S"
+    },
+    "next_action": {
+      "type": "string",
+      "minLength": 1,
+      "description": "Recommended next action shown with the trace.",
+      "pattern": "\\S"
+    },
+    "effective_date": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "version": {
+      "type": "integer",
+      "minimum": 1
+    },
+    "tests": {
+      "type": "array",
+      "minItems": 3,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "name",
+          "facts",
+          "profile",
+          "expected"
+        ],
+        "properties": {
+          "name": {
+            "type": "string",
+            "minLength": 1
+          },
+          "facts": {
+            "type": "object",
+            "description": "Fact key \u2192 tri-state presence the engine derives (see fact.v0 description).",
+            "additionalProperties": {
+              "enum": [
+                "yes",
+                "no",
+                "unknown"
+              ]
+            }
+          },
+          "profile": {
+            "type": "object",
+            "description": "Profile key \u2192 value; an absent key is unknown (0.3).",
+            "additionalProperties": {
+              "anyOf": [
+                {
+                  "type": "boolean"
+                },
+                {
+                  "type": "integer"
+                }
+              ]
+            }
+          },
+          "expected": {
+            "enum": [
+              "true",
+              "false",
+              "unknown"
+            ]
+          }
+        }
+      },
+      "allOf": [
+        {
+          "contains": {
+            "properties": {
+              "expected": {
+                "const": "true"
+              }
+            },
+            "type": "object"
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "expected": {
+                "const": "false"
+              }
+            },
+            "type": "object"
+          }
+        },
+        {
+          "contains": {
+            "properties": {
+              "expected": {
+                "const": "unknown"
+              }
+            },
+            "type": "object"
+          }
+        }
+      ]
+    }
   },
-  "if": {
-    "properties": { "kind": { "const": "hard_stop" }, "protected_input": { "const": true } }
-  },
-  "then": { "properties": { "legal_reviewer": { "type": "string" } } }
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "enum": [
+              "hard_stop",
+              "payer",
+              "favorable"
+            ]
+          },
+          "protected_input": {
+            "const": true
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "legal_reviewer": {
+            "type": "object"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "review"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "sub_reason": {
+            "type": "string"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "sub_reason": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "sub_reason": {
+            "const": "leadership"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "department": {
+            "type": "string"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "department": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "kind": {
+            "const": "payer"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "protected_input": {
+            "const": true
+          }
+        }
+      }
+    }
+  ]
 }

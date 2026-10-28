@@ -1,0 +1,25 @@
+{
+  "key": "medications",
+  "value": {
+    "type": "medication_list",
+    "value": [
+      { "name": "SYNTHETIC-DRUG-A", "route": "iv", "frequency": "q8h", "duration_days": 10 },
+      { "name": "SYNTHETIC-DRUG-B", "route": "po", "frequency": "daily", "duration_days": null }
+    ]
+  },
+  "source": "ai",
+  "evidence": {
+    "document_id": "doc_zztest_0002",
+    "page": 1,
+    "quote": "SYNTHETIC MAR for ZZTEST CANARY-ALPHA, MRN-ZZCANARY-0000001: SYNTHETIC-DRUG-A IV q8h x10 days; SYNTHETIC-DRUG-B PO daily.",
+    "verified": true,
+    "span": { "start": 0, "end": 118 },
+    "coordinates": null
+  },
+  "note": null,
+  "as_of_date": "2001-01-02",
+  "is_critical": false,
+  "specially_protected": false,
+  "single_source": false,
+  "confidence_band": "medium"
+}

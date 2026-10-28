@@ -1,0 +1,24 @@
+{
+  "id": "seed.review.behavioral_escalation",
+  "name": "Recent aggression documented: leadership review",
+  "kind": "review",
+  "legal_basis": "SEED EXAMPLE, not a real rule. Behavioral history is a protected input; as a review rule it may only route to Needs Review, never Do Not Admit (dev-alignment 2.8), so no legal_reviewer is required.",
+  "protected_input": true,
+  "legal_reviewer": null,
+  "enabled": true,
+  "inputs": ["recent_aggression"],
+  "expression": "recent_aggression is yes",
+  "sub_reason": "leadership",
+  "department": "director_of_nursing",
+  "priority": 2,
+  "exceptions": [],
+  "explanation": "The packet documents aggression within the recency window; leadership decides case by case.",
+  "next_action": "Escalate to the Director of Nursing with the cited pages.",
+  "effective_date": "2001-01-01",
+  "version": 1,
+  "tests": [
+    { "name": "aggression documented", "facts": { "recent_aggression": "yes" }, "profile": {}, "expected": "true" },
+    { "name": "no aggression", "facts": { "recent_aggression": "no" }, "profile": {}, "expected": "false" },
+    { "name": "silent packet", "facts": { "recent_aggression": "unknown" }, "profile": {}, "expected": "unknown" }
+  ]
+}

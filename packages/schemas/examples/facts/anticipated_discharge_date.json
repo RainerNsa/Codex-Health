@@ -1,0 +1,19 @@
+{
+  "key": "anticipated_discharge_date",
+  "value": { "type": "date", "value": "2001-01-09" },
+  "source": "ai",
+  "evidence": {
+    "document_id": "doc_zztest_0001",
+    "page": 2,
+    "quote": "SYNTHETIC: ZZTEST CANARY-ALPHA, MRN-ZZCANARY-0000001, anticipated discharge to SNF on 01/09/2001.",
+    "verified": true,
+    "span": { "start": 90, "end": 186 },
+    "coordinates": { "x": 0.1, "y": 0.62, "w": 0.6, "h": 0.02 }
+  },
+  "note": null,
+  "as_of_date": "2001-01-02",
+  "is_critical": false,
+  "specially_protected": false,
+  "single_source": false,
+  "confidence_band": "medium"
+}

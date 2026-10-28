@@ -1,11 +1,19 @@
 {
   "key": "ventilator_use",
-  "value": "yes",
+  "value": { "type": "tri_state", "value": "yes" },
   "source": "ai",
-  "quote": "SYNTHETIC: ZZTEST, Patient remains ventilator dependent via tracheostomy.",
-  "document_id": "doc_zztest_0001",
-  "page": 3,
+  "evidence": {
+    "document_id": "doc_zztest_0001",
+    "page": 3,
+    "quote": "SYNTHETIC: ZZTEST CANARY-ALPHA (MRN-ZZCANARY-0000001) remains ventilator dependent via tracheostomy.",
+    "verified": true,
+    "span": { "start": 412, "end": 512 },
+    "coordinates": { "x": 0.08, "y": 0.41, "w": 0.7, "h": 0.02 }
+  },
+  "note": null,
   "as_of_date": "2001-01-01",
   "is_critical": true,
-  "specially_protected": false
+  "specially_protected": false,
+  "single_source": false,
+  "confidence_band": "high"
 }
