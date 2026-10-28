@@ -6,6 +6,11 @@
 --    anything else (USING (true), a role name, a different setting) is a cross-tenant hole that rule 1 misses.
 -- 3. Every table in public carries facility_id unless it is on the allowlist of non-tenant tables below.
 --    Growing that list is a reviewed change to this check, not to the migration.
+-- 4. Every allow-listed table except schema_migrations is organisation-scoped: RLS enabled and forced, and
+--    every policy references app.organization_id (SPEC §12 "our own staff"; security review #7).
+-- The two "references the setting" rows are drift guards, not isolation proofs: a policy can contain the
+-- string and still be a hole (USING (true OR ...)). The isolation proof is packages/db/test/rls.test.mjs,
+-- which reads as every role with and without a binding; both run in the CI db-checks job and both are required.
 WITH rels AS (
   SELECT c.oid, n.nspname, c.relname, c.relrowsecurity, c.relforcerowsecurity,
          EXISTS (
@@ -43,5 +48,18 @@ SELECT nspname, relname, 'table in public without facility_id (not on the non-te
 FROM rels
 WHERE nspname = 'public'
   AND NOT has_facility_id
-  AND relname NOT IN ('organizations', 'users', 'schema_migrations')
+  AND relname NOT IN ('organizations', 'users', 'platform_audit_log', 'schema_migrations')
+UNION ALL
+SELECT nspname, relname, 'organisation-scoped table without forced RLS'
+FROM rels
+WHERE nspname = 'public' AND relname IN ('organizations', 'users', 'platform_audit_log')
+  AND NOT (relrowsecurity AND relforcerowsecurity)
+UNION ALL
+SELECT r.nspname, r.relname, 'organisation-scoped table has no policy, or policy ' || coalesce(p.polname, '') || ' does not reference app.organization_id'
+FROM rels r
+LEFT JOIN pg_policy p ON p.polrelid = r.oid
+WHERE r.nspname = 'public' AND r.relname IN ('organizations', 'users', 'platform_audit_log')
+  AND (p.oid IS NULL
+       OR coalesce(pg_get_expr(p.polqual, p.polrelid), '') || coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '')
+          NOT LIKE '%app.organization_id%')
 ORDER BY 1, 2, 3;
