@@ -1,0 +1,12 @@
+{
+  "key": "dialysis_schedule",
+  "value": { "type": "enum", "value": "mwf", "options": ["mwf", "tts", "daily", "other"] },
+  "source": "user",
+  "evidence": null,
+  "note": "SYNTHETIC: verbal update from the hospital liaison; schedule not in the packet.",
+  "as_of_date": "2001-01-03",
+  "is_critical": true,
+  "specially_protected": false,
+  "single_source": false,
+  "confidence_band": null
+}

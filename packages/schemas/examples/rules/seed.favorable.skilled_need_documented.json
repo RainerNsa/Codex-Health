@@ -1,0 +1,24 @@
+{
+  "id": "seed.favorable.skilled_need_documented",
+  "name": "Daily skilled nursing need documented",
+  "kind": "favorable",
+  "legal_basis": "SEED EXAMPLE, not a real rule: a documented daily skilled need is the clinical basis for a skilled admission (master-plan §7 seed rule). Replaced by the criteria workshop output (SPEC §11).",
+  "protected_input": false,
+  "legal_reviewer": null,
+  "enabled": true,
+  "inputs": ["daily_skilled_need"],
+  "expression": "daily_skilled_need is yes",
+  "sub_reason": null,
+  "department": null,
+  "priority": 1,
+  "exceptions": [],
+  "explanation": "The packet documents a daily skilled nursing or therapy need.",
+  "next_action": "Confirm the skilled need against the page image before finalizing.",
+  "effective_date": "2001-01-01",
+  "version": 1,
+  "tests": [
+    { "name": "skilled need documented", "facts": { "daily_skilled_need": "yes" }, "profile": {}, "expected": "true" },
+    { "name": "no skilled need", "facts": { "daily_skilled_need": "no" }, "profile": {}, "expected": "false" },
+    { "name": "silent packet", "facts": { "daily_skilled_need": "unknown" }, "profile": {}, "expected": "unknown" }
+  ]
+}

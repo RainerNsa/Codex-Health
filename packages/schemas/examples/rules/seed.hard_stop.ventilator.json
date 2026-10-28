@@ -1,11 +1,26 @@
 {
   "id": "seed.hard_stop.ventilator",
+  "name": "Ventilator dependence at a facility without ventilator capability",
   "kind": "hard_stop",
-  "legal_basis": "SEED EXAMPLE, not a real rule: facility has no ventilator capability (clinical capability basis, master-plan §7 seed rule). Replace when the pilot facility's criteria document arrives.",
+  "legal_basis": "SEED EXAMPLE, not a real rule: facility has no ventilator capability (clinical capability basis, master-plan §7 seed rule). Replaced by the criteria workshop output (SPEC §11).",
   "protected_input": false,
   "legal_reviewer": null,
   "enabled": true,
   "inputs": ["ventilator_use", "facility.accepts_ventilator"],
   "expression": "ventilator_use is yes AND facility.accepts_ventilator is false",
-  "version": 1
+  "sub_reason": null,
+  "department": null,
+  "priority": 1,
+  "exceptions": [],
+  "explanation": "The packet documents ventilator dependence and this facility does not accept ventilator patients.",
+  "next_action": "Confirm the ventilator status against the page image; if confirmed, decline with the explanation above.",
+  "effective_date": "2001-01-01",
+  "version": 2,
+  "tests": [
+    { "name": "vent dependent, facility cannot", "facts": { "ventilator_use": "yes" }, "profile": { "accepts_ventilator": false }, "expected": "true" },
+    { "name": "vent dependent, facility can", "facts": { "ventilator_use": "yes" }, "profile": { "accepts_ventilator": true }, "expected": "false" },
+    { "name": "not vent dependent", "facts": { "ventilator_use": "no" }, "profile": { "accepts_ventilator": false }, "expected": "false" },
+    { "name": "vent status unknown", "facts": { "ventilator_use": "unknown" }, "profile": { "accepts_ventilator": false }, "expected": "unknown" },
+    { "name": "profile key empty", "facts": { "ventilator_use": "yes" }, "profile": {}, "expected": "unknown" }
+  ]
 }

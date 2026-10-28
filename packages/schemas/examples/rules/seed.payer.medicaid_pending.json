@@ -1,0 +1,29 @@
+{
+  "id": "seed.payer.medicaid_pending",
+  "name": "Medicaid pending without a verified eligibility date",
+  "kind": "payer",
+  "legal_basis": "SEED EXAMPLE, not a real rule. Payer source is a protected input (Section 1557 §92.210 exposure, dev-alignment 2.8); shown here only to exercise the structured legal_reviewer guard. Routes to financial_status, never to the clinical outcome (SPEC §4).",
+  "protected_input": true,
+  "legal_reviewer": {
+    "name": "ZZTEST Counsel (synthetic)",
+    "firm": "ZZTEST Law LLP (synthetic)",
+    "date": "2001-01-01",
+    "memo_ref": "ZZTEST-MEMO-0001"
+  },
+  "enabled": false,
+  "inputs": ["payer_medicaid_pending", "payer_eligibility_verified"],
+  "expression": "payer_medicaid_pending is yes AND payer_eligibility_verified is no",
+  "sub_reason": null,
+  "department": null,
+  "priority": 1,
+  "exceptions": ["SYNTHETIC: a facility with a Medicaid-pending bed hold agreement may disable this rule."],
+  "explanation": "Medicaid is listed as pending and no eligibility verification is documented.",
+  "next_action": "Request the eligibility verification from the liaison; the clinical answer is not affected.",
+  "effective_date": "2001-01-01",
+  "version": 1,
+  "tests": [
+    { "name": "pending and unverified", "facts": { "payer_medicaid_pending": "yes", "payer_eligibility_verified": "no" }, "profile": {}, "expected": "true" },
+    { "name": "pending and verified", "facts": { "payer_medicaid_pending": "yes", "payer_eligibility_verified": "yes" }, "profile": {}, "expected": "false" },
+    { "name": "verification unknown", "facts": { "payer_medicaid_pending": "yes", "payer_eligibility_verified": "unknown" }, "profile": {}, "expected": "unknown" }
+  ]
+}

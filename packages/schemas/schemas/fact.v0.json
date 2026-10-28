@@ -2,19 +2,20 @@
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "urn:codex-health:schema:fact.v0",
   "title": "Fact v0",
-  "description": "One source-linked, three-valued fact extracted from a referral packet or entered by a user (dev-alignment 0.2). The baseline fact key list is fixed in SPEC.md.",
+  "description": "One source-linked fact extracted from a referral packet or entered by a user (dev-alignment 0.2; ruling R2 2026-10-22). value is a tagged union; every type can be unknown (tri_state 'unknown', or null for the others). Hard-stop and payer rules read the derived tri-state presence (packages/rules-engine presence()): unknown stays unknown; a count of 0 or an empty list is 'no' and any other known count or list is 'yes'; enum, date and text have no presence until the \u00a710 DSL compares values (M2); an AI fact with missing or unverified evidence, or a low confidence band, is unknown (I2, SPEC \u00a73). Pipeline contract: 0 or [] is emitted only when the quote is an explicit negation on the page ('no medications', 'none'); silence is null. The baseline fact key list is the clinical lead's fact_definitions file.",
   "type": "object",
   "additionalProperties": false,
   "required": [
     "key",
     "value",
     "source",
-    "quote",
-    "document_id",
-    "page",
+    "evidence",
+    "note",
     "as_of_date",
     "is_critical",
-    "specially_protected"
+    "specially_protected",
+    "single_source",
+    "confidence_band"
   ],
   "properties": {
     "key": {
@@ -22,30 +23,395 @@
       "pattern": "^[a-z][a-z0-9_]*$",
       "description": "Fact name from the baseline list, snake_case."
     },
-    "value": { "enum": ["yes", "no", "unknown"] },
-    "source": { "enum": ["ai", "user"] },
-    "quote": {
-      "type": ["string", "null"],
-      "description": "Verbatim supporting text. Required when source is ai and value is yes or no."
+    "value": {
+      "description": "Tagged value. tri_state carries yes/no/unknown; every other type carries null for unknown.",
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ],
+          "properties": {
+            "type": {
+              "const": "tri_state"
+            },
+            "value": {
+              "enum": [
+                "yes",
+                "no",
+                "unknown"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ],
+          "properties": {
+            "type": {
+              "const": "count"
+            },
+            "value": {
+              "type": [
+                "integer",
+                "null"
+              ],
+              "minimum": 0
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ],
+          "properties": {
+            "type": {
+              "const": "date"
+            },
+            "value": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ],
+          "properties": {
+            "type": {
+              "const": "enum"
+            },
+            "value": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "pattern": "^[a-z][a-z0-9_]*$"
+            },
+            "options": {
+              "type": "array",
+              "minItems": 1,
+              "uniqueItems": true,
+              "items": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*$"
+              }
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ],
+          "properties": {
+            "type": {
+              "const": "text"
+            },
+            "value": {
+              "type": [
+                "string",
+                "null"
+              ],
+              "minLength": 1
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "type",
+            "value"
+          ],
+          "properties": {
+            "type": {
+              "const": "medication_list"
+            },
+            "value": {
+              "type": [
+                "array",
+                "null"
+              ],
+              "items": {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "name",
+                  "route",
+                  "frequency",
+                  "duration_days"
+                ],
+                "properties": {
+                  "name": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "route": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "frequency": {
+                    "type": "string",
+                    "minLength": 1
+                  },
+                  "duration_days": {
+                    "type": [
+                      "integer",
+                      "null"
+                    ],
+                    "minimum": 0
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     },
-    "document_id": { "type": ["string", "null"] },
-    "page": { "type": ["integer", "null"], "minimum": 1 },
+    "source": {
+      "enum": [
+        "ai",
+        "user"
+      ]
+    },
+    "evidence": {
+      "description": "Where the value came from. Required (non-null) when source is ai and the value is known; null when the fact is user-entered or unknown.",
+      "oneOf": [
+        {
+          "type": "null"
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "document_id",
+            "page",
+            "quote",
+            "verified",
+            "span",
+            "coordinates"
+          ],
+          "properties": {
+            "document_id": {
+              "type": "string",
+              "minLength": 1
+            },
+            "page": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "quote": {
+              "type": "string",
+              "minLength": 1,
+              "description": "Verbatim supporting text.",
+              "pattern": "\\S"
+            },
+            "verified": {
+              "type": "boolean",
+              "description": "The quote was found in the page text under the 5.6 normalisation rules. An ai fact whose quote is unverified is treated as unknown by the engine (I2)."
+            },
+            "span": {
+              "description": "Character offsets of the quote in the page text, when verified.",
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "start",
+                    "end"
+                  ],
+                  "properties": {
+                    "start": {
+                      "type": "integer",
+                      "minimum": 0
+                    },
+                    "end": {
+                      "type": "integer",
+                      "minimum": 1
+                    }
+                  }
+                }
+              ]
+            },
+            "coordinates": {
+              "description": "Page-render bounding box, fractions of page width and height, for the highlight in the verify view (5.1).",
+              "oneOf": [
+                {
+                  "type": "null"
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "x",
+                    "y",
+                    "w",
+                    "h"
+                  ],
+                  "properties": {
+                    "x": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    "y": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    "w": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    },
+                    "h": {
+                      "type": "number",
+                      "minimum": 0,
+                      "maximum": 1
+                    }
+                  }
+                }
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "note": {
+      "type": [
+        "string",
+        "null"
+      ],
+      "minLength": 1,
+      "description": "Required when source is user: why the person asserted this ('verbal update from liaison', 'verified eligibility'). PHI-free by instruction; never exported.",
+      "pattern": "\\S"
+    },
     "as_of_date": {
-      "type": ["string", "null"],
+      "type": [
+        "string",
+        "null"
+      ],
       "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$",
       "description": "Date the fact was true as of (YYYY-MM-DD), from the source, not the clock."
     },
-    "is_critical": { "type": "boolean" },
-    "specially_protected": { "type": "boolean" }
-  },
-  "if": {
-    "properties": { "source": { "const": "ai" }, "value": { "enum": ["yes", "no"] } }
-  },
-  "then": {
-    "properties": {
-      "quote": { "type": "string", "minLength": 1 },
-      "document_id": { "type": "string", "minLength": 1 },
-      "page": { "type": "integer" }
+    "is_critical": {
+      "type": "boolean",
+      "description": "Provisional manual flag; the set derived from enabled hard-stop and payer rules wins and this may only add (2.4)."
+    },
+    "specially_protected": {
+      "type": "boolean"
+    },
+    "single_source": {
+      "type": "boolean",
+      "description": "True when a hard-stop 'no' rests on one document only (5.6; X2 substitute). Blocks finalize until page-image confirmation (\u00a712 XF-7b)."
+    },
+    "confidence_band": {
+      "enum": [
+        "high",
+        "medium",
+        "low",
+        null
+      ],
+      "description": "Label only, shown as a badge (5.2). The engine reads it for exactly one rule: an AI fact with band 'low' has presence unknown for hard-stop purposes until a person confirms it (SPEC \u00a73). null for user facts."
     }
-  }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "source": {
+            "const": "user"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "note": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "null"
+          },
+          "confidence_band": {
+            "type": "null"
+          }
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "source": {
+            "const": "ai"
+          },
+          "value": {
+            "not": {
+              "anyOf": [
+                {
+                  "properties": {
+                    "type": {
+                      "const": "tri_state"
+                    },
+                    "value": {
+                      "const": "unknown"
+                    }
+                  },
+                  "type": "object"
+                },
+                {
+                  "properties": {
+                    "type": {
+                      "not": {
+                        "const": "tri_state"
+                      }
+                    },
+                    "value": {
+                      "type": "null"
+                    }
+                  },
+                  "type": "object"
+                }
+              ]
+            }
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "evidence": {
+            "type": "object"
+          }
+        }
+      },
+      "else": {
+        "properties": {
+          "evidence": {
+            "type": "null"
+          }
+        }
+      }
+    }
+  ]
 }
