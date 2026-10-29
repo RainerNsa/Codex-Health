@@ -82,7 +82,7 @@ No transition deletes a referral, returns a referral to `draft`, or leaves `fina
 | Reviewer (role `admissions_reviewer`) | T1, T4–T12 | T13; co-sign |
 | Admin (role `facility_admin`) | Everything a Reviewer may, plus T13 and the T12 co-sign (as a different user from the finalizer) | Co-sign own finalize |
 | Viewer | None | Any transition |
-| worker | T2, T3 | Any human transition; any write outside `status`, `updated_at`, documents, facts, evaluations, audit |
+| worker | T2, T3 | Any human transition; any write outside `status`, `updated_at`, document processing results, ai facts, evaluations, product events (emit only), audit |
 | Internal admin role (1.13) | None on referrals | Any referral write; its scope is organisations and first Admins, under the platform audit chain (§12 XF-10) |
 
 The `referrals` grant for `codex_worker` is already limited to `status` and `updated_at` (migration 0001); the worker's allowed target states are enforced by a trigger in the M1 schema. Status values are the enum in migration 0001; the table above is data for the API at M3 (`packages/schemas/schemas/referral-transitions.v0.json`, written with the M3 slice so it is not speculative now).

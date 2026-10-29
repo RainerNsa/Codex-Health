@@ -185,7 +185,7 @@ test('row-level security, organisation isolation, audit immutability, the hash c
     await sub('the chain is computed by the trigger, never by the writer, and verifies for both facilities and the platform chain', async () => {
       await asFacility(c, FAC.a1);
       const base = await count(c, 'SELECT count(*) AS n FROM audit_log');
-      assert.equal(base, 2, 'the seed wrote exactly two rows per facility: audit() and the decision trigger (decision.finalized)');
+      assert.equal(base, 3, 'the seed wrote exactly three rows per facility: user_role.granted (0005 trigger), audit(), decision.finalized');
       await audit(c, FAC.a1, 'referral.created');
       await c.query("INSERT INTO audit_log (facility_id, seq, row_hash, actor, action, entity_type, at) VALUES ($1, 0, '\\x00', 'system:test', 'backdated', 'facility', '2001-01-01')", [FAC.a1]);
       const { rows } = await c.query('SELECT seq, prev_hash, row_hash, at FROM audit_log WHERE facility_id = $1 ORDER BY seq', [FAC.a1]);
@@ -284,6 +284,61 @@ test('row-level security, organisation isolation, audit immutability, the hash c
         await other.query('ROLLBACK');
         await other.end();
       }
+    });
+
+    await sub('privilege matrix: every table/column grant of the app and worker roles is exactly the expected set (any relkind)', async () => {
+      const { rows } = await c.query(`
+        SELECT grantee, table_name, privilege_type, string_agg(column_name, ',' ORDER BY column_name) AS cols
+        FROM (
+          SELECT grantee, table_name, privilege_type, NULL::text AS column_name FROM information_schema.role_table_grants
+          WHERE grantee IN ('codex_app', 'codex_worker') AND table_schema = 'public'
+          UNION ALL
+          SELECT g.grantee, g.table_name, g.privilege_type, g.column_name FROM information_schema.role_column_grants g
+          WHERE g.grantee IN ('codex_app', 'codex_worker') AND g.table_schema = 'public'
+            AND NOT EXISTS (SELECT 1 FROM information_schema.role_table_grants t
+                            WHERE t.grantee = g.grantee AND t.table_name = g.table_name AND t.privilege_type = g.privilege_type AND t.table_schema = 'public')
+        ) x
+        GROUP BY 1, 2, 3 ORDER BY 1, 2, 3`);
+      const matrix = rows.map((x) => `${x.grantee} ${x.table_name} ${x.privilege_type}${x.cols ? ` (${x.cols})` : ''}`);
+      assert.deepEqual(matrix, [
+        'codex_app audit_log INSERT', 'codex_app audit_log SELECT',
+        'codex_app decisions INSERT', 'codex_app decisions SELECT',
+        'codex_app documents INSERT', 'codex_app documents SELECT', 'codex_app documents UPDATE (not_applicable_reason,status,updated_at)',
+        'codex_app evaluations INSERT', 'codex_app evaluations SELECT',
+        'codex_app facilities SELECT',
+        'codex_app facts INSERT', 'codex_app facts SELECT',
+        'codex_app organizations SELECT',
+        'codex_app product_events INSERT', 'codex_app product_events SELECT',
+        'codex_app referrals INSERT', 'codex_app referrals SELECT', 'codex_app referrals UPDATE',
+        'codex_app user_facility_roles SELECT',
+        'codex_app users SELECT',
+        'codex_worker audit_log INSERT', 'codex_worker audit_log SELECT',
+        'codex_worker documents SELECT', 'codex_worker documents UPDATE (pages,status,updated_at)',
+        'codex_worker evaluations INSERT', 'codex_worker evaluations SELECT',
+        'codex_worker facilities SELECT',
+        'codex_worker facts INSERT', 'codex_worker facts SELECT',
+        'codex_worker product_events INSERT',
+        'codex_worker referrals SELECT', 'codex_worker referrals UPDATE (status,updated_at)',
+      ]);
+      const views = await count(c, "SELECT count(*) AS n FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('v', 'm')");
+      assert.equal(views, 0, 'no view or materialized view exists in public (one would copy tenant rows out from under the policies)');
+    });
+
+    await sub('platform actors: any lowercase role name provisions; a user role grant needs the user and facility in one organisation and is audited', async () => {
+      await asOrg(c, ORG[0]);
+      await c.query("INSERT INTO platform_audit_log (organization_id, actor, action, entity_type) VALUES ($1, 'platform:codex_internal_admin_2', 'organization.created', 'organization')", [ORG[0]]);
+      await expectFailure(c, "INSERT INTO platform_audit_log (organization_id, actor, action, entity_type) VALUES ($1, 'platform:Codex-Admin', 'x', 'organization')", /platform_audit_log_actor_check/, [ORG[0]]);
+      await asFacility(c, FAC.b1);
+      await asOrg(c, ORG[1]);
+      // USER.a belongs to org A: granting at a B facility is refused even though the owner can see both ids
+      await expectFailure(c, "INSERT INTO user_facility_roles (user_id, facility_id, role) VALUES ($1, $2, 'facility_admin')", /not visible in the same organisation/, [USER.a, FAC.b1]);
+      const before = await count(c, 'SELECT count(*) AS n FROM audit_log');
+      await c.query("INSERT INTO user_facility_roles (user_id, facility_id, role) VALUES ($1, $2, 'facility_admin')", [USER.b, FAC.b1]);
+      await c.query("DELETE FROM user_facility_roles WHERE user_id = $1 AND facility_id = $2 AND role = 'facility_admin'", [USER.b, FAC.b1]);
+      const { rows } = await c.query('SELECT action, actor, entity_id FROM audit_log ORDER BY seq DESC LIMIT 2');
+      assert.deepEqual(rows.map((x) => x.action), ['user_role.revoked', 'user_role.granted']);
+      assert.ok(rows.every((x) => x.entity_id === USER.b && x.actor.startsWith('platform:')));
+      assert.equal(await count(c, 'SELECT count(*) AS n FROM audit_log'), before + 2);
     });
 
     await sub('CONSTRAINTS check queries return zero rows', async () => {

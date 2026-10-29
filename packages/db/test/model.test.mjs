@@ -175,7 +175,7 @@ test('referral data model', { skip: !url && 'DATABASE_URL not set' }, async (t) 
       assert.equal((await c.query('DELETE FROM facts WHERE referral_id = $1 AND key = $2', [refs.a, 'dialysis'])).rowCount, 1, 'the owner may delete (purge)');
       await bind(c, FAC.b);
       // bound to B, A's fact is invisible to the key check and unreachable by the composite FK: refused either way
-      await expectFailure(c, user, /"facts_facility_id_referral_id_supersedes_fkey"|row-level security|may not supersede/, [FAC.b, refs.b, 'ventilator_use', f1, 'user:x']);
+      await expectFailure(c, user, /"facts_facility_id_referral_id_supersedes_fkey"|row-level security|may not supersede/, [FAC.b, refs.b, 'ventilator_use', f1, `user:${U.reviewer}`]);
     });
 
     await sub('facts: the worker writes only ai facts as itself; the app writes only user facts as a user', async () => {
@@ -336,6 +336,36 @@ test('referral data model', { skip: !url && 'DATABASE_URL not set' }, async (t) 
         await c.query('RESET ROLE');
       }
       assert.equal(await n(c, 'SELECT count(*) AS n FROM decisions WHERE referral_id = $1', [refs.a]), 3);
+    });
+
+    await sub('0005: evaluated_at and decided_at are pinned, so a writer cannot choose which evaluation is latest or fork an amendment chain', async () => {
+      await bind(c, FAC.a);
+      const { rows: [{ evaluated_at }] } = await c.query(EVAL_SQL.replace('VALUES ($1, $2, $3, $4, $4', "VALUES ($1, $2, $3, $4, $4").replace(") RETURNING id", ", '2999-01-01') RETURNING id, evaluated_at").replace("engine_version)", "engine_version, evaluated_at)"), [FAC.a, refs.a, false, 'admit', []]);
+      assert.ok(evaluated_at.getFullYear() < 2999, 'writer-supplied evaluated_at is overwritten');
+      const stale = await evaluate(c, FAC.a, refs.a, 'admit');
+      const latest = await evaluate(c, FAC.a, refs.a, 'do_not_admit');
+      await expectFailure(c, DECIDE_SQL, /is not the latest/, [FAC.a, refs.a, stale, 'admit', 'admit', null, U.reviewer, null]);
+      const { rows: [orig] } = await c.query(DECIDE_SQL.replace('RETURNING id', 'RETURNING id, decided_at'), [FAC.a, refs.a, latest, 'do_not_admit', 'do_not_admit', null, U.reviewer, null]);
+      const { rows: [{ decided_at }] } = await c.query('INSERT INTO decisions (facility_id, referral_id, evaluation_id, recommended_outcome, decision, override_reason, decided_by, amends_decision_id, amendment_reason, decided_at) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10) RETURNING decided_at',
+        [FAC.a, refs.a, latest, 'do_not_admit', 'do_not_admit', null, U.admin, orig.id, 'SYNTHETIC: amended', '2000-01-01']);
+      assert.ok(decided_at.getFullYear() > 2000, 'writer-supplied decided_at is overwritten');
+      await expectFailure(c, AMEND_SQL, /must name the latest decision|"decisions_one_amendment_per_decision"/, [FAC.a, refs.a, latest, 'do_not_admit', 'do_not_admit', null, U.admin2, orig.id, 'SYNTHETIC: second amendment of the original']);
+    });
+
+    await sub('0005: one successor per fact, created_by takes the actor shapes, a document reason only changes with its status', async () => {
+      await bind(c, FAC.a);
+      const ai = `INSERT INTO facts (facility_id, referral_id, key, value, source, evidence, confidence_band, created_by, supersedes) VALUES ($1, $2, 'k', '{"type":"tri_state","value":"yes"}', 'ai', $3, 'high', $4, $5) RETURNING id`;
+      const { rows: [{ id: f1 }] } = await c.query(ai, [FAC.a, refs.a, EV, 'worker:job-1', null]);
+      await c.query(ai, [FAC.a, refs.a, EV, 'worker:job-2', f1]);
+      await expectFailure(c, ai, /"facts_one_successor_per_fact"|must supersede the latest/, [FAC.a, refs.a, EV, 'worker:job-3', f1]);
+      await expectFailure(c, ai.replace("'k'", "'k_name'"), /"facts_created_by_check"/, [FAC.a, refs.a, EV, 'user:ZZTEST.Nurse.Jane', null]);
+      await expectFailure(c, ai.replace("'k'", "'k_upper'"), /"facts_created_by_check"/, [FAC.a, refs.a, EV, 'worker:ZZTEST', null]);
+      const doc = await insertDoc(FAC.a, refs.a, 'r1');
+      await c.query('SET LOCAL ROLE codex_app');
+      await expectFailure(c, "UPDATE documents SET not_applicable_reason = 'SYNTHETIC rewrite' WHERE id = $1", /reason may only change together with its status/, [doc]);
+      await c.query("UPDATE documents SET status = 'not_applicable', not_applicable_reason = 'SYNTHETIC: duplicate' WHERE id = $1", [doc]);
+      await expectFailure(c, "UPDATE documents SET not_applicable_reason = 'SYNTHETIC rewrite' WHERE id = $1", /reason may only change together with its status/, [doc]);
+      await c.query('RESET ROLE');
     });
 
     await sub('grants: the worker reads documents, facts and evaluations and never decisions; it cannot insert documents or decisions', async () => {
