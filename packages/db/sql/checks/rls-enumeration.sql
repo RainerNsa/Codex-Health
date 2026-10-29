@@ -51,17 +51,17 @@ SELECT nspname, relname, 'table in public without facility_id (not on the non-te
 FROM rels
 WHERE nspname = 'public'
   AND NOT has_facility_id
-  AND relname NOT IN ('organizations', 'users', 'platform_audit_log', 'schema_migrations')
+  AND relname NOT IN ('organizations', 'users', 'platform_audit_log', 'rule_sets', 'schema_migrations')
 UNION ALL
 SELECT nspname, relname, 'organisation-scoped table without forced RLS'
 FROM rels
-WHERE nspname = 'public' AND relname IN ('organizations', 'users', 'platform_audit_log')
+WHERE nspname = 'public' AND relname IN ('organizations', 'users', 'platform_audit_log', 'rule_sets')
   AND NOT (relrowsecurity AND relforcerowsecurity)
 UNION ALL
 SELECT r.nspname, r.relname, 'organisation-scoped table has no policy, or policy ' || coalesce(p.polname, '') || ' does not reference app.organization_id'
 FROM rels r
 LEFT JOIN pg_policy p ON p.polrelid = r.oid
-WHERE r.nspname = 'public' AND r.relname IN ('organizations', 'users', 'platform_audit_log')
+WHERE r.nspname = 'public' AND r.relname IN ('organizations', 'users', 'platform_audit_log', 'rule_sets')
   AND (p.oid IS NULL
        OR (coalesce(pg_get_expr(p.polqual, p.polrelid), '') || coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '')
              NOT LIKE '%app.organization_id%'

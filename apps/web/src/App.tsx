@@ -3,6 +3,7 @@
 // (scripts/dev/seed-synthetic.mjs): ZZTEST Alpha Facility 1 and its Reviewer.
 import { useState, type FormEvent } from 'react';
 import { ApiError, createReferral, enterFact, getReferral, type ReferralView, type Tri } from './api.ts';
+import { SettingsPanel } from './SettingsPanel.tsx';
 
 const SEED_FACILITY = '00000000-0000-4000-8000-00000000f0a1';
 const SEED_USERS = [
@@ -17,7 +18,8 @@ const REASON_LABEL: Record<string, string> = {
 };
 const ERROR_TEXT: Record<string, string> = {
   unauthenticated: 'Choose a user first.', not_found: 'Not found, or not visible to this user at this facility.', forbidden: 'This user may read but not change this referral.',
-  invalid_fact: 'Check the entry: a value and a note are required, and the date must be real.', referral_not_open: 'This referral is finalized; it changes only by amendment.',
+  invalid_fact: 'Check the entry: a value and a note are required, and the date must be real and not in the future.',
+  facility_not_configured: 'This facility has no rule set or profile yet. An Admin sets them under Facility settings.', referral_not_open: 'This referral is finalized; it changes only by amendment.',
   rejected: 'The database refused this change.',
 };
 const keyLabel = (k: string) => k.replaceAll('_', ' ');
@@ -69,6 +71,8 @@ export function App() {
           <button type="button" disabled={busy || !referralId} className="rounded border border-gray-900 px-3 py-1 disabled:opacity-50" onClick={() => run(() => getReferral(facility, referralId, user))}>Open referral</button>
         </div>
       </section>
+
+      <SettingsPanel facility={facility} user={user} />
 
       {error && <p role="alert" className="mb-4 rounded border border-red-700 bg-red-50 p-3 text-sm">{error}</p>}
 

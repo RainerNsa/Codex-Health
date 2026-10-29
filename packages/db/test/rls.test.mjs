@@ -87,6 +87,7 @@ async function seed(c) {
       [id, ref, ev, user],
     );
     await c.query("INSERT INTO product_events (facility_id, referral_id, actor, event, attrs) VALUES ($1, $2, $3, 'referral.held', '{}')", [id, ref, `user:${user}`]);
+    await c.query("INSERT INTO facility_profiles (facility_id, version, capabilities, created_by) VALUES ($1, 0, '{\"accepts_ventilator\": false}', 'platform:test')", [id]);
   }
 }
 
@@ -130,7 +131,7 @@ test('row-level security, organisation isolation, audit immutability, the hash c
           await asFacility(c, FAC.a1);
         }
         // Exact readable-table count per role: a dropped or added SELECT grant must be a visible change here.
-        assert.equal(checked, { codex_app: 9, codex_worker: 6 }[role], `${role} could read ${checked} tenant tables`);
+        assert.equal(checked, { codex_app: 10, codex_worker: 6 }[role], `${role} could read ${checked} tenant tables`);
       });
     }
 
@@ -185,7 +186,7 @@ test('row-level security, organisation isolation, audit immutability, the hash c
     await sub('the chain is computed by the trigger, never by the writer, and verifies for both facilities and the platform chain', async () => {
       await asFacility(c, FAC.a1);
       const base = await count(c, 'SELECT count(*) AS n FROM audit_log');
-      assert.equal(base, 3, 'the seed wrote exactly three rows per facility: user_role.granted (0005 trigger), audit(), decision.finalized');
+      assert.equal(base, 4, 'the seed wrote exactly four rows per facility: user_role.granted (0005), audit(), decision.finalized, facility_profile.versioned (0008)');
       await audit(c, FAC.a1, 'referral.created');
       await c.query("INSERT INTO audit_log (facility_id, seq, row_hash, actor, action, entity_type, at) VALUES ($1, 0, '\\x00', 'system:test', 'backdated', 'facility', '2001-01-01')", [FAC.a1]);
       const { rows } = await c.query('SELECT seq, prev_hash, row_hash, at FROM audit_log WHERE facility_id = $1 ORDER BY seq', [FAC.a1]);
@@ -310,10 +311,12 @@ test('row-level security, organisation isolation, audit immutability, the hash c
         'codex_app documents INSERT', 'codex_app documents SELECT', 'codex_app documents UPDATE (not_applicable_reason,status,updated_at)',
         'codex_app evaluations INSERT', 'codex_app evaluations SELECT',
         'codex_app facilities SELECT',
+        'codex_app facility_profiles INSERT', 'codex_app facility_profiles SELECT',
         'codex_app facts INSERT', 'codex_app facts SELECT',
         'codex_app organizations SELECT',
         'codex_app product_events INSERT', 'codex_app product_events SELECT',
         'codex_app referrals INSERT', 'codex_app referrals SELECT', 'codex_app referrals UPDATE',
+        'codex_app rule_sets SELECT',
         'codex_app user_facility_roles SELECT',
         'codex_app users SELECT',
         'codex_worker audit_log INSERT', 'codex_worker audit_log SELECT',

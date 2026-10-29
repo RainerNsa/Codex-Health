@@ -3,7 +3,6 @@ import { fileURLToPath } from 'node:url';
 import { assertAuthAllowed, type AuthMode } from './auth.ts';
 import { poolTx, type Tx } from './db.ts';
 import { registerRoutes } from './routes.ts';
-import { loadSeedRuleSet, type RuleSet } from './ruleset.ts';
 
 // Security headers set by hand (helmet-equivalent, no extra dependency). The API serves JSON only,
 // so the CSP is the strictest possible. Cache-Control: no-store on every response: PHI must never
@@ -21,7 +20,6 @@ const HEADERS: Readonly<Record<string, string>> = {
 export interface ServerOptions {
   /** Database access; omitted only for the /health-only test. */
   tx?: Tx;
-  ruleSet?: RuleSet;
   auth?: AuthMode;
   env?: string;
 }
@@ -44,7 +42,7 @@ export function buildServer(opts: ServerOptions = {}): FastifyInstance {
 
   if (opts.tx) {
     assertAuthAllowed(opts.auth ?? 'local-stub', opts.env);
-    registerRoutes(app, { tx: opts.tx, ruleSet: opts.ruleSet ?? loadSeedRuleSet() });
+    registerRoutes(app, { tx: opts.tx });
   }
   return app;
 }

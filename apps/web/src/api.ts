@@ -15,7 +15,7 @@ export interface Evaluation {
 export interface ReferralView {
   referral: { id: string; status: string };
   facts: FactRow[];
-  form: { fact_keys: FactKey[]; note_max: number };
+  form: { fact_keys: FactKey[]; note_max: number; configured?: boolean };
   evaluation: Evaluation | null;
 }
 
@@ -38,3 +38,14 @@ export const getReferral = (facility: string, referral: string, user: string) =>
   call<ReferralView>(`/api/facilities/${facility}/referrals/${referral}`, user);
 export const enterFact = (facility: string, referral: string, user: string, fact: { key: string; value: { type: 'tri_state'; value: Tri }; note: string; as_of_date: string | null }) =>
   call<ReferralView>(`/api/facilities/${facility}/referrals/${referral}/facts`, user, { method: 'POST', body: JSON.stringify(fact) });
+
+export interface Settings {
+  configured: boolean;
+  rule_set?: { version: number; criteria_document_ref: string; rules: { id: string; kind: string; inputs: string[]; enabled_here: boolean; explanation: string | null }[] };
+  profile?: { version: number; capabilities: Record<string, boolean | number>; disabled_rules: string[] };
+  profile_keys?: Record<string, 'boolean' | 'count'>;
+  completeness?: { required_keys: string[]; missing_keys: string[] };
+}
+export const getSettings = (facility: string, user: string) => call<Settings>(`/api/facilities/${facility}/settings`, user);
+export const saveSettings = (facility: string, user: string, body: { capabilities: Record<string, boolean | number>; disabled_rules: string[] }) =>
+  call<Settings>(`/api/facilities/${facility}/settings`, user, { method: 'PUT', body: JSON.stringify(body) });
