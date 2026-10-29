@@ -40,14 +40,14 @@ UNION ALL
 -- which has_table_privilege would miss. DELETE and TRUNCATE exist only at table level.
 SELECT k.rolname, 'role has UPDATE on ' || t.tbl || ' (table- or column-level)'
 FROM checked k
-CROSS JOIN (VALUES ('audit_log'), ('platform_audit_log'), ('evaluations'), ('decisions'), ('facts')) AS t(tbl)
+CROSS JOIN (VALUES ('audit_log'), ('platform_audit_log'), ('evaluations'), ('decisions'), ('facts'), ('product_events')) AS t(tbl)
 WHERE to_regclass('public.' || t.tbl) IS NOT NULL
   AND has_any_column_privilege(k.rolname, 'public.' || t.tbl, 'UPDATE')
 UNION ALL
 SELECT k.rolname, 'role has ' || p.priv || ' on ' || t.tbl
 FROM checked k
 CROSS JOIN (VALUES ('DELETE'), ('TRUNCATE')) AS p(priv)
-CROSS JOIN (VALUES ('audit_log'), ('platform_audit_log'), ('evaluations'), ('decisions'), ('facts')) AS t(tbl)
+CROSS JOIN (VALUES ('audit_log'), ('platform_audit_log'), ('evaluations'), ('decisions'), ('facts'), ('product_events')) AS t(tbl)
 WHERE to_regclass('public.' || t.tbl) IS NOT NULL
   AND has_table_privilege(k.rolname, 'public.' || t.tbl, p.priv)
 UNION ALL
@@ -75,7 +75,8 @@ FROM (VALUES ('audit_log', 'UPDATE, DELETE and TRUNCATE', 8 | 16 | 32),
              ('platform_audit_log', 'UPDATE, DELETE and TRUNCATE', 8 | 16 | 32),
              ('evaluations', 'UPDATE, DELETE and TRUNCATE', 8 | 16 | 32),
              ('decisions', 'UPDATE, DELETE and TRUNCATE', 8 | 16 | 32),
-             ('facts', 'UPDATE', 16)) AS t(tbl, ops, bits)
+             ('facts', 'UPDATE', 16),
+             ('product_events', 'UPDATE', 16)) AS t(tbl, ops, bits)
 WHERE to_regclass('public.' || t.tbl) IS NOT NULL
   AND NOT EXISTS (
     SELECT 1
@@ -92,6 +93,21 @@ SELECT g.tgrelid::regclass::text, 'guard trigger ' || g.tgname || ' is not ENABL
 FROM pg_trigger g
 WHERE NOT g.tgisinternal
   AND g.tgname IN ('referrals_worker_status_guard', 'documents_status_guard', 'facts_insert_guard', 'evaluations_insert_guard',
-                   'decisions_guard', 'decisions_audit', 'organizations_provisioning_audit', 'facilities_provisioning_audit', 'users_provisioning_audit')
+                   'decisions_guard', 'decisions_audit', 'organizations_provisioning_audit', 'facilities_provisioning_audit', 'users_provisioning_audit',
+                   'product_events_insert_guard')
   AND g.tgenabled <> 'A'
+UNION ALL
+-- product_events: the attrs allowlist CHECK exists and the function behind it still enumerates every §14.1 event
+-- and still walks the keys (a permissive replacement cannot pass as the allowlist).
+SELECT 'product_events', 'attrs allowlist CHECK or its functions are missing or hollowed out'
+WHERE to_regclass('public.product_events') IS NOT NULL
+  AND NOT (
+    EXISTS (SELECT 1 FROM pg_constraint WHERE conrelid = to_regclass('public.product_events') AND conname = 'product_events_attrs_allowlisted' AND contype = 'c')
+    AND pg_get_functiondef('product_event_attrs_ok(text, jsonb)'::regprocedure) LIKE '%jsonb_each(%'
+    AND (SELECT bool_and(pg_get_functiondef('product_event_allowed_attrs(text)'::regprocedure) LIKE '%''' || e || '''%')
+         FROM unnest(ARRAY['referral.received', 'referral.uploaded', 'document.processed', 'document.failed', 'referral.ready',
+                            'review.started', 'review.ended', 'evidence.viewed', 'fact.confirmed', 'fact.corrected', 'fact.entered',
+                            'evaluation.created', 'decision.finalized', 'decision.amended', 'referral.held', 'referral.info_requested',
+                            'referral.escalated', 'pilot.outcome_recorded', 'pilot.adjudicated']) AS e)
+  )
 ORDER BY 1, 2;

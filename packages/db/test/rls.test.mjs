@@ -86,6 +86,7 @@ async function seed(c) {
       "INSERT INTO decisions (facility_id, referral_id, evaluation_id, recommended_outcome, decision, decided_by) VALUES ($1, $2, $3, 'admit', 'admit', $4)",
       [id, ref, ev, user],
     );
+    await c.query("INSERT INTO product_events (facility_id, referral_id, actor, event, attrs) VALUES ($1, $2, $3, 'referral.held', '{}')", [id, ref, `user:${user}`]);
   }
 }
 
@@ -129,7 +130,7 @@ test('row-level security, organisation isolation, audit immutability, the hash c
           await asFacility(c, FAC.a1);
         }
         // Exact readable-table count per role: a dropped or added SELECT grant must be a visible change here.
-        assert.equal(checked, { codex_app: 8, codex_worker: 6 }[role], `${role} could read ${checked} tenant tables`);
+        assert.equal(checked, { codex_app: 9, codex_worker: 6 }[role], `${role} could read ${checked} tenant tables`);
       });
     }
 

@@ -1,0 +1,139 @@
+{
+  "packet_id": "eval_vent_0001",
+  "set": "extraction_eval",
+  "generator_version": "handwritten-0 (generator arrives at M4)",
+  "referral_date": "2001-01-04",
+  "referral_type": "skilled",
+  "documents": [
+    {
+      "document_id": "doc_discharge_summary",
+      "type": "discharge_summary",
+      "pages": [
+        1
+      ],
+      "expected_status": "processed"
+    },
+    {
+      "document_id": "doc_nursing_note",
+      "type": "nursing_note",
+      "pages": [
+        2
+      ],
+      "expected_status": "processed"
+    }
+  ],
+  "facility_profile_ref": "examples/profiles/zztest-facility.json@1",
+  "rule_set_ref": "examples/rules@seed",
+  "expected": {
+    "outcome": "do_not_admit",
+    "clinical_outcome": "do_not_admit",
+    "financial_status": "unknown",
+    "sub_reasons": [],
+    "triggered_rules": [
+      {
+        "rule_id": "seed.hard_stop.ventilator",
+        "fact_keys": [
+          "ventilator_use"
+        ]
+      }
+    ],
+    "missing": [
+      "payer_eligibility_verified"
+    ],
+    "conflicts": []
+  },
+  "adversarial": {
+    "planted_visible": [],
+    "invisible_text": [],
+    "xss_values": [],
+    "instruction_text": [],
+    "identity_mismatch_pages": []
+  },
+  "fields": [
+    {
+      "key": "ventilator_use",
+      "value": {
+        "type": "tri_state",
+        "value": "yes"
+      },
+      "document_id": "doc_discharge_summary",
+      "page": 1,
+      "quote": "patient remains ventilator dependent via tracheostomy",
+      "span": {
+        "start": 237,
+        "end": 290
+      },
+      "negative_quotes": [
+        {
+          "page": 2,
+          "quote": "weaned from the ventilator last year during a prior admission",
+          "fabricated": false
+        },
+        {
+          "page": 1,
+          "quote": "patient has been weaned from the ventilator",
+          "fabricated": true
+        }
+      ],
+      "as_of_date": "2001-01-01",
+      "polarity": "positive",
+      "is_critical": true,
+      "specially_protected": false
+    },
+    {
+      "key": "dialysis_use",
+      "value": {
+        "type": "tri_state",
+        "value": "no"
+      },
+      "document_id": "doc_discharge_summary",
+      "page": 1,
+      "quote": "no history of dialysis",
+      "span": {
+        "start": 318,
+        "end": 340
+      },
+      "negative_quotes": [],
+      "as_of_date": "2001-01-01",
+      "polarity": "near_miss_negative",
+      "is_critical": true,
+      "specially_protected": false
+    },
+    {
+      "key": "anticipated_discharge_date",
+      "value": {
+        "type": "date",
+        "value": "2001-01-09"
+      },
+      "document_id": "doc_discharge_summary",
+      "page": 1,
+      "quote": "Anticipated discharge to skilled nursing facility on 2001-01-09",
+      "span": {
+        "start": 375,
+        "end": 438
+      },
+      "negative_quotes": [],
+      "as_of_date": "2001-01-01",
+      "polarity": "positive",
+      "is_critical": false,
+      "specially_protected": false
+    },
+    {
+      "key": "payer_eligibility_verified",
+      "value": {
+        "type": "tri_state",
+        "value": "unknown"
+      },
+      "document_id": null,
+      "page": null,
+      "quote": null,
+      "span": null,
+      "negative_quotes": [],
+      "as_of_date": null,
+      "polarity": "absent",
+      "is_critical": true,
+      "specially_protected": false
+    }
+  ],
+  "reviewed_by": "agent-proxy"
+}
