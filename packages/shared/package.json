@@ -11,12 +11,5 @@
     "lint": "eslint --config ../../eslint.config.js src test",
     "typecheck": "tsc --noEmit -p tsconfig.json",
     "test": "node --test test/env.test.ts"
-  },
-  "devDependencies": {
-    "@types/node": "^24.0.0",
-    "eslint": "^9.15.0",
-    "prettier": "^3.3.0",
-    "typescript": "^5.8.0",
-    "typescript-eslint": "^8.15.0"
   }
 }

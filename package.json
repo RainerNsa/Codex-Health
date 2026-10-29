@@ -21,6 +21,14 @@
     "test": "npm run test --workspaces --if-present && npm test --prefix scripts/checks && node --test \"infra/scripts/*.test.mjs\"",
     "build": "npm run build --workspaces --if-present",
     "dev:up": "docker compose up -d",
-    "dev:down": "docker compose down"
+    "dev:down": "docker compose down",
+    "audit": "npm audit --audit-level=high"
+  },
+  "devDependencies": {
+    "@types/node": "^24.0.0",
+    "eslint": "^9.15.0",
+    "prettier": "^3.3.0",
+    "typescript": "^5.8.0",
+    "typescript-eslint": "^8.15.0"
   }
 }

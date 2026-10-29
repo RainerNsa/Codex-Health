@@ -16,18 +16,19 @@ const NETWORK_MODULES = [
 ];
 const IO_MODULES = ['fs', 'node:fs', 'worker_threads', 'node:worker_threads'];
 const SPAWN_MODULES = ['child_process', 'node:child_process'];
-const importOf = (mods) =>
-  new RegExp(`(from\\s+|require\\(\\s*|import\\(\\s*)['"](${mods.map((m) => m.replace(/[/.-]/g, '\\$&')).join('|')})(/[^'"]*)?['"]`);
+// One literal import regex; the module list is matched on the captured specifier, never compiled into a regex.
+const IMPORT_RE = /(from\s+|require\(\s*|import\(\s*)['"]([^'"]+)['"]/;
+const importOf = (mods) => ({ re: IMPORT_RE, accept: (m) => mods.some((mod) => m[2] === mod || m[2].startsWith(`${mod}/`)) });
 const PATTERNS = [
-  { label: 'network/client import', re: importOf(NETWORK_MODULES) },
+  { label: 'network/client import', ...importOf(NETWORK_MODULES) },
   { label: 'AWS SDK import', re: /(from\s+|require\(\s*|import\(\s*)['"](@aws-sdk\/[^'"]+|aws-sdk(\/[^'"]*)?|@anthropic-ai\/[^'"]+)['"]/ },
   { label: 'global fetch call', re: /(^|[^.\w])fetch\s*\(|\b(globalThis|window|self)\.fetch\b/ },
   { label: 'nondeterministic call', re: /\b(Date\.now\s*\(|new\s+Date\b|performance\.now\s*\(|Math\.random\s*\(|crypto\.randomUUID\s*\(|process\.hrtime\b)/ },
   { label: 'process.env read', re: /\bprocess\.env\b/ },
   { label: 'browser network API', re: /\b(WebSocket|XMLHttpRequest|EventSource)\b/ },
 ];
-const SRC_PATTERNS = [...PATTERNS, { label: 'I/O import', re: importOf([...IO_MODULES, ...SPAWN_MODULES]) }];
-const TEST_PATTERNS = [...PATTERNS, { label: 'I/O import', re: importOf(IO_MODULES) }];
+const SRC_PATTERNS = [...PATTERNS, { label: 'I/O import', ...importOf([...IO_MODULES, ...SPAWN_MODULES]) }];
+const TEST_PATTERNS = [...PATTERNS, { label: 'I/O import', ...importOf(IO_MODULES) }];
 
 if (!fs.existsSync(DIR)) finish('SKIP', NAME, 'packages/rules-engine does not exist yet');
 const files = walk(DIR, { exts: SOURCE_EXTS });
