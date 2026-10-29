@@ -88,6 +88,9 @@ async function seed(c) {
     );
     await c.query("INSERT INTO product_events (facility_id, referral_id, actor, event, attrs) VALUES ($1, $2, $3, 'referral.held', '{}')", [id, ref, `user:${user}`]);
     await c.query("INSERT INTO facility_profiles (facility_id, version, capabilities, created_by) VALUES ($1, 0, '{\"accepts_ventilator\": false}', 'platform:test')", [id]);
+    // one transition per facility (0009): the owner puts the referral in review, the Reviewer holds it
+    await c.query("UPDATE referrals SET status = 'ready_for_review' WHERE facility_id = $1", [id]);
+    await c.query("INSERT INTO referral_transitions (facility_id, referral_id, transition, from_status, to_status, note, created_by) VALUES ($1, $2, 'T8', 'ready_for_review', 'on_hold', 'SYNTHETIC hold', $3)", [id, ref, `user:${user}`]);
   }
 }
 
@@ -131,7 +134,7 @@ test('row-level security, organisation isolation, audit immutability, the hash c
           await asFacility(c, FAC.a1);
         }
         // Exact readable-table count per role: a dropped or added SELECT grant must be a visible change here.
-        assert.equal(checked, { codex_app: 10, codex_worker: 6 }[role], `${role} could read ${checked} tenant tables`);
+        assert.equal(checked, { codex_app: 11, codex_worker: 6 }[role], `${role} could read ${checked} tenant tables`);
       });
     }
 
@@ -186,7 +189,7 @@ test('row-level security, organisation isolation, audit immutability, the hash c
     await sub('the chain is computed by the trigger, never by the writer, and verifies for both facilities and the platform chain', async () => {
       await asFacility(c, FAC.a1);
       const base = await count(c, 'SELECT count(*) AS n FROM audit_log');
-      assert.equal(base, 4, 'the seed wrote exactly four rows per facility: user_role.granted (0005), audit(), decision.finalized, facility_profile.versioned (0008)');
+      assert.equal(base, 5, 'the seed wrote exactly five rows per facility: user_role.granted (0005), audit(), decision.finalized, facility_profile.versioned (0008), referral.held (0009)');
       await audit(c, FAC.a1, 'referral.created');
       await c.query("INSERT INTO audit_log (facility_id, seq, row_hash, actor, action, entity_type, at) VALUES ($1, 0, '\\x00', 'system:test', 'backdated', 'facility', '2001-01-01')", [FAC.a1]);
       const { rows } = await c.query('SELECT seq, prev_hash, row_hash, at FROM audit_log WHERE facility_id = $1 ORDER BY seq', [FAC.a1]);
@@ -259,7 +262,8 @@ test('row-level security, organisation isolation, audit immutability, the hash c
       await expectFailure(c, "UPDATE referrals SET status = 'finalized' WHERE facility_id = $1", /codex_worker may not move/, [FAC.a1]);
       await c.query('RESET ROLE');
       await c.query('SET LOCAL ROLE codex_app');
-      assert.equal((await c.query("UPDATE referrals SET status = 'amended' WHERE facility_id = $1", [FAC.a1])).rowCount, 1, 'the guard binds only the worker');
+      // the worker guard binds only the worker; the app role moves a referral only through referral_transitions (0009)
+      await expectFailure(c, "UPDATE referrals SET status = 'amended' WHERE facility_id = $1", /only through referral_transitions/, [FAC.a1]);
     });
 
     await sub('concurrency: a second session holding one facility chain lock blocks an append to it, not to another facility', async () => {
@@ -315,7 +319,8 @@ test('row-level security, organisation isolation, audit immutability, the hash c
         'codex_app facts INSERT', 'codex_app facts SELECT',
         'codex_app organizations SELECT',
         'codex_app product_events INSERT', 'codex_app product_events SELECT',
-        'codex_app referrals INSERT', 'codex_app referrals SELECT', 'codex_app referrals UPDATE',
+        'codex_app referral_transitions INSERT', 'codex_app referral_transitions SELECT',
+        'codex_app referrals INSERT', 'codex_app referrals SELECT', 'codex_app referrals UPDATE (status,updated_at)',
         'codex_app rule_sets SELECT',
         'codex_app user_facility_roles SELECT',
         'codex_app users SELECT',
@@ -398,6 +403,50 @@ test('row-level security, organisation isolation, audit immutability, the hash c
       }
       await c.query(FP, [FAC.a1, '{"accepts_ventilator":true,"ventilator_beds":2}']);
       assert.deepEqual((await c.query('SELECT version FROM facility_profiles WHERE facility_id = $1 ORDER BY version', [FAC.a1])).rows.map((r) => r.version), [1, 2, 3]);
+    });
+
+    await sub('transitions (0009): status moves only through a checked, audited transition row', async () => {
+      const T = 'INSERT INTO referral_transitions (facility_id, referral_id, transition, from_status, to_status, note, department, requested_items, decision_id, created_by) VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)';
+      await asFacility(c, FAC.a1);
+      await asOrg(c, ORG[0]);
+      const ref = (await c.query('SELECT id FROM referrals WHERE facility_id = $1', [FAC.a1])).rows[0].id;
+      const dec = (await c.query('SELECT id FROM decisions WHERE facility_id = $1', [FAC.a1])).rows[0].id;
+      const me = `user:${USER.a}`;
+      await c.query('SET LOCAL ROLE codex_app');
+      const status = async () => (await c.query('SELECT status FROM referrals WHERE id = $1', [ref])).rows[0].status;
+      assert.equal(await status(), 'on_hold');
+      // who: a Reviewer or Admin of this facility, never the platform or a foreign user
+      await expectFailure(c, T, /may not move referrals/, [FAC.a1, ref, 'T11', 'on_hold', 'ready_for_review', 'n', null, '{}', null, 'platform:owner']);
+      await expectFailure(c, T, /may not move referrals/, [FAC.a1, ref, 'T11', 'on_hold', 'ready_for_review', 'n', null, '{}', null, `user:${USER.b}`]);
+      // from: the referral's real status, under the lock
+      await expectFailure(c, T, /referral is on_hold, not ready_for_review/, [FAC.a1, ref, 'T8', 'ready_for_review', 'on_hold', 'n', null, '{}', null, me]);
+      // shape: note, keys only for items, a known department, the right pair of states, extra fields refused
+      for (const bad of [
+        ['T11', 'on_hold', 'ready_for_review', null, null, '{}', null],
+        ['T11', 'on_hold', 'finalized', 'n', null, '{}', null],
+        ['T11', 'on_hold', 'ready_for_review', 'n', 'therapy', '{}', null],
+        ['T11', 'on_hold', 'ready_for_review', ' ', null, '{}', null],
+        ['T99', 'on_hold', 'ready_for_review', 'n', null, '{}', null],
+      ]) await expectFailure(c, T, /referral_transitions_(shape|fields)|note_check/, [FAC.a1, ref, ...bad, me]);
+      await c.query(T, [FAC.a1, ref, 'T11', 'on_hold', 'ready_for_review', 'SYNTHETIC resume', null, '{}', null, me]);
+      assert.equal(await status(), 'ready_for_review');
+      await expectFailure(c, T, /transition_items_ok|requested_items_check/, [FAC.a1, ref, 'T9', 'ready_for_review', 'info_requested', null, null, '{"Call the hospital"}', null, me]);
+      await expectFailure(c, T, /department_check/, [FAC.a1, ref, 'T10', 'ready_for_review', 'escalated', 'n', 'the_ceo', '{}', null, me]);
+      // T12 names the original decision, made by the same user who finalizes
+      // (as the owner, so the actor check does not answer first: USER.b did not make this decision)
+      await c.query('RESET ROLE');
+      await expectFailure(c, T, /must name the original decision/, [FAC.a1, ref, 'T12', 'ready_for_review', 'finalized', null, null, '{}', dec, `user:${USER.b}`]);
+      await c.query('SET LOCAL ROLE codex_app');
+      await c.query(T, [FAC.a1, ref, 'T12', 'ready_for_review', 'finalized', null, null, '{}', dec, me]);
+      assert.equal(await status(), 'finalized');
+      // T14: a manual-entry referral needs an evaluation and no documents
+      const fresh = (await c.query('INSERT INTO referrals (facility_id) VALUES ($1) RETURNING id', [FAC.a1])).rows[0].id;
+      await expectFailure(c, T, /T14 needs no documents and at least one evaluation/, [FAC.a1, fresh, 'T14', 'draft', 'ready_for_review', null, null, '{}', null, me]);
+      // every transition wrote its audit row; transition rows never change
+      const actions = (await c.query("SELECT action FROM audit_log WHERE entity_id = $1 AND action LIKE 'referral.%' ORDER BY seq", [ref])).rows.map((x) => x.action);
+      assert.deepEqual(actions, ['referral.held', 'referral.resumed', 'referral.finalized']);
+      await expectFailure(c, "UPDATE referral_transitions SET note = 'x'", /immutable|permission denied/);
+      await expectFailure(c, 'DELETE FROM referral_transitions', /immutable|permission denied/);
     });
 
     await sub('CONSTRAINTS check queries return zero rows', async () => {

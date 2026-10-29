@@ -313,6 +313,96 @@ describe.skipIf(!url)('manual fact entry API', () => {
     await c.query("SELECT set_config('app.organization_id', '', true)");
   });
 
+  // --- review screens (M3 slice 2): transitions T8–T11, T14 and finalize T12 ---------------------------------
+  const refUrl = (rid: string) => `/api/facilities/${FAC.a}/referrals/${rid}`;
+  const move = (rid: string, user: string, body: unknown) => post(`${refUrl(rid)}/transitions`, user, body);
+  const finalize = (rid: string, user: string, body: unknown) => post(`${refUrl(rid)}/decision`, user, body);
+  const withFacts = async (...entries: [string, 'yes' | 'no' | 'unknown'][]) => {
+    const rid = await newReferral();
+    let view: { evaluation: { id: string; outcome: string } } | undefined;
+    for (const [k, v] of entries) view = (await post(factsUrl(rid), U.reviewer, fact(k, v))).json();
+    return { rid, ev: view!.evaluation };
+  };
+
+  it('review: a manual-entry referral is submitted for review, then finalized on the evaluation the Reviewer saw', async () => {
+    const { rid, ev } = await withFacts(['ventilator_use', 'no'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
+    expect(ev.outcome).toBe('admit');
+    let view = (await get(refUrl(rid), U.reviewer)).json();
+    expect([view.referral.status, view.actions]).toEqual(['draft', ['submit']]);
+    expect(view.confirmation.every((x: { confirmed: boolean }) => x.confirmed)).toBe(true);
+    expect((await finalize(rid, U.reviewer, { evaluation_id: ev.id, decision: 'admit' })).json()).toEqual({ error: 'transition_not_allowed' });
+    view = (await move(rid, U.reviewer, { action: 'submit' })).json();
+    expect([view.referral.status, view.actions]).toEqual(['ready_for_review', ['hold', 'request_info', 'escalate', 'finalize']]);
+    // a newer evaluation since the screen loaded is refused, as is a reason on an agreeing decision
+    const other = (await withFacts(['daily_skilled_need', 'yes'])).ev.id;
+    expect((await finalize(rid, U.reviewer, { evaluation_id: other, decision: 'admit' })).json()).toEqual({ error: 'evaluation_stale' });
+    expect((await finalize(rid, U.reviewer, { evaluation_id: ev.id, decision: 'admit', override_reason: 'x' })).json()).toEqual({ error: 'invalid_decision' });
+    expect((await finalize(rid, U.viewer, { evaluation_id: ev.id, decision: 'admit' })).statusCode).toBe(403);
+    const done = await finalize(rid, U.reviewer, { evaluation_id: ev.id, decision: 'admit' });
+    expect(done.statusCode).toBe(201);
+    view = done.json();
+    expect([view.referral.status, view.decision.decision, view.decision.evaluation_id, view.actions]).toEqual(['finalized', 'admit', ev.id, []]);
+    expect((await finalize(rid, U.reviewer, { evaluation_id: ev.id, decision: 'admit' })).json()).toEqual({ error: 'transition_not_allowed' });
+    expect((await post(factsUrl(rid), U.reviewer, fact('ventilator_use', 'yes'))).json()).toEqual({ error: 'referral_not_open' });
+    await asOwner(FAC.a);
+    const actions = (await c.query("SELECT action FROM audit_log WHERE entity_id = $1 OR entity_id = $2 ORDER BY seq", [rid, view.decision.id])).rows.map((r) => r.action);
+    expect(actions.filter((a: string) => a !== 'referral.viewed')).toEqual(['referral.created', 'referral.submitted_for_review', 'decision.finalized', 'referral.finalized']);
+    const ev2 = (await c.query("SELECT attrs FROM product_events WHERE referral_id = $1 AND event = 'decision.finalized'", [rid])).rows[0].attrs;
+    expect([ev2.override, ev2.cosigner_present, ev2.decisive_fact_count]).toEqual([false, false, 3]);
+  });
+
+  it('review: an override needs a reason; every fact the decision rests on must be stated first', async () => {
+    const nr = await withFacts(['ventilator_use', 'no'], ['recent_aggression', 'yes'], ['daily_skilled_need', 'yes']);
+    expect(nr.ev.outcome).toBe('needs_review');
+    await move(nr.rid, U.reviewer, { action: 'submit' });
+    expect((await finalize(nr.rid, U.reviewer, { evaluation_id: nr.ev.id, decision: 'admit' })).json()).toEqual({ error: 'override_reason_required' });
+    expect((await finalize(nr.rid, U.reviewer, { evaluation_id: nr.ev.id, decision: 'admit', override_reason: '   ' })).json()).toEqual({ error: 'override_reason_required' });
+    const ok = (await finalize(nr.rid, U.reviewer, { evaluation_id: nr.ev.id, decision: 'admit', override_reason: 'SYNTHETIC: behaviour plan agreed with the hospital' })).json();
+    expect([ok.decision.decision, ok.decision.override_reason]).toEqual(['admit', 'SYNTHETIC: behaviour plan agreed with the hospital']);
+    // the hard-stop input was never stated: the confirmation set is incomplete
+    const gap = await withFacts(['daily_skilled_need', 'yes']);
+    await move(gap.rid, U.reviewer, { action: 'submit' });
+    const view = (await get(refUrl(gap.rid), U.reviewer)).json();
+    expect(view.confirmation.find((x: { key: string }) => x.key === 'ventilator_use')).toEqual({ key: 'ventilator_use', confirmed: false });
+    expect((await finalize(gap.rid, U.reviewer, { evaluation_id: gap.ev.id, decision: 'do_not_admit', override_reason: 'SYNTHETIC' })).json()).toEqual({ error: 'confirmation_incomplete' });
+  });
+
+  it('review: a hard stop overridden to Admit, or a flipped hard-stop input, waits for the co-sign (next slice)', async () => {
+    const hs = await withFacts(['ventilator_use', 'yes'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
+    expect(hs.ev.outcome).toBe('do_not_admit');
+    await move(hs.rid, U.reviewer, { action: 'submit' });
+    expect((await finalize(hs.rid, U.admin, { evaluation_id: hs.ev.id, decision: 'admit', override_reason: 'SYNTHETIC' })).json()).toEqual({ error: 'cosign_required' });
+    expect((await finalize(hs.rid, U.reviewer, { evaluation_id: hs.ev.id, decision: 'do_not_admit' })).statusCode).toBe(201);
+    const flip = await withFacts(['ventilator_use', 'yes'], ['ventilator_use', 'no'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
+    expect(flip.ev.outcome).toBe('admit');
+    await move(flip.rid, U.reviewer, { action: 'submit' });
+    expect((await finalize(flip.rid, U.reviewer, { evaluation_id: flip.ev.id, decision: 'admit' })).json()).toEqual({ error: 'cosign_required' });
+  });
+
+  it('review: hold, request information, escalate and resume move only from the states §5.1 allows, each with its fields', async () => {
+    const { rid } = await withFacts(['daily_skilled_need', 'yes']);
+    await move(rid, U.reviewer, { action: 'submit' });
+    for (const bad of [{ action: 'hold' }, { action: 'hold', note: ' ' }, { action: 'fly', note: NOTE }, { action: 'escalate', note: NOTE }, { action: 'escalate', note: NOTE, department: 'the_ceo' },
+      { action: 'request_info' }, { action: 'request_info', items: ['Call the hospital'] }, { action: 'request_info', items: ['no_such_key'] }, { action: 'hold', note: 'x'.repeat(501) }]) {
+      expect((await move(rid, U.reviewer, bad)).json(), JSON.stringify(bad)).toEqual({ error: 'invalid_transition' });
+    }
+    expect((await move(rid, U.viewer, { action: 'hold', note: NOTE })).statusCode).toBe(403);
+    let view = (await move(rid, U.reviewer, { action: 'hold', note: NOTE })).json();
+    expect([view.referral.status, view.actions]).toEqual(['on_hold', ['resume']]);
+    expect((await move(rid, U.reviewer, { action: 'escalate', note: NOTE, department: 'therapy' })).json()).toEqual({ error: 'transition_not_allowed' });
+    // facts may still be entered while held (T7), and the status does not move
+    expect((await post(factsUrl(rid), U.reviewer, fact('ventilator_use', 'no'))).json().referral.status).toBe('on_hold');
+    await move(rid, U.reviewer, { action: 'resume', note: NOTE });
+    view = (await move(rid, U.reviewer, { action: 'request_info', items: ['recent_aggression', 'recent_aggression'] })).json();
+    expect(view.transitions.at(-1)).toMatchObject({ transition: 'T9', requested_items: ['recent_aggression'], note: null });
+    await move(rid, U.reviewer, { action: 'resume', note: NOTE });
+    view = (await move(rid, U.admin, { action: 'escalate', note: NOTE, department: 'director_of_nursing' })).json();
+    expect([view.referral.status, view.transitions.map((t: { transition: string }) => t.transition)]).toEqual(['escalated', ['T14', 'T8', 'T11', 'T9', 'T11', 'T10']]);
+    await asOwner(FAC.a);
+    const events = (await c.query("SELECT event, attrs FROM product_events WHERE referral_id = $1 AND event IN ('referral.held', 'referral.info_requested', 'referral.escalated') ORDER BY at", [rid])).rows;
+    expect(events).toEqual([{ event: 'referral.held', attrs: {} }, { event: 'referral.info_requested', attrs: { items_requested: 1 } }, { event: 'referral.escalated', attrs: { department: 'director_of_nursing' } }]);
+  });
+
   it('a database refusal is 422 and an infrastructure failure 500, and neither echoes the error message', async () => {
     const thrower = (code: string): Tx => async () => { throw Object.assign(new Error('SYNTHETIC message with ZZTEST CANARY-ALPHA'), { code }); };
     for (const [code, status, error] of [['23514', 422, 'rejected'], ['P0001', 422, 'rejected'], ['08006', 500, 'internal']] as const) {
