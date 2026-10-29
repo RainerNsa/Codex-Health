@@ -178,7 +178,23 @@ test('auth: no SMS template; token validity is not the idle timeout', () => {
 
 // --- M1 close-out (SPEC §12.4 "still M1"; decision log 2026-10-29) ----------
 
-const policyBlock = (text, sid) => text.match(new RegExp(`sid\\s+=\\s+"${sid}"[\\s\\S]*?\\n  \\}\\n`))?.[0];
+// The statement block that carries one sid, by string search (no regex built from data): from the `sid = "<sid>"`
+// line back to the statement's opening brace, forward to its matching close.
+const policyBlock = (text, sid) => {
+  const marker = `"${sid}"`;
+  let at = -1;
+  for (const line of text.split('\n')) {
+    if (line.includes('sid') && line.includes('=') && line.includes(marker)) { at = text.indexOf(line); break; }
+  }
+  if (at < 0) return undefined;
+  const open = text.lastIndexOf('{', at);
+  let depth = 0;
+  for (let i = open; i < text.length; i += 1) {
+    if (text[i] === '{') depth += 1;
+    else if (text[i] === '}') { depth -= 1; if (depth === 0) return text.slice(open, i + 1); }
+  }
+  return undefined;
+};
 const envMains = ['dev', 'test', 'prod'].map((env) => [env, read('envs', env, 'main.tf')]);
 
 test('queue policy: SendMessage only for sender_role_arns, consume only for consumer_role_arns, TLS required', () => {
