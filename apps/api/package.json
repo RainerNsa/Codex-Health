@@ -2,7 +2,7 @@
   "name": "@codex-health/api",
   "version": "0.0.0",
   "private": true,
-  "description": "HTTP API (facility-scoped, RLS-backed). M0: /health only.",
+  "description": "HTTP API (facility-scoped, RLS-backed). M2: manual fact entry behind the local auth stub.",
   "type": "module",
   "scripts": {
     "dev": "node --watch src/server.ts",
@@ -12,9 +12,12 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "fastify": "^5.0.0"
+    "@codex-health/rules-engine": "0.0.0",
+    "fastify": "^5.0.0",
+    "pg": "^8"
   },
   "devDependencies": {
+    "@types/pg": "^8.11.0",
     "vitest": "^5.0.5"
   }
 }

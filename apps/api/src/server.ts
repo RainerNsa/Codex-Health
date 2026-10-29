@@ -1,5 +1,9 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { fileURLToPath } from 'node:url';
+import { assertAuthAllowed, type AuthMode } from './auth.ts';
+import { poolTx, type Tx } from './db.ts';
+import { registerRoutes } from './routes.ts';
+import { loadSeedRuleSet, type RuleSet } from './ruleset.ts';
 
 // Security headers set by hand (helmet-equivalent, no extra dependency). The API serves JSON only,
 // so the CSP is the strictest possible. Cache-Control: no-store on every response: PHI must never
@@ -14,8 +18,16 @@ const HEADERS: Readonly<Record<string, string>> = {
   'Permissions-Policy': 'camera=(), microphone=(), geolocation=()',
 };
 
-export function buildServer(): FastifyInstance {
-  const app = Fastify({ logger: false });
+export interface ServerOptions {
+  /** Database access; omitted only for the /health-only test. */
+  tx?: Tx;
+  ruleSet?: RuleSet;
+  auth?: AuthMode;
+  env?: string;
+}
+
+export function buildServer(opts: ServerOptions = {}): FastifyInstance {
+  const app = Fastify({ logger: false, bodyLimit: 16 * 1024 });
 
   app.addHook('onSend', async (_request, reply) => {
     for (const [name, value] of Object.entries(HEADERS)) reply.header(name, value);
@@ -23,12 +35,19 @@ export function buildServer(): FastifyInstance {
 
   app.get('/health', async () => ({ status: 'ok' }));
 
+  if (opts.tx) {
+    assertAuthAllowed(opts.auth ?? 'local-stub', opts.env);
+    registerRoutes(app, { tx: opts.tx, ruleSet: opts.ruleSet ?? loadSeedRuleSet() });
+  }
   return app;
 }
 
 // Listen only when run directly (`node src/server.ts`), not when imported by tests.
 if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const port = Number(process.env['PORT'] ?? 3000);
-  await buildServer().listen({ host: '127.0.0.1', port });
+  const url = process.env['DATABASE_URL_APP'];
+  if (!url) throw new Error('missing required environment variable DATABASE_URL_APP');
+  const db = poolTx(url);
+  await buildServer({ tx: db.tx, auth: 'local-stub', env: process.env['CODEX_ENV'] }).listen({ host: '127.0.0.1', port });
   console.log(`api listening on 127.0.0.1:${port}`);
 }
