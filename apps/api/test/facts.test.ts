@@ -127,6 +127,7 @@ describe.skipIf(!url)('manual fact entry API', () => {
     expect(body.evaluation.outcome).toBe('admit');
     expect(body.evaluation.trace.resolution_step).toBe('favorable_rule_true');
     expect(body.evaluation.trace.inputs.processing_complete).toBe(true);
+    expect(body.evaluation.trace.confirmation_set).toEqual(['daily_skilled_need', 'recent_aggression', 'ventilator_use']); // 2.7, stored with the evaluation
     expect(body.evaluation.trace.inputs.referral_date).toMatch(/^\d{4}-\d{2}-\d{2}$/);
     expect(body.facts.map((f: { key: string; value: { value: string }; as_of_date: string | null }) => [f.key, f.value.value, f.as_of_date]))
       .toEqual([['daily_skilled_need', 'yes', '2001-01-02'], ['recent_aggression', 'no', null], ['ventilator_use', 'no', null]]);

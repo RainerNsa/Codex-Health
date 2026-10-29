@@ -10,7 +10,7 @@ export interface Evaluation {
   clinical_outcome: string;
   financial_status: string;
   sub_reasons: string[];
-  trace: { resolution_step: string; trace: TraceEntry[]; missing: string[]; conflicts: string[]; blocking: string[]; empty_profile_keys: string[]; confirmation_set: string[] };
+  trace: { resolution_step: string; trace: TraceEntry[]; missing: string[]; conflicts: string[]; blocking: string[]; empty_profile_keys: string[]; confirmation_set?: string[] };
 }
 export interface ReferralView {
   referral: { id: string; status: string };

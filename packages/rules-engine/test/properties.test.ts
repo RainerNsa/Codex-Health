@@ -133,12 +133,28 @@ describe('engine properties', () => {
       expect(r.outcome).toBe('do_not_admit');
     }));
   });
-  it('the confirmation set always covers every fact input of every hard stop and of every rule that fired', () => {
+  it('an Admit\'s confirmation set covers every fact the Admit rests on, computed from the inputs, not from the engine', () => {
+    let admits = 0;
     fc.assert(fc.property(input, (i) => {
       const r = run(i);
-      for (const t of r.trace) if (t.kind === 'hard_stop' || t.result === 'yes') for (const inp of t.inputs) if (!inp.key.startsWith('facility.')) expect(r.confirmation_set).toContain(inp.key);
-      for (const k of r.confirmation_set) expect(r.trace.some((t) => (t.kind === 'hard_stop' || t.result === 'yes') && t.inputs.some((inp) => inp.key === k))).toBe(true);
-    }), { numRuns: 300 });
+      if (r.outcome !== 'admit') return;
+      admits += 1;
+      const mustConfirm = new Set([
+        ...i.rules.filter((x) => x.kind !== 'favorable').flatMap((x) => x.inputs),
+        ...i.facts.filter((f) => f.is_critical).map((f) => f.key),
+      ].filter((k) => !k.startsWith('facility.')));
+      for (const k of mustConfirm) expect(r.confirmation_set, `${k} decides this Admit`).toContain(k);
+      for (const k of r.confirmation_set) expect(k.startsWith('facility.')).toBe(false);
+    }), { numRuns: 1500 });
+    expect(admits).toBeGreaterThanOrEqual(8);
+  });
+  it('a Do Not Admit asks only for the facts of the hard stops that fired', () => {
+    fc.assert(fc.property(input, (i) => {
+      const r = run(i);
+      if (r.outcome !== 'do_not_admit') return;
+      const fired = new Set(r.trace.filter((t) => t.kind === 'hard_stop' && t.result === 'yes').flatMap((t) => i.rules.find((x) => x.id === t.rule_id)!.inputs).filter((k) => !k.startsWith('facility.')));
+      expect(new Set(r.confirmation_set)).toEqual(fired);
+    }), { numRuns: 400 });
   });
   it('the trace never carries text: only keys, codes, numbers, tri-states and rule ids', () => {
     fc.assert(fc.property(input, (i) => {

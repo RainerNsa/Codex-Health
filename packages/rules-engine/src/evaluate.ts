@@ -61,9 +61,14 @@ export interface Evaluation {
   /** Unknown critical keys ranked by how many rules read them: "would be Admit if this one were known". */
   blocking: string[];
   empty_profile_keys: string[];
-  /** Minimum confirmation set (dev-alignment 2.7, SPEC §4): the fact keys a person must confirm before finalize —
-   *  every fact input of an enabled hard-stop rule, and every fact input of a rule that fired. Nothing else is
-   *  required. Sorted by code. */
+  /** Minimum confirmation set (dev-alignment 2.7, SPEC §4, §10.3): the fact keys a person must confirm before
+   *  finalizing the recommended outcome, by outcome:
+   *  - admit: every fact read by an enabled hard-stop, payer or review rule (the "no" answers that kept them from
+   *    firing decide an Admit too), every fact read by a favorable rule that fired, every fact flagged critical,
+   *    every conflicting fact;
+   *  - do_not_admit: the facts read by the hard stops that fired;
+   *  - needs_review: the facts read by hard stops and by rules that fired, flagged critical facts, conflicts.
+   *  "Read" = declared inputs and the keys in the expression. Never a profile key. Sorted by code. */
   confirmation_set: string[];
   engine_version: string;
 }
@@ -301,10 +306,23 @@ export function evaluate(input: EvaluateInput): Evaluation {
     conflicts,
     blocking,
     empty_profile_keys: [...ctx.emptyProfileKeys].sort(byCode),
-    confirmation_set: [...new Set(entries.filter((e) => e.kind === 'hard_stop' || e.result === 'yes')
-      .flatMap((e) => e.inputs.map((i) => i.key)).filter((k) => !k.startsWith('facility.')))].sort(byCode),
+    confirmation_set: confirmationSet(merged.outcome, entries, rules, flagged, conflicts).sort(byCode),
     engine_version: ENGINE_VERSION,
   };
+}
+
+function confirmationSet(outcome: Outcome, entries: Entry[], rules: readonly Rule[], flagged: Set<string>, conflicts: string[]): string[] {
+  const reads = (id: string) => {
+    const r = rules.find((x) => x.id === id)!;
+    return [...r.inputs, ...(entries.find((e) => e.rule_id === id)?.inputs.map((i) => i.key) ?? [])];
+  };
+  const pick = (keep: (e: Entry) => boolean) => entries.filter(keep).flatMap((e) => reads(e.rule_id));
+  const keys = outcome === 'do_not_admit'
+    ? pick((e) => e.kind === 'hard_stop' && e.result === 'yes')
+    : outcome === 'admit'
+      ? [...pick((e) => e.kind !== 'favorable' || e.result === 'yes'), ...flagged, ...conflicts]
+      : [...pick((e) => e.kind === 'hard_stop' || e.result === 'yes'), ...flagged, ...conflicts];
+  return [...new Set(keys.filter((k) => !k.startsWith('facility.')))];
 }
 
 // ---------- rule tests (§10.4) ----------

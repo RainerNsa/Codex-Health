@@ -214,15 +214,31 @@ describe('Prove-It cases from the confirmatory review', () => {
   });
 });
 
-describe('minimum confirmation set (2.7)', () => {
-  it('is every hard-stop fact input plus the fact inputs of rules that fired, and nothing else', () => {
-    const admit = run([tri('ventilator_use', 'no'), tri('recent_aggression', 'no'), tri('daily_skilled_need', 'yes'), tri('payer_pending', 'no')]);
-    expect(admit.confirmation_set).toEqual(['daily_skilled_need', 'ventilator_use']); // hard-stop input + the favorable rule that fired
-    const review = run([tri('ventilator_use', 'no'), tri('recent_aggression', 'yes'), tri('daily_skilled_need', 'yes'), tri('payer_pending', 'yes')]);
-    expect(review.confirmation_set).toEqual(['daily_skilled_need', 'payer_pending', 'recent_aggression', 'ventilator_use']);
+describe('minimum confirmation set (2.7), by outcome', () => {
+  const base = [tri('ventilator_use', 'no'), tri('recent_aggression', 'no'), tri('daily_skilled_need', 'yes'), tri('payer_pending', 'no')];
+  it('admit: every fact read by a hard-stop, payer or review rule, the favorable facts that fired, flagged critical facts, conflicts', () => {
+    expect(run(base).confirmation_set).toEqual(['daily_skilled_need', 'payer_pending', 'recent_aggression', 'ventilator_use']);
+    const flagged = run([...base, tri('code_status', 'no', { is_critical: true })]);
+    expect([flagged.outcome, flagged.confirmation_set]).toEqual(['admit', ['code_status', 'daily_skilled_need', 'payer_pending', 'recent_aggression', 'ventilator_use']]);
+    const conflict = run([...base, tri('recent_aggression', 'yes')]);
+    expect([conflict.outcome, conflict.confirmation_set.includes('recent_aggression'), conflict.conflicts]).toEqual(['admit', true, ['recent_aggression']]);
+    const fav2 = rule('fv2', 'favorable', 'other_need is yes', ['other_need']);
+    expect(run(base, { rules: [...RULES, fav2] }).confirmation_set).not.toContain('other_need'); // a favorable rule that did not fire decides nothing
+  });
+  it('a declared input the expression never reads is still confirmed (critical uses declared inputs too)', () => {
+    const hs = rule('hs.d', 'hard_stop', 'dialysis is yes', ['dialysis', 'dialysis_type']);
+    const r = run([...base, tri('dialysis', 'no'), tri('dialysis_type', 'no')], { rules: [...RULES, hs] });
+    expect([r.outcome, r.confirmation_set.includes('dialysis_type')]).toEqual(['admit', true]);
+  });
+  it('do not admit: only the facts read by the hard stops that fired', () => {
+    const r = run([tri('ventilator_use', 'yes'), tri('recent_aggression', 'no'), tri('daily_skilled_need', 'yes'), tri('payer_pending', 'no')]);
+    expect([r.outcome, r.confirmation_set]).toEqual(['do_not_admit', ['ventilator_use']]);
+  });
+  it('needs review: hard-stop facts and the facts of rules that fired', () => {
+    const r = run([tri('ventilator_use', 'no'), tri('recent_aggression', 'yes'), tri('daily_skilled_need', 'yes'), tri('payer_pending', 'yes')]);
+    expect([r.outcome, r.confirmation_set]).toEqual(['needs_review', ['daily_skilled_need', 'payer_pending', 'recent_aggression', 'ventilator_use']]);
     const quiet = run([tri('ventilator_use', 'no'), tri('recent_aggression', 'no'), tri('daily_skilled_need', 'no'), tri('payer_pending', 'no')]);
-    expect(quiet.confirmation_set).toEqual(['ventilator_use']); // only the hard-stop input: nothing fired
-    expect(quiet.confirmation_set.some((k) => k.startsWith('facility.'))).toBe(false);
+    expect([quiet.outcome, quiet.confirmation_set]).toEqual(['needs_review', ['ventilator_use']]);
   });
   it('never includes a profile key, and a disabled hard stop adds nothing', () => {
     const r = evaluate({ facts: [], profile: {}, rules: [{ ...HARD, enabled: false }, rule('h2', 'hard_stop', 'a is yes AND facility.k is true', ['a', 'facility.k'])], referral_date: '2001-01-10', processing_complete: true });
