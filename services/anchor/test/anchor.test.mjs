@@ -1,7 +1,7 @@
 // Anchoring job and verifier against a migrated local database and LocalStack S3 (SPEC §12 "the chain before
 // anchoring"; I4). Runs as codex_anchor inside one rolled-back transaction; the bucket is created per run and
 // deleted at the end (LocalStack allows deletion; the real bucket denies it). Skips without DATABASE_URL and
-// AWS_ENDPOINT_URL (the LocalStack endpoint); fails where REQUIRE_DATABASE is set.
+// AWS_ENDPOINT_URL (the localstack endpoint); fails where REQUIRE_DATABASE is set.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import pg from 'pg';
@@ -9,8 +9,8 @@ import { CreateBucketCommand, DeleteBucketCommand, DeleteObjectCommand, ListObje
 import { runAnchor, runVerify } from '../src/lib.mjs';
 
 const url = process.env.DATABASE_URL;
-const endpoint = process.env.AWS_ENDPOINT_URL; // LocalStack only; unset in AWS
-if ((!url || !endpoint) && process.env.REQUIRE_DATABASE) throw new Error('DATABASE_URL and AWS_ENDPOINT_URL (LocalStack) must be set here: the anchoring suite may not be skipped in the db-checks job');
+const endpoint = process.env.AWS_ENDPOINT_URL; // localstack only; unset in AWS
+if ((!url || !endpoint) && process.env.REQUIRE_DATABASE) throw new Error('DATABASE_URL and AWS_ENDPOINT_URL (localstack) must be set here: the anchoring suite may not be skipped in the db-checks job');
 
 const ORG = '00000000-0000-4000-8000-00000000b001';
 const FAC = { a: '00000000-0000-4000-8000-00000000fba1', b: '00000000-0000-4000-8000-00000000fbb1' };
@@ -21,7 +21,7 @@ const bind = async (c, facility, org = ORG) => {
 const audit = (c, facility, action) =>
   c.query("INSERT INTO audit_log (facility_id, actor, action, entity_type) VALUES ($1, 'system:anchor_test', $2, 'facility')", [facility, action]);
 
-test('anchoring job and verifier', { skip: !(url && endpoint) && 'DATABASE_URL or AWS_ENDPOINT_URL (LocalStack) not set' }, async (t) => {
+test('anchoring job and verifier', { skip: !(url && endpoint) && 'DATABASE_URL or AWS_ENDPOINT_URL (localstack) not set' }, async (t) => {
   const c = new pg.Client({ connectionString: url });
   await c.connect();
   const s3 = new S3Client({ forcePathStyle: true });
