@@ -5,7 +5,7 @@
 -- security review #2): no role at all may hold BYPASSRLS (the owner included: FORCE RLS binds it only while
 -- it lacks the attribute), and SUPERUSER is allowed only for the bootstrap/master roles named below.
 WITH required(rolname) AS (VALUES ('codex_app'), ('codex_worker')),
-superuser_allowed(rolname) AS (VALUES ('postgres'), ('codex_ci'), ('codex_admin'), ('rdsadmin')),
+superuser_allowed(rolname) AS (VALUES ('postgres'), ('codex_ci'), ('rdsadmin')),   -- the RDS master codex_admin is not rolsuper
 checked AS (
   SELECT rolname
   FROM pg_roles
@@ -88,14 +88,20 @@ WHERE to_regclass('public.' || t.tbl) IS NOT NULL
       AND (t2.tgtype & t.bits) = t.bits
   )
 UNION ALL
--- Every guard trigger the data model relies on is ENABLE ALWAYS (0003): a replica-mode session cannot skip it.
-SELECT g.tgrelid::regclass::text, 'guard trigger ' || g.tgname || ' is not ENABLE ALWAYS'
-FROM pg_trigger g
-WHERE NOT g.tgisinternal
-  AND g.tgname IN ('referrals_worker_status_guard', 'documents_status_guard', 'facts_insert_guard', 'evaluations_insert_guard',
-                   'decisions_guard', 'decisions_audit', 'organizations_provisioning_audit', 'facilities_provisioning_audit', 'users_provisioning_audit',
-                   'product_events_insert_guard')
-  AND g.tgenabled <> 'A'
+-- Every guard trigger the data model relies on exists under its name and is ENABLE ALWAYS (0003/0005): a dropped,
+-- renamed, disabled or replica-skipped guard is reported, not just a disabled one.
+SELECT e.tbl, 'guard trigger ' || e.trg || ' is missing or not ENABLE ALWAYS'
+FROM (VALUES
+  ('referrals', 'referrals_worker_status_guard'), ('documents', 'documents_status_guard'),
+  ('facts', 'facts_insert_guard'), ('evaluations', 'evaluations_insert_guard'),
+  ('decisions', 'decisions_guard'), ('decisions', 'decisions_audit'),
+  ('organizations', 'organizations_provisioning_audit'), ('facilities', 'facilities_provisioning_audit'),
+  ('users', 'users_provisioning_audit'), ('product_events', 'product_events_insert_guard'),
+  ('user_facility_roles', 'user_facility_roles_guard'), ('user_facility_roles', 'user_facility_roles_audit')) AS e(tbl, trg)
+WHERE to_regclass('public.' || e.tbl) IS NOT NULL
+  AND NOT EXISTS (
+    SELECT 1 FROM pg_trigger g
+    WHERE g.tgrelid = to_regclass('public.' || e.tbl) AND g.tgname = e.trg AND NOT g.tgisinternal AND g.tgenabled = 'A')
 UNION ALL
 -- product_events: the attrs allowlist CHECK exists and the function behind it still enumerates every §14.1 event
 -- and still walks the keys (a permissive replacement cannot pass as the allowlist).
