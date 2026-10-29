@@ -11,22 +11,26 @@ const ev = { document_id: 'doc_zztest', page: 1, quote: 'SYNTHETIC', verified: t
 // with uniform generation): mostly known, verified, high-confidence, non-critical facts.
 const factArb: fc.Arbitrary<Fact> = fc.record({
   key: fc.constantFrom(...KEYS),
-  value: fc.constantFrom<TriState>('yes', 'yes', 'no', 'no', 'no', 'unknown').map((v) => ({ type: 'tri_state' as const, value: v })),
+  value: fc.oneof(
+    { weight: 5, arbitrary: fc.constantFrom<TriState>('yes', 'yes', 'no', 'no', 'no', 'unknown').map((v) => ({ type: 'tri_state' as const, value: v })) },
+    { weight: 1, arbitrary: fc.constantFrom('mwf', 'tts', null).map((v) => ({ type: 'enum' as const, value: v })) },
+  ),
   source: fc.constantFrom<Fact['source']>('ai', 'ai', 'user'),
   verified: fc.constantFrom(true, true, true, false),
   confidence_band: fc.constantFrom<Fact['confidence_band']>('high', 'high', 'medium', 'low', null),
   is_critical: fc.constantFrom(false, false, false, false, false, true),
 }).map(({ verified, ...f }): Fact => ({
   ...f,
-  evidence: f.source === 'ai' && f.value.value !== 'unknown' ? { ...ev, verified } : null,
+  evidence: f.source === 'ai' && f.value.value !== 'unknown' && f.value.value !== null ? { ...ev, verified } : null,
   note: f.source === 'user' ? 'SYNTHETIC' : null,
   as_of_date: null, specially_protected: false, single_source: false,
   confidence_band: f.source === 'user' ? null : f.confidence_band,
 }));
 
 const condArb = fc.oneof(
-  fc.tuple(fc.constantFrom(...KEYS), fc.constantFrom('yes', 'no')).map(([k, v]) => `${k} is ${v}`),
-  fc.tuple(fc.constantFrom(...PKEYS), fc.boolean()).map(([k, v]) => `facility.${k} is ${v}`),
+  { weight: 4, arbitrary: fc.tuple(fc.constantFrom(...KEYS), fc.constantFrom('yes', 'no')).map(([k, v]) => `${k} is ${v}`) },
+  { weight: 1, arbitrary: fc.tuple(fc.constantFrom(...KEYS), fc.constantFrom('mwf', 'tts')).map(([k, v]) => `${k} is ${v}`) },
+  { weight: 2, arbitrary: fc.tuple(fc.constantFrom(...PKEYS), fc.boolean()).map(([k, v]) => `facility.${k} is ${v}`) },
 );
 const exprArb: fc.Arbitrary<string> = fc.letrec((tie) => ({
   expr: fc.oneof({ depthSize: 'small' }, condArb, tie('expr').map((e) => `NOT ${e}`), fc.tuple(tie('expr'), fc.constantFrom('AND', 'OR'), tie('expr')).map(([l, o, r]) => `(${l} ${o} ${r})`)),
@@ -34,10 +38,12 @@ const exprArb: fc.Arbitrary<string> = fc.letrec((tie) => ({
 
 let n = 0;
 const CASES: Rule['tests'] = [{ name: 't', facts: {}, profile: {}, expected: 'true' }, { name: 'f', facts: {}, profile: {}, expected: 'false' }, { name: 'u', facts: {}, profile: {}, expected: 'unknown' }];
-const ruleArb: fc.Arbitrary<Rule> = fc.tuple(fc.constantFrom<Rule['kind']>('hard_stop', 'review', 'favorable', 'favorable', 'payer'), exprArb).map(([kind, expression]) => {
-  const inputs = [...new Set(expression.match(/facility\.[a-z]+|\b[abcd]\b/g) ?? [])];
-  return { id: `r${(n += 1)}`, kind, enabled: true, inputs, expression, sub_reason: kind === 'review' ? 'clinical' : null, tests: CASES };
-});
+const ruleArb: fc.Arbitrary<Rule> = fc.tuple(fc.constantFrom<Rule['kind']>('hard_stop', 'review', 'favorable', 'favorable', 'payer'), exprArb)
+  .filter(([, expression]) => !KEYS.some((k) => new RegExp(`\\b${k} is (yes|no)\\b`).test(expression) && new RegExp(`\\b${k} is (mwf|tts)\\b`).test(expression)))
+  .map(([kind, expression]) => {
+    const inputs = [...new Set(expression.match(/facility\.[a-z]+|\b[abcd]\b/g) ?? [])];
+    return { id: `r${(n += 1)}`, kind, enabled: true, inputs, expression, sub_reason: kind === 'review' ? 'clinical' : null, tests: CASES };
+  });
 const profileArb = fc.dictionary(fc.constantFrom(...PKEYS), fc.boolean());
 const input = fc.record({ facts: fc.array(factArb, { maxLength: 8 }), rules: fc.array(ruleArb, { maxLength: 6 }), profile: profileArb, flag: fc.boolean(), complete: fc.constantFrom(true, true, true, false) });
 type Input = typeof input extends fc.Arbitrary<infer T> ? T : never;
@@ -46,11 +52,13 @@ type Input = typeof input extends fc.Arbitrary<infer T> ? T : never;
 function independent(i: Input) {
   const byKey = new Map<string, Fact[]>();
   for (const f of i.facts) byKey.set(f.key, [...(byKey.get(f.key) ?? []), f]);
-  const knownValues = (list: Fact[]) => new Set(list.filter((f) => presence(f) !== 'unknown').map((f) => f.value.value));
+  // trusted and well-formed, exactly as I2/§3 define it; a key with zero or several distinct known values is unknown
+  const trusted = (f: Fact) => f.source === 'user' || (f.evidence?.verified === true && f.confidence_band !== 'low');
+  const knownValues = (list: Fact[]) => new Set(list.filter((f) => trusted(f) && f.value.value !== null && f.value.value !== 'unknown').map((f) => `${f.value.type}|${String(f.value.value)}`));
   const unknown = (k: string) => { const l = byKey.get(k) ?? []; const v = knownValues(l); return v.size !== 1; };
   const critical = new Set([...i.rules.filter((r) => r.kind === 'hard_stop' || r.kind === 'payer').flatMap((r) => r.inputs.filter((k) => !k.startsWith('facility.'))), ...i.facts.filter((f) => f.is_critical).map((f) => f.key)]);
   const hardInputs = i.rules.filter((r) => r.kind === 'hard_stop').flatMap((r) => r.inputs);
-  return { criticalUnknown: [...critical].some(unknown), hardFactUnknown: hardInputs.some((k) => !k.startsWith('facility.') && unknown(k)), hardProfileEmpty: hardInputs.some((k) => k.startsWith('facility.') && typeof i.profile[k.slice(9)] !== 'boolean') };
+  return { unknown, criticalUnknown: [...critical].some(unknown), hardFactUnknown: hardInputs.some((k) => !k.startsWith('facility.') && unknown(k)), hardProfileEmpty: hardInputs.some((k) => k.startsWith('facility.') && typeof i.profile[k.slice(9)] !== 'boolean') };
 }
 const run = (i: Input) => evaluate({ facts: i.facts, profile: i.profile, rules: i.rules, referral_date: '2001-01-10', processing_complete: i.complete, flags: { favorable_rule_required: i.flag } });
 
@@ -88,12 +96,15 @@ describe('engine properties', () => {
       for (const t of firing) {
         fired += 1;
         const rule = i.rules.find((x) => x.id === t.rule_id)!;
-        const unknownFacts = t.inputs.filter((inp) => inp.presence === 'unknown' && !inp.key.startsWith('facility.')).map((inp) => inp.key);
-        const unknownProfile = t.inputs.filter((inp) => inp.presence === 'unknown' && inp.key.startsWith('facility.')).map((inp) => inp.key.slice(9));
+        // unknown inputs come from the independent view, not from the engine's own trace
+        const v = independent(i);
+        const unknownFacts = rule.inputs.filter((k) => !k.startsWith('facility.') && v.unknown(k));
+        const unknownProfile = rule.inputs.filter((k) => k.startsWith('facility.') && typeof i.profile[k.slice(9)] !== 'boolean').map((k) => k.slice(9));
         const known = i.facts.filter((f) => !unknownFacts.includes(f.key));
         const n = unknownFacts.length + unknownProfile.length;
         for (let mask = 0; mask < 1 << n; mask += 1) {
-          const extra: Fact[] = unknownFacts.map((key, j) => ({ key, value: { type: 'tri_state', value: mask & (1 << j) ? 'yes' : 'no' }, source: 'user', evidence: null, note: 'SYNTHETIC', as_of_date: null, is_critical: false, specially_protected: false, single_source: false, confidence_band: null }));
+          const usesEnum = (k: string) => /\b(mwf|tts)\b/.test(rule.expression) && new RegExp(`\\b${k} is (mwf|tts)\\b`).test(rule.expression);
+          const extra: Fact[] = unknownFacts.map((key, j) => ({ key, value: usesEnum(key) ? { type: 'enum', value: mask & (1 << j) ? 'mwf' : 'tts' } : { type: 'tri_state', value: mask & (1 << j) ? 'yes' : 'no' }, source: 'user', evidence: null, note: 'SYNTHETIC', as_of_date: null, is_critical: false, specially_protected: false, single_source: false, confidence_band: null }));
           const profile = { ...i.profile, ...Object.fromEntries(unknownProfile.map((k, j) => [k, Boolean(mask & (1 << (unknownFacts.length + j)))])) };
           expect(evaluateRule(rule, [...known, ...extra], profile, '2001-01-10').result, `${rule.expression} resolved ${mask}`).toBe('yes');
         }

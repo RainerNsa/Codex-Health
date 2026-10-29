@@ -24,6 +24,8 @@ export class DslError extends Error {
   }
 }
 
+const MAX_TOKENS = 4000; // bounds parser and evaluator recursion for any shape of expression
+
 function tokenize(src: string): Token[] {
   const out: Token[] = [];
   let i = 0;
@@ -40,6 +42,7 @@ function tokenize(src: string): Token[] {
     if (word) { out.push({ kind: 'word', text: word[0], at: i }); i += word[0].length; continue; }
     throw new DslError(`unexpected character '${ch}'`, i);
   }
+  if (out.length > MAX_TOKENS) throw new DslError(`expression longer than ${MAX_TOKENS} tokens`, 0);
   return out;
 }
 
@@ -57,7 +60,16 @@ export function parseExpression(src: string): Expr {
 
   const or = (): Expr => { let left = and(); while (peek()?.kind === 'word' && peek()!.text === 'OR') { take(); left = { op: 'or', left, right: and() }; } return left; };
   const and = (): Expr => { let left = not(); while (peek()?.kind === 'word' && peek()!.text === 'AND') { take(); left = { op: 'and', left, right: not() }; } return left; };
-  const not = (): Expr => { if (peek()?.kind === 'word' && peek()!.text === 'NOT') { take(); return { op: 'not', expr: not() }; } return atom(); };
+  const not = (): Expr => {
+    if (peek()?.kind === 'word' && peek()!.text === 'NOT') {
+      const t = take();
+      if ((depth += 1) > 64) throw new DslError('expression nests deeper than 64 operators', t.at);
+      const e: Expr = { op: 'not', expr: not() };
+      depth -= 1;
+      return e;
+    }
+    return atom();
+  };
   const atom = (): Expr => {
     const t = take();
     if (t.kind === 'lparen') {
@@ -135,6 +147,9 @@ export const legalReviewerOk = (r: unknown): boolean =>
 /** Static checks rule CI applies before any evaluation (SPEC §10.1, §10.2). Returns problems; empty means clean. */
 export function lintRule(rule: RuleLike): string[] {
   const problems: string[] = [];
+  if (typeof rule?.id !== 'string' || typeof rule.expression !== 'string' || !Array.isArray(rule.inputs) || !['hard_stop', 'review', 'favorable', 'payer'].includes(rule.kind)) {
+    return [`${typeof rule?.id === 'string' ? rule.id : '(no id)'}: not a rule record (needs id, kind, inputs, expression)`];
+  }
   let expr: Expr;
   try { expr = parseExpression(rule.expression); } catch (err) { return [`${rule.id}: ${(err as Error).message}`]; }
   for (const key of referencedKeys(expr)) if (!rule.inputs.includes(key)) problems.push(`${rule.id}: reads '${key}' which is not declared in inputs`);

@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { evaluate, runRuleTests, type Fact, type Rule, type EvaluateInput, type RuleTestCase } from '../src/index.ts';
+import { evaluate, runRuleTests, parseExpression as parseOnly, type Fact, type Rule, type EvaluateInput, type RuleTestCase } from '../src/index.ts';
 
 const ev = { document_id: 'doc_zztest', page: 1, quote: 'SYNTHETIC', verified: true, span: null, coordinates: null };
 const fact = (key: string, value: Fact['value'], extra: Partial<Fact> = {}): Fact => ({
@@ -150,6 +150,53 @@ describe('Prove-It cases from the reviews', () => {
     const prof = (expr: string, key: string) => evaluate({ facts: [], profile: { b: true, c: 3 }, rules: [rule('p', 'review', expr, [key])], referral_date: '2001-01-10', processing_complete: true });
     expect([prof('facility.b > 0', 'facility.b').trace[0]?.result, prof('facility.c is true', 'facility.c').trace[0]?.result]).toEqual(['unknown', 'unknown']);
     expect(prof('facility.b > 0', 'facility.b').empty_profile_keys).toEqual(['b']);
+  });
+});
+
+describe('Prove-It cases from the confirmatory review', () => {
+  const fav = rule('fv', 'favorable', 'daily_skilled_need is yes', ['daily_skilled_need']);
+  const base = (rules: Rule[], facts: Fact[]) => evaluate({ facts, profile: {}, rules, referral_date: '2001-01-10', processing_complete: true });
+  it('an untrusted ai value never decides through a count or enum comparison (I2)', () => {
+    for (const untrusted of [{ evidence: { ...ev, verified: false } }, { evidence: null }, { confidence_band: 'low' as const }]) {
+      const c = base([rule('h', 'hard_stop', 'falls > 2', ['falls']), fav], [fact('falls', { type: 'count', value: 7 }, untrusted), tri('daily_skilled_need', 'yes')]);
+      expect([c.outcome, c.missing], JSON.stringify(untrusted)).toEqual(['needs_review', ['falls']]);
+      const e = base([rule('h', 'hard_stop', 'dialysis is mwf', ['dialysis']), fav], [fact('dialysis', { type: 'enum', value: 'mwf' }, untrusted), tri('daily_skilled_need', 'yes')]);
+      expect(e.outcome).toBe('needs_review');
+      const f = base([rule('h', 'hard_stop', 'ventilator_use is yes', ['ventilator_use']), rule('fe', 'favorable', 'dialysis is tts', ['dialysis'])], [tri('ventilator_use', 'no'), fact('dialysis', { type: 'enum', value: 'tts' }, untrusted)]);
+      expect(f.outcome).toBe('needs_review');
+    }
+  });
+  it('a disagreement between enum, date or text assertions is a conflict, in either order (§10.2, I6)', () => {
+    const rules = [rule('h', 'hard_stop', 'dialysis is mwf', ['dialysis']), fav];
+    const a = fact('dialysis', { type: 'enum', value: 'tts' }); const b = fact('dialysis', { type: 'enum', value: 'mwf' });
+    const r1 = base(rules, [a, b, tri('daily_skilled_need', 'yes')]); const r2 = base(rules, [b, a, tri('daily_skilled_need', 'yes')]);
+    expect([r1.outcome, r1.conflicts]).toEqual(['needs_review', ['dialysis']]);
+    expect(JSON.stringify(r1)).toBe(JSON.stringify(r2));
+    const d = base([rule('h', 'hard_stop', 'discharge within 3 days', ['discharge']), fav], [fact('discharge', { type: 'date', value: '2001-01-09' }), fact('discharge', { type: 'date', value: '2001-01-01' }), tri('daily_skilled_need', 'yes')]);
+    expect(d.conflicts).toEqual(['discharge']);
+  });
+  it('evaluate() itself refuses a non-review rule that tests is unknown, whether or not rule CI ran', () => {
+    expect(() => base([rule('h', 'hard_stop', 'v is unknown', ['v'])], [])).toThrow(/is unknown' outside a review rule/);
+    expect(() => base([rule('f', 'favorable', 'NOT v is unknown', ['v'])], [])).toThrow(/is unknown/);
+  });
+  it('a wrong-typed count or enum value is unknown, never compared', () => {
+    expect(base([rule('f', 'favorable', 'c != 0', ['c']), rule('h', 'hard_stop', 'ventilator_use is yes', ['ventilator_use'])], [fact('c', { type: 'count', value: '7 falls' as unknown as number }), tri('ventilator_use', 'no')]).outcome).toBe('needs_review');
+    expect(base([rule('h', 'hard_stop', 'c < 2', ['c'])], [fact('c', { type: 'count', value: -1 })]).outcome).toBe('needs_review');
+    for (const v of [5, 'MWF', 'mwf per note']) expect(base([rule('h', 'hard_stop', 'd is mwf', ['d']), fav], [fact('d', { type: 'enum', value: v as string }), tri('daily_skilled_need', 'yes')]).outcome, String(v)).toBe('needs_review');
+    expect(base([rule('h', 'hard_stop', 't is yes', ['t'])], [fact('t', { type: 'text', value: '' }, { is_critical: true })]).missing).toEqual(['t']);
+  });
+  it('a calendar-impossible date is not a date: within is unknown and the referral date is refused', () => {
+    expect(base([rule('w', 'review', 'aggr within 30 days', ['aggr'])], [tri('aggr', 'yes', { as_of_date: '2001-02-30' })]).trace[0]?.result).toBe('unknown');
+    expect(() => evaluate({ facts: [], profile: {}, rules: [], referral_date: '2001-02-30', processing_complete: true })).toThrow(/referral_date/);
+    expect(() => evaluate({ facts: [], profile: {}, rules: [], referral_date: '2000-02-29', processing_complete: true })).not.toThrow();
+  });
+  it('a protected fact read by the expression but not declared in inputs still refuses the set; an unknown rule kind is refused', () => {
+    expect(() => base([rule('h', 'hard_stop', 'sud is yes', [])], [tri('sud', 'yes', { specially_protected: true })])).toThrow(/protected input/);
+    expect(() => base([{ ...rule('x', 'review', 'a is yes', ['a']), kind: 'bogus' as Rule['kind'] }], [])).toThrow(/not a rule record/);
+  });
+  it('very long or deeply negated expressions are a DslError, never a stack overflow', () => {
+    expect(() => parseOnly(`${'NOT '.repeat(100)}a is yes`)).toThrow(/nests deeper/);
+    expect(() => parseOnly(Array.from({ length: 2000 }, () => 'a is yes').join(' AND '))).toThrow(/longer than/);
   });
 });
 
