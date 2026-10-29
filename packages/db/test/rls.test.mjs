@@ -348,6 +348,45 @@ test('row-level security, organisation isolation, audit immutability, the hash c
       assert.equal(await count(c, 'SELECT count(*) AS n FROM audit_log'), before + 2);
     });
 
+    await sub('settings (0008): shape checks, database-chosen versions, audit per version, org isolation of rule sets, no cross-facility profile write', async () => {
+      const RS = "INSERT INTO rule_sets (organization_id, version, criteria_document_ref, rules, created_by) VALUES ($1, $2, 'zz', $3, 'platform:test')";
+      const FP = "INSERT INTO facility_profiles (facility_id, version, capabilities, created_by) VALUES ($1, 0, $2, 'platform:test')";
+      // rule ids: snake_case and unique
+      await asOrg(c, ORG[0]);
+      await expectFailure(c, RS, /rule_sets_rule_ids/, [ORG[0], 0, '[{"id":"zz.a"},{"id":"zz.a"}]']);
+      await expectFailure(c, RS, /rule_sets_rule_ids/, [ORG[0], 0, '[{"id":"Bad"}]']);
+      await expectFailure(c, RS, /rule_sets_rule_ids/, [ORG[0], 0, '["zz.a"]']);
+      // the writer's version is ignored: two inserts asking for 99 land as 1 and 2, each with its platform audit row
+      const auditBefore = await count(c, "SELECT count(*) AS n FROM platform_audit_log WHERE entity_type = 'rule_set'");
+      for (let i = 0; i < 2; i += 1) await c.query(RS, [ORG[0], 99, '[{"id":"zz.a"}]']);
+      assert.deepEqual((await c.query('SELECT version FROM rule_sets WHERE organization_id = $1 ORDER BY version', [ORG[0]])).rows.map((r) => r.version), [1, 2]);
+      const rows = (await c.query("SELECT organization_id, action, actor FROM platform_audit_log WHERE entity_type = 'rule_set' ORDER BY seq")).rows.slice(auditBefore);
+      assert.deepEqual(rows, [0, 1].map(() => ({ organization_id: ORG[0], action: 'rule_set.versioned', actor: 'platform:test' })));
+      await expectFailure(c, 'UPDATE rule_sets SET criteria_document_ref = $1', /append-only|immutable/, ['tampered']);
+      await asOrg(c, ORG[1]);
+      await c.query(RS, [ORG[1], 0, '[{"id":"zz.b"}]']);
+      // rule sets are organisation-scoped: org A's app role sees only its own, nothing when unbound, and cannot write
+      await c.query('SET LOCAL ROLE codex_app');
+      await asOrg(c, ORG[0]);
+      assert.equal(await count(c, 'SELECT count(*) AS n FROM rule_sets'), 2);
+      assert.equal(await count(c, 'SELECT count(*) AS n FROM rule_sets WHERE organization_id <> $1', [ORG[0]]), 0, 'rule_sets leaks across organisations');
+      await expectFailure(c, RS, /permission denied/, [ORG[0], 0, '[{"id":"zz.c"}]']);
+      await asOrg(c, '');
+      assert.equal(await count(c, 'SELECT count(*) AS n FROM rule_sets'), 0, 'rule_sets visible with no organisation bound');
+      // profiles: bound to a1, the app role cannot write another facility's profile
+      await asOrg(c, ORG[0]);
+      await asFacility(c, FAC.a1);
+      await expectFailure(c, FP, /row-level security/, [FAC.b1, '{}']);
+      await expectFailure(c, FP, /row-level security/, [FAC.a2, '{}']);
+      await c.query('RESET ROLE');
+      // capabilities: profile v0 keys of their declared types only
+      for (const caps of ['{"zztest_key":true}', '{"accepts_ventilator":"false"}', '{"ventilator_beds":1.5}', '{"ventilator_beds":-1}', '{"ventilator_beds":"2"}']) {
+        await expectFailure(c, FP, /facility_profiles_capabilities_v0/, [FAC.a1, caps]);
+      }
+      await c.query(FP, [FAC.a1, '{"accepts_ventilator":true,"ventilator_beds":2}']);
+      assert.deepEqual((await c.query('SELECT version FROM facility_profiles WHERE facility_id = $1 ORDER BY version', [FAC.a1])).rows.map((r) => r.version), [1, 2]);
+    });
+
     await sub('CONSTRAINTS check queries return zero rows', async () => {
       assert.deepEqual(await runChecks(c), {});
     });

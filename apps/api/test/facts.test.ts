@@ -268,6 +268,9 @@ describe.skipIf(!url)('manual fact entry API', () => {
     const r = await newReferral();
     const ev = (await post(factsUrl(r), U.reviewer, fact('ventilator_use', 'no'))).json().evaluation;
     expect([ev.outcome, ev.facility_profile_version, ev.trace.empty_profile_keys]).toEqual(['needs_review', 2, ['accepts_ventilator']]);
+    // the switched-off rule's fact is no longer offered or accepted
+    expect((await get(`/api/facilities/${FAC.a}/referrals/${r}`, U.reviewer)).json().form.fact_keys.map((k: { key: string }) => k.key)).not.toContain('recent_aggression');
+    expect((await post(factsUrl(r), U.reviewer, fact('recent_aggression', 'yes'))).json()).toEqual({ error: 'invalid_fact' });
     await asOwner(FAC.a);
     expect(await count("SELECT count(*) AS n FROM audit_log WHERE action = 'facility_profile.versioned' AND actor = $1", [`user:${U.admin}`])).toBe(1);
     // restore the seed profile for the tests that follow
@@ -284,6 +287,7 @@ describe.skipIf(!url)('manual fact entry API', () => {
     expect(created.form.configured).toBe(false);
     const res = await post(`/api/facilities/${lone}/referrals/${created.referral.id}/facts`, U.reviewer, fact('ventilator_use', 'no'));
     expect([res.statusCode, res.json()]).toEqual([409, { error: 'facility_not_configured' }]);
+    expect((await get(`/api/facilities/${lone}/settings`, U.reviewer)).json()).toEqual({ configured: false });
   });
 
   it('a database refusal is 422 and an infrastructure failure 500, and neither echoes the error message', async () => {
