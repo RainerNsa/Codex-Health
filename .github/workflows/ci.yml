@@ -176,7 +176,23 @@ jobs:
           --health-interval 5s
           --health-timeout 5s
           --health-retries 10
+      localstack:
+        image: localstack/localstack:3.8
+        env:
+          SERVICES: s3
+        ports:
+          - 4566:4566
+        options: >-
+          --health-cmd "curl -sf http://localhost:4566/_localstack/health"
+          --health-interval 5s
+          --health-timeout 5s
+          --health-retries 30
     env:
+      # LocalStack stands in for S3 for the anchoring suite; placeholder credentials, loopback only.
+      AWS_ENDPOINT_URL: http://localhost:4566
+      AWS_REGION: us-east-1
+      AWS_ACCESS_KEY_ID: test
+      AWS_SECRET_ACCESS_KEY: test
       PG_BOOTSTRAP_URL: postgres://codex_ci:${{ secrets.CI_DB_PASSWORD || 'ci-ephemeral-not-a-credential' }}@localhost:5432/codex_ci
       # Migrations, tests and checks run as the NOSUPERUSER NOBYPASSRLS owner, exactly as locally, so FORCE RLS
       # binds the owner and a superuser cannot mask a missing policy. Password is the local placeholder from
@@ -200,11 +216,13 @@ jobs:
           psql "$PG_BOOTSTRAP_URL" -X -v ON_ERROR_STOP=1 \
             -c 'ALTER DATABASE codex_ci OWNER TO codex_migrator' \
             -c 'REVOKE CONNECT ON DATABASE codex_ci FROM PUBLIC' \
-            -c 'GRANT CONNECT ON DATABASE codex_ci TO codex_app, codex_worker'
+            -c 'GRANT CONNECT ON DATABASE codex_ci TO codex_app, codex_worker, codex_anchor'
       - name: Apply migrations as codex_migrator
         run: node packages/db/migrate.mjs
       - name: Database tests (cross-facility isolation, audit immutability, checks return zero rows)
         run: npm test -w @codex-health/db
+      - name: Anchoring job and verifier against LocalStack (write-once anchors, tamper and truncation detection)
+        run: npm test -w @codex-health/anchor
       - name: RLS enumeration and grant checks
         # Exit 0 only. A SKIP (2) here means DATABASE_URL was lost, which is a CI bug, not a pass.
         run: node scripts/checks/db-grants.mjs

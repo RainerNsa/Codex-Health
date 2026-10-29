@@ -8,10 +8,16 @@ CREATE ROLE codex_app LOGIN PASSWORD 'app-local-only'
   NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
 CREATE ROLE codex_worker LOGIN PASSWORD 'worker-local-only'
   NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+-- The anchoring job (services/anchor): read-only, enumerates facilities and organisations by two named policies.
+CREATE ROLE codex_anchor LOGIN PASSWORD 'anchor-local-only'
+  NOSUPERUSER NOBYPASSRLS NOCREATEDB NOCREATEROLE NOINHERIT;
+-- The job runs one read-only transaction; these stop a stuck or hostile job from holding a chain's advisory lock.
+ALTER ROLE codex_anchor SET statement_timeout = '30s';
+ALTER ROLE codex_anchor SET idle_in_transaction_session_timeout = '60s';
 
--- Lets a migrator connection SET ROLE to the app and worker roles, which is how the RLS tests exercise them.
-GRANT codex_app, codex_worker TO codex_migrator;
+-- Lets a migrator connection SET ROLE to the service roles, which is how the RLS tests exercise them.
+GRANT codex_app, codex_worker, codex_anchor TO codex_migrator;
 
 CREATE DATABASE codex_health OWNER codex_migrator;
 REVOKE CONNECT ON DATABASE codex_health FROM PUBLIC;
-GRANT CONNECT ON DATABASE codex_health TO codex_app, codex_worker;
+GRANT CONNECT ON DATABASE codex_health TO codex_app, codex_worker, codex_anchor;

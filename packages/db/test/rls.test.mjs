@@ -286,21 +286,25 @@ test('row-level security, organisation isolation, audit immutability, the hash c
       }
     });
 
-    await sub('privilege matrix: every table/column grant of the app and worker roles is exactly the expected set (any relkind)', async () => {
+    await sub('privilege matrix: every table/column grant of the app, worker and anchor roles is exactly the expected set (any relkind)', async () => {
       const { rows } = await c.query(`
         SELECT grantee, table_name, privilege_type, string_agg(column_name, ',' ORDER BY column_name) AS cols
         FROM (
           SELECT grantee, table_name, privilege_type, NULL::text AS column_name FROM information_schema.role_table_grants
-          WHERE grantee IN ('codex_app', 'codex_worker') AND table_schema = 'public'
+          WHERE grantee IN ('codex_app', 'codex_worker', 'codex_anchor') AND table_schema = 'public'
           UNION ALL
           SELECT g.grantee, g.table_name, g.privilege_type, g.column_name FROM information_schema.role_column_grants g
-          WHERE g.grantee IN ('codex_app', 'codex_worker') AND g.table_schema = 'public'
+          WHERE g.grantee IN ('codex_app', 'codex_worker', 'codex_anchor') AND g.table_schema = 'public'
             AND NOT EXISTS (SELECT 1 FROM information_schema.role_table_grants t
                             WHERE t.grantee = g.grantee AND t.table_name = g.table_name AND t.privilege_type = g.privilege_type AND t.table_schema = 'public')
         ) x
         GROUP BY 1, 2, 3 ORDER BY 1, 2, 3`);
       const matrix = rows.map((x) => `${x.grantee} ${x.table_name} ${x.privilege_type}${x.cols ? ` (${x.cols})` : ''}`);
       assert.deepEqual(matrix, [
+        'codex_anchor audit_log SELECT',
+        'codex_anchor facilities SELECT (facility_id,organization_id)',
+        'codex_anchor organizations SELECT (id)',
+        'codex_anchor platform_audit_log SELECT',
         'codex_app audit_log INSERT', 'codex_app audit_log SELECT',
         'codex_app decisions INSERT', 'codex_app decisions SELECT',
         'codex_app documents INSERT', 'codex_app documents SELECT', 'codex_app documents UPDATE (not_applicable_reason,status,updated_at)',
