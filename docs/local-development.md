@@ -56,8 +56,8 @@ npm run dev:down                      # stop containers, keep data
 | Role | Used by | Can |
 |---|---|---|
 | `codex_migrator` | migrations, seed, db tests (`DATABASE_URL`) | own the schema; `SET ROLE` to the two roles below for tests |
-| `codex_app` | the API at M1 (`DATABASE_URL_APP`) | read org/facility/user tables, read/insert/update referrals, read/insert audit rows |
-| `codex_worker` | the pipeline at M1 (`DATABASE_URL_WORKER`) | read facilities and referrals, update referral status, insert audit rows |
+| `codex_app` | the API (`DATABASE_URL_APP`) | read org/facility/user tables; read/insert/update referrals; read/insert documents (status to not_applicable only), user facts, verified evaluations, decisions, product events; insert audit rows. Every write is bound per transaction with `SET LOCAL app.facility_id` and `app.organization_id` |
+| `codex_worker` | the pipeline (`DATABASE_URL_WORKER`) | read facilities, referrals, documents, facts, evaluations; move an in-flight referral to processing / partial_failure / ready_for_review; report document results; insert ai facts and evaluations; emit product events (no read); insert audit rows |
 
 No role has `BYPASSRLS` or `SUPERUSER`. Every table with a `facility_id` column has
 `FORCE ROW LEVEL SECURITY` and a policy on `app.facility_id`, so even the owner sees only the facility set
@@ -90,7 +90,7 @@ A red check is fixed in the migration, never in the check (`CONSTRAINTS.md`). Th
 through `scripts/checks/db-grants.mjs`, which calls `packages/db/check.mjs` (or `psql -tA` when `pg` is not
 installed) and fails on any returned row. `npm test -w @codex-health/db` additionally proves, inside a rolled-back transaction,
 that a cross-facility read returns zero rows for both roles, that audit rows cannot be changed, and that both
-checks are clean. Without `DATABASE_URL` the database test skips and only the unit test runs.
+checks are clean. Without `DATABASE_URL` the database suites skip and only the unit tests run; Docker must be up and `scripts/dev/up.sh` run once before `npm test` proves anything about RLS, the audit chain or the decision guards. In the CI `db-checks` job the suites fail instead of skipping (`REQUIRE_DATABASE`).
 
 To add a migration: create `packages/db/migrations/0002_<name>.sql`, give every new tenant table a
 `facility_id` column plus ENABLE/FORCE RLS and the `tenant_isolation` policy, grant only what each role
