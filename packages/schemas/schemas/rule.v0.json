@@ -178,12 +178,19 @@
           },
           "facts": {
             "type": "object",
-            "description": "Fact key \u2192 tri-state presence the engine derives (see fact.v0 description).",
+            "description": "Fact key \u2192 tri-state presence, or a full fact value object (fact.v0 value union) for enum/count/date/text/medication_list conditions.",
             "additionalProperties": {
-              "enum": [
-                "yes",
-                "no",
-                "unknown"
+              "anyOf": [
+                {
+                  "enum": [
+                    "yes",
+                    "no",
+                    "unknown"
+                  ]
+                },
+                {
+                  "$ref": "urn:codex-health:schema:fact.v0#/properties/value"
+                }
               ]
             }
           },
