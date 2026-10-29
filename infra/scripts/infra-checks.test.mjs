@@ -27,7 +27,7 @@ function walk(dir, out = []) {
 // here is a PR with the eligibility citation in docs/subprocessors.md.
 const requiredServices = [
   'ec2', 'rds', 's3', 'sqs', 'kms', 'cognito-idp', 'bedrock', 'textract',
-  'cloudwatch', 'logs', 'iam', 'sts', 'ecs', 'ecr',
+  'cloudwatch', 'logs', 'iam', 'sts', 'ecs', 'ecr', 'cloudtrail', 'guardduty',
 ];
 const forbiddenServices = ['lambda', 'ses', 'sns', 'sagemaker', 'comprehend', 'comprehendmedical', 'transcribe'];
 
@@ -65,9 +65,9 @@ test('prod is gated: enabled defaults to false and every module is count-guarded
   const vars = read('envs', 'prod', 'variables.tf');
   assert.match(vars, /variable\s+"enabled"\s+\{[^}]*default\s+=\s+false/s);
   const main = read('envs', 'prod', 'main.tf');
-  const modules = main.split(/\nmodule\s+/).slice(1);
-  assert.equal(modules.length, 8, 'expected the eight env modules');
-  for (const block of modules) assert.match(block, /count\s+=\s+local\.n/, block.split('\n')[0]);
+  const blocks = main.split(/\n(?=module\s+|resource\s+)/).slice(1);
+  assert.equal(blocks.length, 11, 'expected the ten env modules and the GuardDuty detector');
+  for (const block of blocks) assert.match(block, /count\s+=\s+local\.n/, block.split('\n')[0]);
 });
 
 test('no AWS account ids, access keys or real-looking emails anywhere in infra', () => {
@@ -135,7 +135,7 @@ test('audit-anchor bucket: writer is a role ARN, keys are write-once, nobody del
   assert.match(del, /actions\s+=\s+\["s3:DeleteObject\*"\]/);
   assert.match(del, /identifiers\s+=\s+\["\*"\]/);
   for (const env of ['dev', 'test', 'prod']) {
-    assert.match(read('envs', env, 'main.tf'), /writer_role_arn\s+=\s+"arn:aws:iam::\$\{data\.aws_caller_identity\.current\.account_id\}:role\//, env);
+    assert.match(read('envs', env, 'main.tf'), /writer_role_arn\s+=\s+module\.compute_roles(\[0\])?\.role_arns\["anchor_writer"\]/, env);
   }
 });
 
@@ -174,4 +174,128 @@ test('auth: no SMS template; token validity is not the idle timeout', () => {
   const text = read('modules', 'auth', 'main.tf');
   assert.doesNotMatch(text, /sms_message/);
   assert.match(text, /client[^\n]*M3/i, 'token-validity comment must say the 15-minute idle timeout is client-enforced at M3');
+});
+
+// --- M1 close-out (SPEC §12.4 "still M1"; decision log 2026-10-29) ----------
+
+const policyBlock = (text, sid) => text.match(new RegExp(`sid\\s+=\\s+"${sid}"[\\s\\S]*?\\n  \\}\\n`))?.[0];
+const envMains = ['dev', 'test', 'prod'].map((env) => [env, read('envs', env, 'main.tf')]);
+
+test('queue policy: SendMessage only for sender_role_arns, consume only for consumer_role_arns, TLS required', () => {
+  const text = read('modules', 'queue', 'main.tf');
+  assert.match(text, /resource\s+"aws_sqs_queue_policy"\s+"processing"/);
+  const send = text.match(/sid\s+=\s+"DenySendExceptSenderRoles"[\s\S]*?\n  \}\n/)[0];
+  assert.match(send, /actions\s+=\s+\["sqs:SendMessage"\]/);
+  assert.match(send, /aws:PrincipalArn[\s\S]*values\s+=\s+var\.sender_role_arns/);
+  const consume = text.match(/sid\s+=\s+"DenyConsumeExceptConsumerRoles"[\s\S]*?\n  \}\n/)[0];
+  for (const a of ['sqs:ReceiveMessage', 'sqs:DeleteMessage', 'sqs:ChangeMessageVisibility']) assert.match(consume, new RegExp(`"${a}"`));
+  assert.match(consume, /values\s+=\s+var\.consumer_role_arns/);
+  assert.match(text, /aws:SecureTransport/);
+  const vars = read('modules', 'queue', 'variables.tf');
+  for (const v of ['sender_role_arns', 'consumer_role_arns']) assert.match(vars, new RegExp(`variable\\s+"${v}"\\s+\\{[^}]*default\\s+=\\s+\\[\\]`, 's'), `${v} defaults to nobody`);
+  for (const [env, main] of envMains) {
+    assert.match(main, /sender_role_arns\s+=\s+\[module\.compute_roles(\[0\])?\.role_arns\["api"\]\]/, env);
+    assert.match(main, /consumer_role_arns\s+=\s+\[module\.compute_roles(\[0\])?\.role_arns\["worker"\]\]/, env);
+  }
+});
+
+test('compute roles: no DeleteObject, Bedrock invoke-only on pinned ARNs, logs limited to own group, session role trusts the worker only', () => {
+  const text = read('modules', 'compute-roles', 'main.tf');
+  assert.doesNotMatch(text, /s3:DeleteObject/);
+  assert.doesNotMatch(text, /"s3:\*"/);
+  const bedrock = [...text.matchAll(/"bedrock:[^"]+"/g)].map((m) => m[0]);
+  assert.deepEqual([...new Set(bedrock)].sort(), ['"bedrock:InvokeModel"', '"bedrock:InvokeModelWithResponseStream"']);
+  assert.match(text, /"bedrock:InvokeModelWithResponseStream"\]\s+resources\s+=\s+var\.bedrock_model_arns/);
+  const logs = [...text.matchAll(/"logs:[^"]+"/g)].map((m) => m[0]);
+  assert.deepEqual([...new Set(logs)].sort(), ['"logs:CreateLogStream"', '"logs:PutLogEvents"']);
+  assert.doesNotMatch(text, /"kms:\*"|"iam:|"sts:\*"/);
+  assert.match(text, /identifiers\s+=\s+\["ecs-tasks\.amazonaws\.com"\]/);
+  assert.match(text, /"worker_session_trust"[\s\S]*?identifiers\s+=\s+\[aws_iam_role\.ecs\["worker"\]\.arn\]/);
+  assert.match(text, /"worker_session"\s+\{[\s\S]*?resources\s+=\s+\["\$\{var\.documents_bucket_arn\}\/documents\/\*"\]/);
+  const worker = text.match(/data "aws_iam_policy_document" "worker" \{[\s\S]*?\n\}\n/)[0];
+  assert.doesNotMatch(worker, /"s3:/, 'the worker reaches S3 only through the per-job session role');
+  for (const [env, main] of envMains) assert.match(main, /module\s+"compute_roles"/, env);
+});
+
+test('audit-anchor: writer and verifier are distinct role variables; the verifier never puts', () => {
+  const text = read('modules', 'audit-anchor', 'main.tf');
+  const vars = read('modules', 'audit-anchor', 'variables.tf');
+  for (const v of ['writer_role_arn', 'verifier_role_arn']) assert.match(vars, new RegExp(`variable\\s+"${v}"[\\s\\S]*?role/`), `${v} validated as a role ARN`);
+  const put = policyBlock(text, 'WriterRolePutsAnchors');
+  assert.match(put, /actions\s+=\s+\["s3:PutObject"\]/);
+  assert.match(put, /identifiers\s+=\s+\[var\.writer_role_arn\]/);
+  const get = policyBlock(text, 'VerifierRoleReadsAnchorsAndVersions');
+  assert.doesNotMatch(get, /PutObject/);
+  for (const a of ['s3:GetObject', 's3:GetObjectVersion', 's3:ListBucket', 's3:ListBucketVersions']) assert.match(get, new RegExp(`"${a}"`));
+  assert.match(get, /identifiers\s+=\s+\[var\.verifier_role_arn\]/);
+  const decrypt = policyBlock(text, 'VerifierRoleDecrypts');
+  assert.doesNotMatch(decrypt, /Encrypt|GenerateDataKey/);
+  assert.doesNotMatch(policyBlock(text, 'WriterRoleEncrypts'), /"kms:Decrypt"/);
+  assert.match(text, /organization\/<organization_id>\/<date>\.json/, 'key scheme lists the platform chain');
+  for (const [env, main] of envMains) assert.match(main, /verifier_role_arn\s+=\s+module\.compute_roles(\[0\])?\.role_arns\["anchor_verifier"\]/, env);
+});
+
+test('log groups: retention <= 30 days and the environment KMS key', () => {
+  const text = read('modules', 'logs', 'main.tf');
+  assert.match(text, /retention_in_days\s+=\s+var\.retention_days/);
+  assert.match(text, /kms_key_id\s+=\s+var\.kms_key_arn/);
+  const vars = read('modules', 'logs', 'variables.tf');
+  const def = Number(vars.match(/variable\s+"retention_days"\s+\{[^}]*default\s+=\s+(\d+)/s)[1]);
+  assert.ok(def <= 30, `default retention ${def} exceeds 30`);
+  assert.match(vars, /contains\(\[1, 3, 5, 7, 14, 30\], var\.retention_days\)/);
+  for (const [env, main] of envMains) assert.match(main, /module\s+"logs"/, env);
+});
+
+test('KMS key policy: no wildcard principal, kms:* only for the account root, logs service and ViaService statements', () => {
+  const text = read('modules', 'kms', 'main.tf');
+  const key = text.match(/resource "aws_kms_key" "this" \{[\s\S]*?\n\}\n/)[0];
+  assert.match(key, /policy\s+=\s+data\.aws_iam_policy_document\.key\.json/, 'explicit key policy replaces the account-root default');
+  assert.doesNotMatch(text, /identifiers\s+=\s+\["\*"\]/, 'no wildcard principal');
+  const star = text.match(/actions\s+=\s+\["kms:\*"\][\s\S]*?identifiers\s+=\s+\[([^\]]+)\]/);
+  assert.equal(star[1].trim(), 'local.account_root');
+  assert.equal((text.match(/"kms:\*"/g) ?? []).length, 1, 'kms:* appears once, for the root');
+  assert.match(text, /identifiers\s+=\s+\["logs\.\$\{data\.aws_region\.current\.name\}\.amazonaws\.com"\]/);
+  assert.match(text, /kms:EncryptionContext:aws:logs:arn/);
+  assert.match(text, /variable\s+=\s+"kms:ViaService"/);
+  assert.match(text, /identifiers\s+=\s+var\.user_role_arns/);
+  assert.match(read('modules', 'kms', 'variables.tf'), /variable\s+"user_role_arns"\s+\{[^}]*default\s+=\s+\[\]/s);
+  for (const [env, main] of envMains) assert.match(main, /user_role_arns\s+=\s+\[for k in \["api", "worker", "worker_session"\]/, env);
+});
+
+test('documents bucket: principal deny is conditional on a non-empty role list and excludes the account root', () => {
+  const text = read('modules', 'storage', 'main.tf');
+  const deny = text.match(/dynamic "statement" \{\s+for_each = length\(var\.principal_role_arns\) > 0 \? \[1\] : \[\][\s\S]*?DenyDataAccessExceptListedRoles[\s\S]*?\n  \}\n/);
+  assert.ok(deny, 'deny statement emitted only when principal_role_arns is non-empty');
+  assert.match(deny[0], /actions\s+=\s+\["s3:\*"\]/);
+  assert.match(deny[0], /test\s+=\s+"ArnNotEquals"\s+variable\s+=\s+"aws:PrincipalArn"\s+values\s+=\s+local\.data_principals/);
+  assert.match(text, /data_principals\s+=\s+concat\(var\.principal_role_arns, \["arn:aws:iam::\$\{data\.aws_caller_identity\.current\.account_id\}:root"\]\)/);
+  assert.match(text, /DenyListExceptListedRoles/);
+  assert.match(read('modules', 'storage', 'variables.tf'), /variable\s+"principal_role_arns"\s+\{[^}]*default\s+=\s+\[\]/s);
+  for (const [env, main] of envMains) assert.match(main, /principal_role_arns\s+=\s+\[module\.compute_roles(\[0\])?\.role_arns\["api"\], module\.compute_roles(\[0\])?\.role_arns\["worker_session"\]\]/, env);
+});
+
+test('CloudTrail: organization trail, multi-region, log file validation, KMS, no data events, 400-day bucket lifecycle', () => {
+  const text = read('modules', 'detective', 'main.tf');
+  const trail = text.match(/resource "aws_cloudtrail" "org" \{[\s\S]*?\n\}\n/)[0];
+  for (const line of ['is_organization_trail\\s+=\\s+true', 'is_multi_region_trail\\s+=\\s+true', 'enable_log_file_validation\\s+=\\s+true', 'kms_key_id\\s+=\\s+aws_kms_key\\.trail\\.arn']) {
+    assert.match(trail, new RegExp(line), line);
+  }
+  assert.doesNotMatch(trail, /data_resource|advanced_event_selector|insight_selector/);
+  assert.match(text, /expiration \{\s+days = 400/);
+  assert.match(read('envs', 'org', 'main.tf'), /module\s+"detective"/);
+  const scp = json('modules', 'org-guardrails', 'policies', 'scp-hipaa-allowlist.json');
+  assert.deepEqual(scp.Statement.find((s) => s.Sid === 'DenyDisablingCloudTrail').Action, ['cloudtrail:StopLogging', 'cloudtrail:DeleteTrail']);
+});
+
+test('GuardDuty: delegated admin in the org root; a detector in every workload root, count-guarded in prod', () => {
+  const org = read('modules', 'detective', 'main.tf');
+  assert.match(org, /resource "aws_guardduty_organization_admin_account"/);
+  assert.match(org, /resource "aws_guardduty_detector" "management" \{\s+enable\s+=\s+true/);
+  for (const [env, main] of envMains) {
+    const detector = main.match(/resource "aws_guardduty_detector" "this" \{[\s\S]*?\n\}\n/)?.[0];
+    assert.ok(detector, `${env}: detector`);
+    assert.match(detector, /enable\s+=\s+true/, env);
+    assert.match(detector, /finding_publishing_frequency\s+=\s+"FIFTEEN_MINUTES"/, env);
+    if (env === 'prod') assert.match(detector, /count\s+=\s+local\.n/, 'prod detector must be gated');
+  }
 });

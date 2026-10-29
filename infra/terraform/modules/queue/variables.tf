@@ -17,3 +17,15 @@ variable "max_receive_count" {
   type        = number
   default     = 3
 }
+
+variable "sender_role_arns" {
+  description = "Role ARNs allowed sqs:SendMessage on the processing queue: the API task role (modules/compute-roles). Empty means nobody may send."
+  type        = list(string)
+  default     = []
+}
+
+variable "consumer_role_arns" {
+  description = "Role ARNs allowed to receive, delete and change visibility: the worker task role (modules/compute-roles). Empty means nobody may consume."
+  type        = list(string)
+  default     = []
+}

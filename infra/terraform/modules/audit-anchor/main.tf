@@ -113,9 +113,11 @@ resource "aws_s3_bucket_object_lock_configuration" "anchor" {
   depends_on = [aws_s3_bucket_versioning.anchor]
 }
 
-# Only the anchoring task role (not the whole workload account) may write
-# anchors and read them back for verification. Nobody may delete; Object Lock
-# would refuse anyway, the explicit Deny makes the plan say so.
+# Two identities, never one (decision log 2026-10-29): the anchoring task role
+# (writer_role_arn) may only Put, the verifier task role (verifier_role_arn) may
+# only Get and List, including versions, so a compromised verifier cannot plant
+# an anchor and a compromised writer cannot read the chain back. Nobody may
+# delete; Object Lock would refuse anyway, the explicit Deny makes the plan say so.
 data "aws_iam_policy_document" "anchor" {
   provider = aws.anchor
 
@@ -171,10 +173,21 @@ data "aws_iam_policy_document" "anchor" {
   }
 
   statement {
-    sid    = "AnchoringRoleWritesAndReadsAnchors"
+    sid       = "WriterRolePutsAnchors"
+    effect    = "Allow"
+    actions   = ["s3:PutObject"]
+    resources = ["${aws_s3_bucket.anchor.arn}/*"]
+
+    principals {
+      type        = "AWS"
+      identifiers = [var.writer_role_arn]
+    }
+  }
+
+  statement {
+    sid    = "VerifierRoleReadsAnchorsAndVersions"
     effect = "Allow"
     actions = [
-      "s3:PutObject",
       "s3:GetObject",
       "s3:GetObjectVersion",
       "s3:ListBucket",
@@ -187,7 +200,7 @@ data "aws_iam_policy_document" "anchor" {
 
     principals {
       type        = "AWS"
-      identifiers = [var.writer_role_arn]
+      identifiers = [var.verifier_role_arn]
     }
   }
 }
@@ -201,7 +214,8 @@ resource "aws_s3_bucket_policy" "anchor" {
   depends_on = [aws_s3_bucket_public_access_block.anchor]
 }
 
-# The key policy must also admit the writer role, or PutObject fails on encrypt.
+# The key policy must also admit both roles, or PutObject fails on encrypt and
+# GetObject on decrypt. Same split: the writer encrypts, the verifier decrypts.
 data "aws_iam_policy_document" "anchor_key" {
   provider = aws.anchor
 
@@ -218,12 +232,11 @@ data "aws_iam_policy_document" "anchor_key" {
   }
 
   statement {
-    sid    = "AnchoringRoleUsesKey"
+    sid    = "WriterRoleEncrypts"
     effect = "Allow"
     actions = [
       "kms:Encrypt",
-      "kms:Decrypt",
-      "kms:GenerateDataKey*",
+      "kms:GenerateDataKey",
       "kms:DescribeKey",
     ]
     resources = ["*"]
@@ -231,6 +244,18 @@ data "aws_iam_policy_document" "anchor_key" {
     principals {
       type        = "AWS"
       identifiers = [var.writer_role_arn]
+    }
+  }
+
+  statement {
+    sid       = "VerifierRoleDecrypts"
+    effect    = "Allow"
+    actions   = ["kms:Decrypt", "kms:DescribeKey"]
+    resources = ["*"]
+
+    principals {
+      type        = "AWS"
+      identifiers = [var.verifier_role_arn]
     }
   }
 }

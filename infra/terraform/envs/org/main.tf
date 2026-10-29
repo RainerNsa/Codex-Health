@@ -20,6 +20,20 @@ module "org_guardrails" {
   target_ids = var.target_ids
 }
 
+# Organization CloudTrail trail and the GuardDuty delegated-admin designation
+# (SPEC §12.2 "account operator" row). Member-account detectors live in each
+# workload root.
+module "detective" {
+  source = "../../modules/detective"
+
+  trail_bucket_name          = var.trail_bucket_name
+  guardduty_admin_account_id = var.guardduty_admin_account_id
+}
+
 output "policy_ids" {
   value = module.org_guardrails.policy_ids
+}
+
+output "cloudtrail_trail_arn" {
+  value = module.detective.trail_arn
 }

@@ -62,12 +62,6 @@ variable "audit_anchor_bucket_name" {
   type        = string
 }
 
-variable "audit_anchor_writer_role_name" {
-  description = "Name of the anchoring task role in THIS account (created with compute at M1); the only principal the anchor bucket lets write."
-  type        = string
-  default     = "CodexHealthAuditAnchorWriter"
-}
-
 variable "bedrock_model_arns" {
   description = "Pinned model / inference-profile ARN(s) the bedrock-runtime endpoint may invoke. Exact version id, never an alias; must match the product's pinned model id (CONSTRAINTS 4.2)."
   type        = list(string)

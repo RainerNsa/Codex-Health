@@ -13,12 +13,22 @@ variable "anchor_account_id" {
 }
 
 variable "writer_role_arn" {
-  description = "ARN of the anchoring task role in the workload account: the only principal that may PutObject. The environment root builds it from aws_caller_identity and a role name, so no account id is committed. The role must exist before this module is applied (AWS rejects a policy naming a missing principal); it arrives with compute at M1."
+  description = "ARN of the anchoring task role in the workload account (modules/compute-roles): the only principal that may PutObject. It must exist before this module is applied (AWS rejects a policy naming a missing principal); passing the module output orders that."
   type        = string
 
   validation {
     condition     = can(regex("^arn:aws:iam::[^:]+:role/", var.writer_role_arn))
     error_message = "writer_role_arn must be an IAM role ARN, never an account root."
+  }
+}
+
+variable "verifier_role_arn" {
+  description = "ARN of the verifier task role in the workload account (modules/compute-roles): the only principal that may Get and List anchors. Distinct from writer_role_arn by design."
+  type        = string
+
+  validation {
+    condition     = can(regex("^arn:aws:iam::[^:]+:role/", var.verifier_role_arn))
+    error_message = "verifier_role_arn must be an IAM role ARN, never an account root."
   }
 }
 

@@ -25,3 +25,7 @@ output "cognito_web_client_id" {
 output "egress_allowlist" {
   value = module.network.endpoint_services
 }
+
+output "task_role_arns" {
+  value = module.compute_roles.role_arns
+}

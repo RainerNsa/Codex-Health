@@ -6,13 +6,23 @@
 # before that; the lifecycle rule is the floor, not the mechanism.
 #
 # Tenancy: one shared bucket; objects live under a facility prefix
-# (<facility_id>/<referral_id>/...) and are reached only through signed URLs
+# (documents/<facility_id>/<referral_id>/...) and are reached only through signed URLs
 # issued after an authz check, TTL <= 5 min (security.md §3 risk 1). Facility
 # tagging per object is not done: data is tenant-scoped by prefix and RLS,
 # not by resource.
 #
 # Decision and audit records (the 6-year class) do NOT live here; they are in
 # Postgres and the audit-anchor bucket.
+#
+# Principals (SPEC §12.2 "account operator" row, M1): only the roles in
+# principal_role_arns (the API role and the per-job worker session role) and the
+# account root may touch objects or list the bucket; an admin IAM user reading a
+# document is denied unless they first edit this policy, which CloudTrail
+# records. The deny covers object actions and listing, not bucket configuration,
+# so the deploying identity keeps running plan and apply without being a data
+# principal. It is emitted only when the list is non-empty: an ArnNotEquals with
+# no values is an invalid policy, and an unconditional deny would lock the
+# bucket before compute exists.
 
 resource "aws_s3_bucket" "documents" {
   bucket        = var.bucket_name
@@ -81,6 +91,12 @@ resource "aws_s3_bucket_lifecycle_configuration" "documents" {
   }
 }
 
+data "aws_caller_identity" "current" {}
+
+locals {
+  data_principals = concat(var.principal_role_arns, ["arn:aws:iam::${data.aws_caller_identity.current.account_id}:root"])
+}
+
 data "aws_iam_policy_document" "documents" {
   statement {
     sid     = "DenyInsecureTransport"
@@ -118,6 +134,50 @@ data "aws_iam_policy_document" "documents" {
       test     = "StringNotEquals"
       variable = "s3:x-amz-server-side-encryption"
       values   = ["aws:kms"]
+    }
+  }
+
+  dynamic "statement" {
+    for_each = length(var.principal_role_arns) > 0 ? [1] : []
+    content {
+      sid     = "DenyDataAccessExceptListedRoles"
+      effect  = "Deny"
+      actions = ["s3:*"]
+      resources = [
+        "${aws_s3_bucket.documents.arn}/*",
+      ]
+
+      principals {
+        type        = "*"
+        identifiers = ["*"]
+      }
+
+      condition {
+        test     = "ArnNotEquals"
+        variable = "aws:PrincipalArn"
+        values   = local.data_principals
+      }
+    }
+  }
+
+  dynamic "statement" {
+    for_each = length(var.principal_role_arns) > 0 ? [1] : []
+    content {
+      sid       = "DenyListExceptListedRoles"
+      effect    = "Deny"
+      actions   = ["s3:ListBucket", "s3:ListBucketVersions"]
+      resources = [aws_s3_bucket.documents.arn]
+
+      principals {
+        type        = "*"
+        identifiers = ["*"]
+      }
+
+      condition {
+        test     = "ArnNotEquals"
+        variable = "aws:PrincipalArn"
+        values   = local.data_principals
+      }
     }
   }
 }
