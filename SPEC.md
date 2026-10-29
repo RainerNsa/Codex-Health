@@ -1,7 +1,7 @@
 # Codex Health — Core Specification
 
 Status: **M1 (started 2026-10-29).** Sections are completed with `/spec` as each milestone consumes them.
-Version: v0.5 (2026-10-29; §12 and §13 refreshed against migrations 0002–0004). Sources: `../research/planning/master-plan.md`, `../research/dev-alignment.md` (§1 accepted changes, §2 rulings, §4 founder items), `../ops/COO-BRIEF.md`. The brief is cited as §n.
+Version: v0.6 (2026-10-29; M2 started; §10 rules DSL decided). Sources: `../research/planning/master-plan.md`, `../research/dev-alignment.md` (§1 accepted changes, §2 rulings, §4 founder items), `../ops/COO-BRIEF.md`. The brief is cited as §n.
 
 Sections marked **decided** are in force. Sections marked **PENDING** name what is missing and who decides. Nothing here is product code; see `CONSTRAINTS.md` for what every change is checked against.
 
@@ -119,9 +119,63 @@ The JSON Schemas are owned by the schemas agent and versioned under `packages/sc
 
 Documents, pages, OCR text and facts on a short purge class; decisions, evaluations and audit rows on a 6-year class carrying ids and hashes only; `deletion_requests` spanning S3 versions, backups, DLQ messages and OCR text; per-referral and per-facility export; per-facility purge provable at pilot end (1.8). Periods are **PENDING: founders (§4 item 6); proposal is a short fixed document purge and 6 years for decision and audit records.**
 
-## 10. Rules DSL
+## 10. Rules DSL (decided 2026-10-29; M2 slice 1 implements it)
 
-**PENDING: Team B proposes the grammar at M2 (conditions over facts and profile keys under Kleene logic; recency windows from the referral date; no arbitrary code); the business founder and counsel approve rule content, never the grammar.** Seed content until the criteria workshop (§11) has run: the three §7 examples, labelled as seeds.
+The grammar is engineering's; rule content is the criteria workshop's (§11). A rule's `expression` is one boolean expression over facts and facility-profile keys, evaluated under Kleene logic (§3). There is no arbitrary code, no clock, no network: the only inputs are the current fact set, the facility profile and the referral date.
+
+### 10.1 Grammar
+
+```
+expr     := or
+or       := and ( 'OR' and )*
+and      := not ( 'AND' not )*
+not      := 'NOT' not | atom
+atom     := '(' expr ')' | cond
+cond     := fact 'is' tri                         -- tri-state test on the derived presence (§8)
+          | fact 'is' code                        -- enum equality:   dialysis_schedule is mwf
+          | fact cmp number                       -- count comparison: iv_antibiotic_days_remaining >= 7
+          | fact 'within' integer 'days'          -- recency: the fact's as_of_date is within N days before the referral date
+          | profile 'is' ( 'true' | 'false' )     -- profile boolean:  facility.accepts_ventilator is false
+          | profile cmp number                    -- profile count:    facility.ventilator_beds >= 1
+tri      := 'yes' | 'no' | 'unknown'
+cmp      := '=' | '!=' | '<' | '<=' | '>' | '>='
+fact     := [a-z][a-z0-9_]*                       -- a fact key from fact_definitions
+profile  := 'facility.' [a-z][a-z0-9_]*           -- a facility-profile capability key (§8)
+code     := [a-z][a-z0-9_]*                       -- an enum option
+```
+
+Keywords are case-sensitive and lowercase except the operators `AND`, `OR`, `NOT`. Precedence: `NOT` binds tightest, then `AND`, then `OR`; parentheses override. An expression that does not parse, references a fact key or profile key not declared in `inputs`, or applies an operator to the wrong fact type, is rejected by rule CI before any evaluation (`legal-basis.mjs` extends to a grammar check at M2).
+
+### 10.2 Semantics (three-valued)
+
+Every condition yields `true`, `false` or `unknown`; connectives follow Kleene: `NOT unknown = unknown`, `unknown AND false = false`, `unknown AND true = unknown`, `unknown OR true = true`, `unknown OR false = unknown`.
+
+- **`fact is yes|no`** reads the derived presence (§8 `presence()`): a tri_state fact's value; a count or list is `no` at 0 or empty and `yes` otherwise; enum, date and text facts have no presence and yield `unknown` here. `fact is unknown` tests presence for unknown and yields `true` or `false`; it is permitted only in `review` rules (a hard stop, favorable or payer rule that fires on an unknown would turn silence into a decision, I1). Rule CI rejects it elsewhere.
+- **`fact is code`** on an enum fact: `unknown` when the value is null; `true`/`false` otherwise. On any other fact type: rejected by rule CI.
+- **`fact cmp number`** on a count fact: `unknown` when null; the comparison otherwise. On other types: rejected.
+- **`fact within N days`**: `unknown` when the fact's presence is unknown or `as_of_date` is null; otherwise `true` when `referral_date - as_of_date` is between 0 and N days inclusive, `false` otherwise. Nothing ever reads the system clock; the referral date is an input to `evaluate()`.
+- **`facility.key is true|false`**, **`facility.key cmp number`**: `unknown` when the key is absent from the profile, and the trace names the empty key (0.3).
+- **Conflicts**: when the current fact set carries two assertions for one key with different values, that fact is `unknown` for every condition and is listed under `conflicts` in the trace (§3: shown, never resolved).
+- **Protected inputs** (2.8): a rule whose `inputs` include a fact flagged `specially_protected` evaluates like any other but may only be `kind = review`; rule CI rejects a hard_stop, favorable or payer rule over a protected input without a `legal_reviewer` record (§8), and the engine refuses to evaluate such a rule set at all.
+
+### 10.3 `evaluate()`
+
+```
+evaluate({ facts, profile, rules, referral_date, processing_complete, flags }) → Evaluation
+```
+
+- `facts`: the referral's current assertions, one per key (the API resolves lineage; the engine receives the latest per key, plus any conflicting siblings so it can report them). `profile`: the facility profile. `rules`: the enabled rule records of the facility's rule set. `referral_date`: `YYYY-MM-DD`. `processing_complete`: false while any document is neither processed nor not_applicable (§4 step 1). `flags.favorable_rule_required`: the D12 flag, default on.
+- Every rule is evaluated to a tri-state; the outcome follows §4 in its fixed order, computed twice: `clinical_outcome` over non-payer rules and `financial_status` over payer rules (`clear` when no payer rule is true and none is unknown; `hold` when one is true; `unknown` when none is true and at least one is unknown), and `outcome` as the merged result (§4; whether a payer unknown blocks Admit stays on merged behaviour until F8).
+- The critical-input set is the union of `inputs` over enabled hard-stop and payer rules plus every fact flagged `is_critical` (2.4). §4 step 3 fires when any of those is unknown or in conflict.
+- **No Admit on an empty confirmed set** (§13 row 3): with `favorable_rule_required` off, step 5 still requires at least one fact feeding a triggered or hard-stop rule to be known; an all-unknown packet is Needs Review `missing_info`.
+- Output (`Evaluation`): `outcome`, `clinical_outcome`, `financial_status`, `sub_reasons[]`, `trace`: per rule `{ rule_id, kind, result, inputs: [{ key, presence_or_value }] }`, `missing[]` (critical keys unknown), `conflicts[]`, `blocking[]` ranked by "would be Admit if this one were known" (the keys whose unknownness is the only thing keeping the referral out of step 5, most rules first), `empty_profile_keys[]`, `engine_version`. The trace carries keys, codes, rule ids and tri-states only: never a quote, a note or a typed value (`evaluations_trace_shape`, migration 0003).
+- Determinism: the same inputs produce byte-identical output; `replay(evaluation.inputs_hash)` is the I6 replay property test.
+
+### 10.4 Rule tests and rule CI
+
+Each rule record carries `tests[]` (§8) with at least one `true`, one `false` and one `unknown` case. A test case supplies `facts` as key → tri-state **or** a full fact value object (`{"type":"count","value":3}`), and `profile` as key → boolean or count. Rule CI (`packages/rules-engine` CLI, `rules test <rule-set-dir>`) parses every expression, checks every input is declared, runs every case and fails on any mismatch. It never calls Bedrock or Textract (2.9) and reads no clock (`rules-ci-offline.mjs`).
+
+CLI: `evaluate <facts.json> <profile.json> <rules.json> --referral-date YYYY-MM-DD [--processing-incomplete] [--favorable-rule-required=false]` prints the `Evaluation` as JSON; `rules test <dir>` runs rule tests.
 
 ## 11. Criteria mapping
 
