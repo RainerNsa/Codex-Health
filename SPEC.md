@@ -65,7 +65,7 @@ Guards are enforced in the API at M3 and, where marked **DB**, by a CHECK or tri
 | T4 | `partial_failure` | `processing` | Re-upload or replace a failed document | The replaced document is one that failed | Reviewer | `referral.uploaded` |
 | T5 | `partial_failure` | `ready_for_review` | Mark every failed document `not_applicable` | Reason required per document (1.4); no document left `failed`; the engine re-evaluates synchronously (no OCR needed) | Reviewer | `evaluation.created` |
 | T6 | `ready_for_review`, `on_hold`, `info_requested`, `escalated` | `processing` | Add, replace or append a document | Upload caps and magic-byte check pass (3.5) | Reviewer | `referral.uploaded` |
-| T7 | `ready_for_review`, `on_hold`, `info_requested`, `escalated` | `ready_for_review` | Confirm, correct or enter a fact | User facts carry a note (§8); a correction never deletes the AI value | Reviewer | `fact.*`, `evaluation.created` |
+| T7 | `draft`, `ready_for_review`, `on_hold`, `info_requested`, `escalated` | unchanged (`ready_for_review` once documents exist) | Confirm, correct or enter a fact (a manual-entry referral with no documents stays `draft`; amended 2026-10-29, M2 slice 3) | User facts carry a note (§8); a correction never deletes the AI value | Reviewer | `fact.*`, `evaluation.created` |
 | T8 | `ready_for_review` | `on_hold` | Hold | Note required | Reviewer | `referral.held` |
 | T9 | `ready_for_review` | `info_requested` | Request information | ≥ 1 requested item, drafted from the ranked blocking facts (6.1) | Reviewer | `referral.info_requested` |
 | T10 | `ready_for_review` | `escalated` | Escalate | Department tag and note required (decision 10) | Reviewer | `referral.escalated` |

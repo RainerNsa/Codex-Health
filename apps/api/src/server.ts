@@ -33,6 +33,13 @@ export function buildServer(opts: ServerOptions = {}): FastifyInstance {
     for (const [name, value] of Object.entries(HEADERS)) reply.header(name, value);
   });
 
+  // Codes only: never echo the path (it can carry ids or worse) or a framework message.
+  app.setNotFoundHandler((_req, reply) => reply.code(404).send({ error: 'not_found' }));
+  app.setErrorHandler((err, _req, reply) => {
+    const status = typeof (err as { statusCode?: number }).statusCode === 'number' && (err as { statusCode: number }).statusCode < 500 ? (err as { statusCode: number }).statusCode : 500;
+    return reply.code(status).send({ error: status === 413 ? 'too_large' : status < 500 ? 'bad_request' : 'internal' });
+  });
+
   app.get('/health', async () => ({ status: 'ok' }));
 
   if (opts.tx) {

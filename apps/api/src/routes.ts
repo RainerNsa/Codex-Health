@@ -10,6 +10,11 @@ import type { RuleSet } from './ruleset.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const WRITE_ROLES = new Set(['facility_admin', 'admissions_reviewer']);
+// Patient-level reads: Reviewers and Admins only. A Viewer sees no referral (SPEC §6: engineering default "none"
+// for patient-level Viewer reads, pending founder item 8; aggregates arrive with the rollup table).
+const READ_ROLES = WRITE_ROLES;
+// T7 states, plus draft: a manual-entry referral has no documents and never passes through processing (SPEC §5.1
+// amended with this slice). processing and partial_failure stay closed while the pipeline owns the referral.
 const OPEN_STATES = new Set(['draft', 'ready_for_review', 'on_hold', 'info_requested', 'escalated']);
 const NOTE_MAX = 500;
 
@@ -69,12 +74,14 @@ async function referralView(q: Query, facilityId: string, referralId: string, ru
   };
 }
 
-/** Parse a manual fact value: tri_state yes/no/unknown or a non-negative integer count. */
-function parseValue(v: unknown): FactValue | null {
+/** Parse a manual fact value of the type the rule set reads the key as; anything else is refused. */
+function parseValue(v: unknown, type: 'tri_state' | 'count' | 'enum'): FactValue | null {
   if (!v || typeof v !== 'object') return null;
   const o = v as { type?: unknown; value?: unknown };
-  if (o.type === 'tri_state' && (o.value === 'yes' || o.value === 'no' || o.value === 'unknown')) return { type: 'tri_state', value: o.value };
-  if (o.type === 'count' && (o.value === null || (Number.isInteger(o.value) && (o.value as number) >= 0 && (o.value as number) <= 100000))) return { type: 'count', value: o.value as number | null };
+  if (o.type !== type) return null;
+  if (type === 'tri_state' && (o.value === 'yes' || o.value === 'no' || o.value === 'unknown')) return { type: 'tri_state', value: o.value };
+  if (type === 'count' && (o.value === null || (Number.isInteger(o.value) && (o.value as number) >= 0 && (o.value as number) <= 100000))) return { type: 'count', value: o.value as number | null };
+  if (type === 'enum' && (o.value === null || (typeof o.value === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(o.value)))) return { type: 'enum', value: o.value as string | null };
   return null;
 }
 
@@ -120,7 +127,8 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; ruleSet: Ru
       const user = caller(req.headers);
       const { fid, rid } = ids(req.params);
       return reply.send(await tx(async (q) => {
-        await enter(q, fid, user);
+        const who = await enter(q, fid, user);
+        if (!READ_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
         const view = await referralView(q, fid, rid, ruleSet);
         await audit(q, fid, user, 'referral.viewed', 'referral', rid); // I4: reads of patient data are audited (1.10)
         return view;
@@ -134,27 +142,36 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; ruleSet: Ru
       const { fid, rid } = ids(req.params);
       const b = (req.body ?? {}) as { key?: unknown; value?: unknown; note?: unknown; as_of_date?: unknown };
       const spec = ruleSet.factKeys.find((k) => k.key === b.key);
-      const value = parseValue(b.value);
+      const value = spec ? parseValue(b.value, spec.type) : null;
       const note = typeof b.note === 'string' ? b.note.trim() : '';
       const asOf = b.as_of_date === undefined || b.as_of_date === null ? null : b.as_of_date;
-      if (!spec || !value || !note || note.length > NOTE_MAX || (asOf !== null && (typeof asOf !== 'string' || !isRealDate(asOf)))) {
+      const referralDate = todayIso();
+      // a date after the referral date is not a fact about this referral (a future as_of would also read as silence)
+      if (!spec || !value || !note || note.length > NOTE_MAX || (asOf !== null && (typeof asOf !== 'string' || !isRealDate(asOf) || asOf > referralDate))) {
         throw new HttpError(400, 'invalid_fact');
       }
       const body = await tx(async (q) => {
         const who = await enter(q, fid, user);
         if (!WRITE_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
-        const ref = await q<{ status: string }>('SELECT status FROM referrals WHERE facility_id = $1 AND id = $2', [fid, rid]);
+        // Row lock: fact writes on one referral are serialised, so "the current assertion" and "the latest
+        // evaluation" read below cannot move under us (0007 is the database backstop for the same race).
+        const ref = await q<{ status: string }>('SELECT status FROM referrals WHERE facility_id = $1 AND id = $2 FOR UPDATE', [fid, rid]);
         if (!ref.rows[0]) throw new HttpError(404, 'not_found');
         if (!OPEN_STATES.has(ref.rows[0].status)) throw new HttpError(409, 'referral_not_open');
 
         const before = await currentFacts(q, fid, rid);
-        const previous = before.find((f) => f.key === spec.key);
+        const current = before.filter((f) => f.key === spec.key);
+        if (current.length > 1) throw new HttpError(409, 'fact_lineage_forked'); // only reachable from data written before 0007
+        const previous = current[0];
+        // A key that was ever specially protected stays protected: the flag carries to every correction, and the
+        // key never appears in an event (§14.1).
+        const everProtected = await q<{ p: boolean }>('SELECT bool_or(specially_protected) AS p FROM facts WHERE facility_id = $1 AND referral_id = $2 AND key = $3', [fid, rid, spec.key]);
+        const protectedKey = everProtected.rows[0]?.p === true;
         const { rows } = await q<{ id: string }>(
-          `INSERT INTO facts (facility_id, referral_id, key, value, source, note, as_of_date, is_critical, supersedes, created_by)
-           VALUES ($1, $2, $3, $4, 'user', $5, $6, $7, $8, $9) RETURNING id`,
-          [fid, rid, spec.key, value, note, asOf, spec.critical, previous?.id ?? null, `user:${user}`]);
+          `INSERT INTO facts (facility_id, referral_id, key, value, source, note, as_of_date, is_critical, specially_protected, supersedes, created_by)
+           VALUES ($1, $2, $3, $4, 'user', $5, $6, $7, $8, $9, $10) RETURNING id`,
+          [fid, rid, spec.key, value, note, asOf, spec.critical, protectedKey, previous?.id ?? null, `user:${user}`]);
         const factId = rows[0]!.id;
-        const protectedKey = before.some((f) => f.key === spec.key && f.specially_protected);
         await audit(q, fid, user, previous ? 'fact.corrected' : 'fact.entered', 'fact', factId);
         await emit(q, fid, rid, user, previous ? 'fact.corrected' : 'fact.entered', { ...(protectedKey ? {} : { fact_key: spec.key }), decisive: spec.critical });
 
@@ -162,7 +179,8 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; ruleSet: Ru
         const facts = await currentFacts(q, fid, rid);
         const docs = await q<{ open: string }>(
           "SELECT count(*) AS open FROM documents WHERE facility_id = $1 AND referral_id = $2 AND status NOT IN ('processed', 'not_applicable')", [fid, rid]);
-        const result = evaluate({ facts, profile: ruleSet.profile, rules: ruleSet.rules, referral_date: todayIso(), processing_complete: Number(docs.rows[0]!.open) === 0 });
+        const processingComplete = Number(docs.rows[0]!.open) === 0;
+        const result = evaluate({ facts, profile: ruleSet.profile, rules: ruleSet.rules, referral_date: referralDate, processing_complete: processingComplete });
         const prev = await q<{ id: string }>('SELECT id FROM evaluations WHERE facility_id = $1 AND referral_id = $2 ORDER BY evaluated_at DESC LIMIT 1', [fid, rid]);
         const { trace, missing, conflicts, blocking, empty_profile_keys, resolution_step } = result;
         const ev = await q<{ id: string }>(
@@ -170,7 +188,8 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; ruleSet: Ru
              criteria_document_ref, rule_set_version, facility_profile_version, model_id, prompt_version, extractor_version, ocr_engine_version, engine_version)
            VALUES ($1, $2, $3, false, $4, $5, $6, $7, $8, $9, $10, $11, 'none', 'none', 'manual-entry', 'none', $12) RETURNING id`,
           [fid, rid, prev.rows[0]?.id ?? null, result.outcome, result.clinical_outcome, result.financial_status, result.sub_reasons,
-            { resolution_step, trace, missing, conflicts, blocking, empty_profile_keys }, ruleSet.criteriaRef, ruleSet.ruleSetVersion, ruleSet.profileVersion, ENGINE_VERSION]);
+            // every input of evaluate() beyond the facts is pinned, so the snapshot replays (I6)
+            { resolution_step, trace, missing, conflicts, blocking, empty_profile_keys, inputs: { referral_date: referralDate, processing_complete: processingComplete, fact_ids: facts.map((f) => f.id) } }, ruleSet.criteriaRef, ruleSet.ruleSetVersion, ruleSet.profileVersion, ENGINE_VERSION]);
         await audit(q, fid, user, 'evaluation.created', 'evaluation', ev.rows[0]!.id);
         await emit(q, fid, rid, user, 'evaluation.created', {
           evaluation_id: ev.rows[0]!.id, ...(prev.rows[0] ? { previous_evaluation_id: prev.rows[0].id } : {}), raw: false, outcome: result.outcome, changed_fact_count: 1,

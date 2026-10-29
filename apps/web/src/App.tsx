@@ -20,7 +20,7 @@ const ERROR_TEXT: Record<string, string> = {
   invalid_fact: 'Check the entry: a value and a note are required, and the date must be real.', referral_not_open: 'This referral is finalized; it changes only by amendment.',
   rejected: 'The database refused this change.',
 };
-const keyLabel = (k: string) => k.replace(/_/g, ' ');
+const keyLabel = (k: string) => k.replaceAll('_', ' ');
 
 export function App() {
   const [user, setUser] = useState(SEED_USERS[0]!.id);
@@ -135,7 +135,7 @@ function Recommendation({ view }: { view: ReferralView }) {
           <div className={`mb-3 rounded border-l-4 p-3 ${OUTCOME_STYLE[ev.outcome]}`}>
             <p className="text-lg font-semibold">{OUTCOME_LABEL[ev.outcome]}</p>
             {ev.sub_reasons.length > 0 && <p className="text-sm">{ev.sub_reasons.map((r) => REASON_LABEL[r] ?? r).join(' · ')}</p>}
-            <p className="text-xs text-gray-700">Clinical: {ev.clinical_outcome.replace('_', ' ')} · Financial: {ev.financial_status}. Staff make the final decision.</p>
+            <p className="text-xs text-gray-700">Clinical: {ev.clinical_outcome.replaceAll('_', ' ')} · Financial: {ev.financial_status}. Staff make the final decision.</p>
           </div>
           {ev.trace.missing.length > 0 && <p className="mb-2 text-sm"><span className="font-medium">Missing critical information:</span> {ev.trace.missing.map(keyLabel).join(', ')}</p>}
           {ev.trace.blocking.length > 0 && <p className="mb-2 text-sm"><span className="font-medium">Confirm first:</span> {ev.trace.blocking.map(keyLabel).join(', ')}</p>}
@@ -147,7 +147,7 @@ function Recommendation({ view }: { view: ReferralView }) {
               {ev.trace.trace.map((t) => (
                 <tr key={t.rule_id} className="border-t align-top">
                   <td className="py-1 font-mono text-xs">{t.rule_id}</td>
-                  <td>{t.kind.replace('_', ' ')}</td>
+                  <td>{t.kind.replaceAll('_', ' ')}</td>
                   <td>{t.result === 'yes' ? 'fired' : t.result === 'no' ? 'did not fire' : 'unknown'}</td>
                   <td className="text-xs">{t.inputs.map((i) => `${keyLabel(i.key)}: ${i.value ?? i.presence}`).join('; ')}</td>
                 </tr>
