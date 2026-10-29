@@ -63,8 +63,8 @@ export interface Evaluation {
   empty_profile_keys: string[];
   /** Minimum confirmation set (dev-alignment 2.7, SPEC §4, §10.3): the fact keys a person must confirm before
    *  finalizing the recommended outcome, by outcome:
-   *  - admit: every fact read by an enabled hard-stop, payer or review rule (the "no" answers that kept them from
-   *    firing decide an Admit too), every fact read by a favorable rule that fired, every fact flagged critical,
+   *  - admit: every fact read by an enabled hard-stop or review rule, or by a payer rule whose result is known (the
+   *    "no" answers that kept them from firing decide an Admit too; an unknown payer rule decides nothing, F8 part 2), every fact read by a favorable rule that fired, every fact flagged critical,
    *    every conflicting fact;
    *  - do_not_admit: the facts read by the hard stops that fired;
    *  - needs_review: the facts read by hard stops and by rules that fired, flagged critical facts, conflicts.
@@ -279,7 +279,10 @@ export function evaluate(input: EvaluateInput): Evaluation {
   // The clinical run drops payer rules and the keys that are critical ONLY because a payer rule reads them; a key a
   // hard stop also reads, or one flagged is_critical, stays critical (2.4: the flag may only add).
   const payerOnly = (k: string) => !flagged.has(k) && !rules.some((o) => o.kind === 'hard_stop' && o.inputs.includes(k)) && rules.some((r) => r.kind === 'payer' && r.inputs.includes(k));
-  const merged = resolve(entries, critical, ctx.facts, ctx.emptyProfileKeys, input.processing_complete, favorableRequired);
+  // F8 part 2 (founder ruling 2026-10-29, "financial only"): a payer unknown affects financial_status only; it
+  // never blocks the overall answer. Keys critical only because a payer rule reads them leave the step-3 set of the
+  // merged run too; a payer rule that FIRES still routes the merged outcome to Needs Review (financial), step 4.
+  const merged = resolve(entries, new Set([...critical].filter((k) => !payerOnly(k))), ctx.facts, ctx.emptyProfileKeys, input.processing_complete, favorableRequired);
   const clinical = resolve(entries.filter((e) => e.kind !== 'payer'), new Set([...critical].filter((k) => !payerOnly(k))), ctx.facts, ctx.emptyProfileKeys, input.processing_complete, favorableRequired);
   const payer = entries.filter((e) => e.kind === 'payer');
   const financial_status: FinancialStatus = payer.some((e) => e.result === 'yes') ? 'hold' : payer.some((e) => e.result === 'unknown') ? 'unknown' : 'clear';
@@ -288,7 +291,8 @@ export function evaluate(input: EvaluateInput): Evaluation {
   const missing = [...critical].filter((k) => knownness(ctx.facts.get(k)) === 'unknown').sort(byCode);
   const conflicts = [...ctx.facts].filter(([, f]) => f.conflict).map(([k]) => k).sort(byCode);
   const reads = new Map<string, number>();
-  for (const e of entries) for (const i of e.inputs) if (i.presence === 'unknown' && !i.key.startsWith('facility.')) reads.set(i.key, (reads.get(i.key) ?? 0) + 1);
+  // payer-only keys never stand between a referral and Admit (F8 part 2), so they are never "confirm first"
+  for (const e of entries) for (const i of e.inputs) if (i.presence === 'unknown' && !i.key.startsWith('facility.') && !payerOnly(i.key)) reads.set(i.key, (reads.get(i.key) ?? 0) + 1);
   // "would be Admit if this one were known": only meaningful when nothing else (a true review or payer rule) stands in the way
   const anotherReason = entries.some((e) => (e.kind === 'review' || e.kind === 'payer') && e.result === 'yes');
   const blocking = merged.outcome === 'needs_review' && !anotherReason && (merged.step === 'hard_stop_or_critical_unknown' || merged.step === 'default_needs_review')
@@ -320,7 +324,8 @@ function confirmationSet(outcome: Outcome, entries: Entry[], rules: readonly Rul
   const keys = outcome === 'do_not_admit'
     ? pick((e) => e.kind === 'hard_stop' && e.result === 'yes')
     : outcome === 'admit'
-      ? [...pick((e) => e.kind !== 'favorable' || e.result === 'yes'), ...flagged, ...conflicts]
+      // a payer rule whose result is unknown decides nothing about an Admit (F8 part 2), so it asks for nothing
+      ? [...pick((e) => (e.kind !== 'favorable' && !(e.kind === 'payer' && e.result === 'unknown')) || e.result === 'yes'), ...flagged, ...conflicts]
       : [...pick((e) => e.kind === 'hard_stop' || e.result === 'yes'), ...flagged, ...conflicts];
   return [...new Set(keys.filter((k) => !k.startsWith('facility.')))];
 }
