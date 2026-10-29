@@ -1,0 +1,527 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:codex-health:schema:golden-packet-label.v0",
+  "title": "Golden packet label v0",
+  "description": "What a correct system must find in one synthetic referral packet (SPEC \u00a715). Lives next to the packet's generator inputs and per-page reference text (pages/<n>.txt); the rendered PDF is never committed. Two sets, never mixed: the case library (workflow outcome per case type; per-field labels optional) and the extraction-evaluation set (per-field recall on hard-stop fields; per-field labels required, >= 30 positive and >= 30 near-miss negative fixtures per field, CONSTRAINTS \u00a74.1). The schema test also proves what a label cannot merely claim: the three canary strings occur in the reference text, every quote equals the reference text at its span, every negative quote is present on its page or marked fabricated.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "packet_id",
+    "set",
+    "generator_version",
+    "referral_date",
+    "referral_type",
+    "documents",
+    "facility_profile_ref",
+    "rule_set_ref",
+    "expected",
+    "fields",
+    "reviewed_by"
+  ],
+  "properties": {
+    "packet_id": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*(_clean)?$"
+    },
+    "set": {
+      "enum": [
+        "case_library",
+        "extraction_eval"
+      ]
+    },
+    "case_type": {
+      "type": "string",
+      "pattern": "^[a-z][a-z0-9_]*$",
+      "description": "One of the 17 Phase 9 case types; case library only."
+    },
+    "generator_version": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "referral_date": {
+      "type": "string",
+      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+    },
+    "referral_type": {
+      "enum": [
+        "skilled",
+        "long_term",
+        "bed_hold_readmission",
+        "respite",
+        "hospice"
+      ]
+    },
+    "documents": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "document_id",
+          "type",
+          "pages",
+          "expected_status"
+        ],
+        "properties": {
+          "document_id": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$"
+          },
+          "type": {
+            "type": "string",
+            "pattern": "^[a-z][a-z_]*$"
+          },
+          "pages": {
+            "type": "array",
+            "minItems": 1,
+            "uniqueItems": true,
+            "items": {
+              "type": "integer",
+              "minimum": 1
+            },
+            "description": "Page numbers of this document within the packet; each has a pages/<n>.txt reference text."
+          },
+          "expected_status": {
+            "enum": [
+              "processed",
+              "failed",
+              "unreadable",
+              "not_applicable"
+            ]
+          }
+        }
+      }
+    },
+    "facility_profile_ref": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "rule_set_ref": {
+      "type": "string",
+      "pattern": "\\S"
+    },
+    "expected": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "outcome",
+        "clinical_outcome",
+        "financial_status",
+        "sub_reasons",
+        "triggered_rules",
+        "missing",
+        "conflicts"
+      ],
+      "properties": {
+        "outcome": {
+          "enum": [
+            "admit",
+            "needs_review",
+            "do_not_admit"
+          ]
+        },
+        "clinical_outcome": {
+          "enum": [
+            "admit",
+            "needs_review",
+            "do_not_admit"
+          ]
+        },
+        "financial_status": {
+          "enum": [
+            "clear",
+            "hold",
+            "unknown"
+          ]
+        },
+        "sub_reasons": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "enum": [
+              "missing_info",
+              "clinical",
+              "financial",
+              "leadership",
+              "processing_incomplete"
+            ]
+          }
+        },
+        "triggered_rules": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "rule_id",
+              "fact_keys"
+            ],
+            "properties": {
+              "rule_id": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_.]*$"
+              },
+              "fact_keys": {
+                "type": "array",
+                "minItems": 1,
+                "uniqueItems": true,
+                "items": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*$"
+                }
+              }
+            }
+          }
+        },
+        "missing": {
+          "type": "array",
+          "uniqueItems": true,
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$"
+          }
+        },
+        "conflicts": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "fact_key",
+              "values"
+            ],
+            "properties": {
+              "fact_key": {
+                "type": "string",
+                "pattern": "^[a-z][a-z0-9_]*$"
+              },
+              "values": {
+                "type": "array",
+                "minItems": 2,
+                "items": {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "document_id",
+                    "page",
+                    "value",
+                    "as_of_date"
+                  ],
+                  "properties": {
+                    "document_id": {
+                      "type": "string"
+                    },
+                    "page": {
+                      "type": "integer",
+                      "minimum": 1
+                    },
+                    "value": {
+                      "$ref": "urn:codex-health:schema:fact.v0#/properties/value"
+                    },
+                    "as_of_date": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "adversarial": {
+      "type": "object",
+      "additionalProperties": false,
+      "properties": {
+        "planted_visible": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$"
+          }
+        },
+        "invisible_text": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "xss_values": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$"
+          }
+        },
+        "instruction_text": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        },
+        "identity_mismatch_pages": {
+          "type": "array",
+          "items": {
+            "type": "integer",
+            "minimum": 1
+          }
+        }
+      }
+    },
+    "fields": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "key",
+          "value",
+          "document_id",
+          "page",
+          "quote",
+          "span",
+          "negative_quotes",
+          "as_of_date",
+          "polarity",
+          "is_critical",
+          "specially_protected"
+        ],
+        "properties": {
+          "key": {
+            "type": "string",
+            "pattern": "^[a-z][a-z0-9_]*$"
+          },
+          "value": {
+            "$ref": "urn:codex-health:schema:fact.v0#/properties/value"
+          },
+          "document_id": {
+            "type": [
+              "string",
+              "null"
+            ]
+          },
+          "page": {
+            "type": [
+              "integer",
+              "null"
+            ],
+            "minimum": 1
+          },
+          "quote": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "\\S"
+          },
+          "span": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "start",
+                  "end"
+                ],
+                "properties": {
+                  "start": {
+                    "type": "integer",
+                    "minimum": 0
+                  },
+                  "end": {
+                    "type": "integer",
+                    "minimum": 1
+                  }
+                }
+              }
+            ]
+          },
+          "negative_quotes": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "page",
+                "quote",
+                "fabricated"
+              ],
+              "properties": {
+                "page": {
+                  "type": "integer",
+                  "minimum": 1
+                },
+                "quote": {
+                  "type": "string",
+                  "pattern": "\\S"
+                },
+                "fabricated": {
+                  "type": "boolean",
+                  "description": "true: not on the page at all; false: verbatim-present but not supporting the value."
+                }
+              }
+            }
+          },
+          "as_of_date": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+          },
+          "polarity": {
+            "enum": [
+              "positive",
+              "near_miss_negative",
+              "absent"
+            ]
+          },
+          "is_critical": {
+            "type": "boolean"
+          },
+          "specially_protected": {
+            "type": "boolean"
+          },
+          "typed_value": {
+            "description": "Structured value for non-tri-state facts; its schema arrives with the fact_definitions file."
+          }
+        },
+        "allOf": [
+          {
+            "if": {
+              "properties": {
+                "value": {
+                  "anyOf": [
+                    {
+                      "properties": {
+                        "type": {
+                          "const": "tri_state"
+                        },
+                        "value": {
+                          "const": "unknown"
+                        }
+                      },
+                      "type": "object"
+                    },
+                    {
+                      "properties": {
+                        "type": {
+                          "not": {
+                            "const": "tri_state"
+                          }
+                        },
+                        "value": {
+                          "type": "null"
+                        }
+                      },
+                      "type": "object"
+                    }
+                  ]
+                }
+              }
+            },
+            "then": {
+              "properties": {
+                "document_id": {
+                  "type": "null"
+                },
+                "page": {
+                  "type": "null"
+                },
+                "quote": {
+                  "type": "null"
+                },
+                "span": {
+                  "type": "null"
+                },
+                "polarity": {
+                  "const": "absent"
+                }
+              }
+            },
+            "else": {
+              "properties": {
+                "document_id": {
+                  "type": "string",
+                  "pattern": "^[a-z][a-z0-9_]*$"
+                },
+                "page": {
+                  "type": "integer"
+                },
+                "quote": {
+                  "type": "string"
+                },
+                "span": {
+                  "type": "object"
+                },
+                "polarity": {
+                  "enum": [
+                    "positive",
+                    "near_miss_negative"
+                  ]
+                }
+              }
+            }
+          }
+        ]
+      }
+    },
+    "reviewed_by": {
+      "enum": [
+        "clinician",
+        "agent-proxy"
+      ],
+      "description": "agent-proxy until F6 names a clinician; the M5 gate reports such labels as provisional."
+    }
+  },
+  "allOf": [
+    {
+      "if": {
+        "properties": {
+          "set": {
+            "const": "case_library"
+          }
+        }
+      },
+      "then": {
+        "required": [
+          "case_type"
+        ]
+      },
+      "else": {
+        "not": {
+          "required": [
+            "case_type"
+          ]
+        }
+      }
+    },
+    {
+      "if": {
+        "properties": {
+          "set": {
+            "const": "extraction_eval"
+          }
+        }
+      },
+      "then": {
+        "properties": {
+          "fields": {
+            "minItems": 1,
+            "type": "array"
+          }
+        }
+      }
+    }
+  ]
+}

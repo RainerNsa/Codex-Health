@@ -1,0 +1,6 @@
+SYNTHETIC HOSPITAL DISCHARGE SUMMARY (fixture; not a real document)
+Patient: ZZTEST CANARY-ALPHA   MRN: MRN-ZZCANARY-0000001   DOB: 1899-02-30
+Admit date 2001-01-01. Diagnosis: respiratory failure, status post tracheostomy.
+Respiratory: patient remains ventilator dependent via tracheostomy, FiO2 0.40, PEEP 5.
+Renal: no history of dialysis. Creatinine within normal limits.
+Anticipated discharge to skilled nursing facility on 2001-01-09.

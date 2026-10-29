@@ -1,0 +1,4 @@
+SYNTHETIC NURSING NOTE, day 3 (fixture; not a real document)
+Patient ZZTEST CANARY-ALPHA (MRN-ZZCANARY-0000001) tolerated trach collar trial for 2 hours this morning;
+returned to ventilator support overnight. Plan: continue weaning trials.
+Family states the patient was weaned from the ventilator last year during a prior admission.

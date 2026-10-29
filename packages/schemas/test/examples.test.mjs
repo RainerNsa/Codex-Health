@@ -1,6 +1,6 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readdirSync, readFileSync } from 'node:fs';
+import { existsSync, readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import Ajv2020 from 'ajv/dist/2020.js';
 
@@ -16,9 +16,11 @@ const pairs = {
 };
 
 const validators = {}; // dir -> compiled validator (ajv refuses to compile the same $id twice)
+// The golden label schema $refs the fact value union by its $id, so the fact schema must be known first.
+ajv.addSchema(readJson(`${root}schemas/fact.v0.json`));
 
 for (const [dir, schemaFile] of Object.entries(pairs)) {
-  const validate = ajv.compile(readJson(`${root}schemas/${schemaFile}`));
+  const validate = dir === 'facts' ? ajv.getSchema('urn:codex-health:schema:fact.v0') : ajv.compile(readJson(`${root}schemas/${schemaFile}`));
   validators[dir] = validate;
   const files = readdirSync(`${root}examples/${dir}`).filter((f) => f.endsWith('.json'));
   assert.ok(files.length > 0, `no examples in examples/${dir}`);
@@ -113,4 +115,89 @@ test('every example fact with a quote carries the canary name and MRN (ruling R1
     const text = readFileSync(`${root}examples/facts/${f}`, 'utf8').toLowerCase();
     for (const c of canaries) assert.ok(text.includes(c.value.toLowerCase()), `facts/${f} lacks canary ${c.kind}`);
   }
+});
+
+// Golden packets (SPEC §15): examples/golden/<packet_id>/label.json plus pages/<n>.txt reference text.
+// The test proves what a label cannot merely claim: canaries in the text, quotes at their spans, negatives
+// present on their page or absent from the whole packet, missing keys labelled absent, triggered rules real.
+const golden = ajv.compile(readJson(`${root}schemas/golden-packet-label.v0.json`));
+const canaries = readJson(`${root}../../scripts/checks/canary-strings.json`).canaries;
+const packets = readdirSync(`${root}examples/golden`, { withFileTypes: true }).filter((d) => d.isDirectory()).map((d) => d.name);
+
+function verifyPacket(id, label) {
+  const dir = `${root}examples/golden/${id}`;
+  assert.ok(golden(label), JSON.stringify(golden.errors, null, 2));
+  assert.equal(label.packet_id, id);
+  const pageText = (n) => readFileSync(`${dir}/pages/${n}.txt`, 'utf8');
+  const allPages = label.documents.flatMap((d) => d.pages);
+  assert.equal(new Set(allPages).size, allPages.length, 'a page belongs to one document');
+  const text = allPages.map(pageText).join('\n').toLowerCase();
+  for (const c of canaries) assert.ok(text.includes(c.value.toLowerCase()), `canary ${c.kind} missing from the reference text`);
+  for (const f of label.fields) {
+    if (f.quote !== null) {
+      assert.ok(allPages.includes(f.page), `${f.key}: page ${f.page} is not in any document`);
+      const page = pageText(f.page);
+      assert.ok(f.span.end > f.span.start && f.span.end <= page.length, `${f.key}: span is outside the page`);
+      assert.equal(page.slice(f.span.start, f.span.end), f.quote, `${f.key}: quote is not the reference text at its span`);
+      const doc = label.documents.find((d) => d.document_id === f.document_id);
+      assert.ok(doc && doc.pages.includes(f.page), `${f.key}: page ${f.page} is not in document ${f.document_id}`);
+    }
+    for (const nq of f.negative_quotes) {
+      assert.ok(allPages.includes(nq.page), `${f.key}: negative quote names page ${nq.page}, not in any document`);
+      if (nq.fabricated) {
+        assert.ok(!allPages.some((p) => pageText(p).includes(nq.quote)), `${f.key}: "${nq.quote}" is marked fabricated but is on a page`);
+      } else {
+        assert.ok(pageText(nq.page).includes(nq.quote), `${f.key}: "${nq.quote}" is not on page ${nq.page}`);
+      }
+    }
+  }
+  const keys = label.fields.map((f) => f.key);
+  assert.equal(new Set(keys).size, keys.length, 'one label per fact key');
+  const absent = label.fields.filter((f) => f.polarity === 'absent').map((f) => f.key).sort();
+  assert.deepEqual([...label.expected.missing].sort(), absent, 'expected.missing is exactly the set of absent-labelled keys');
+  for (const cf of label.expected.conflicts) {
+    for (const v of cf.values) {
+      const doc = label.documents.find((d) => d.document_id === v.document_id);
+      assert.ok(doc && doc.pages.includes(v.page), `conflict on ${cf.fact_key}: page ${v.page} is not in document ${v.document_id}`);
+    }
+  }
+  for (const r of label.expected.triggered_rules) {
+    assert.ok(existsSync(`${root}examples/rules/${r.rule_id}.json`), `rule ${r.rule_id} is not an example rule`);
+    for (const k of r.fact_keys) assert.ok(keys.includes(k), `rule ${r.rule_id} reads ${k}, which has no label`);
+  }
+  for (const f of label.fields) {
+    const ref = `${root}examples/facts/${f.key}.json`;
+    if (existsSync(ref)) {
+      const known = readJson(ref);
+      assert.equal(f.is_critical, known.is_critical, `${f.key}: is_critical disagrees with examples/facts`);
+      assert.equal(f.specially_protected, known.specially_protected, `${f.key}: specially_protected disagrees with examples/facts`);
+    }
+  }
+}
+
+test('there is at least one golden packet', () => assert.ok(packets.length > 0));
+for (const id of packets) {
+  test(`examples/golden/${id}: label validates and every claim is backed by the reference text`, () => verifyPacket(id, readJson(`${root}examples/golden/${id}/label.json`)));
+}
+
+test('golden packet verification refuses a claim the text cannot back', () => {
+  const label = readJson(`${root}examples/golden/eval_vent_0001/label.json`);
+  const mutate = (fn) => { const l = structuredClone(label); fn(l); return l; };
+  assert.throws(() => verifyPacket('eval_vent_0001', mutate((l) => { l.fields[0].span.start += 1; })), /quote is not the reference text/);
+  assert.throws(() => verifyPacket('eval_vent_0001', mutate((l) => { l.fields[0].span.end = 9999; })), /span is outside the page/);
+  assert.throws(() => verifyPacket('eval_vent_0001', mutate((l) => { l.fields[0].page = 2; })), /quote is not the reference text|not in document/);
+  assert.throws(() => verifyPacket('eval_vent_0001', mutate((l) => { l.fields[0].negative_quotes[0].fabricated = true; })), /marked fabricated but is on a page/);
+  assert.throws(() => verifyPacket('eval_vent_0001', mutate((l) => { l.fields[0].negative_quotes[1].fabricated = false; })), /is not on page/);
+  assert.throws(() => verifyPacket('eval_vent_0001', mutate((l) => { l.fields[0].negative_quotes[1].page = 99; })), /not in any document/);
+  assert.throws(() => verifyPacket('eval_vent_0001', mutate((l) => { l.expected.missing = []; })), /expected.missing is exactly/);
+  assert.throws(() => verifyPacket('eval_vent_0001', mutate((l) => { l.expected.missing.push('no_such_key'); })), /expected.missing is exactly/);
+  assert.throws(() => verifyPacket('eval_vent_0001', mutate((l) => { l.expected.triggered_rules[0].rule_id = 'seed.hard_stop.no_such_rule'; })), /not an example rule/);
+  assert.throws(() => verifyPacket('eval_vent_0001', mutate((l) => { l.fields[0].is_critical = false; })), /is_critical disagrees/);
+  assert.equal(golden({ ...label, set: 'case_library' }), false, 'case library needs a case_type');
+  assert.equal(golden({ ...label, case_type: 'simple_skilled' }), false, 'extraction eval must not carry one');
+  assert.equal(golden({ ...label, fields: [] }), false, 'extraction eval needs per-field labels');
+  assert.equal(golden({ ...label, fields: [{ ...label.fields[3], polarity: 'positive' }] }), false, 'an unknown value is absent, never positive');
+  assert.equal(golden({ ...label, fields: [{ ...label.fields[0], span: null }] }), false, 'a known value needs a span');
+  assert.equal(golden({ ...label, fields: [{ ...label.fields[0], negative_quotes: [{ page: 1, quote: 'x' }] }] }), false, 'a negative quote says whether it is fabricated');
+  assert.equal(golden({ ...label, reviewed_by: 'ZZTEST Nurse' }), false, 'reviewer is a role, not a name');
 });
