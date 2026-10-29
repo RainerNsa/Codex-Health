@@ -56,7 +56,9 @@ function independent(i: Input) {
   const trusted = (f: Fact) => f.source === 'user' || (f.evidence?.verified === true && f.confidence_band !== 'low');
   const knownValues = (list: Fact[]) => new Set(list.filter((f) => trusted(f) && f.value.value !== null && f.value.value !== 'unknown').map((f) => `${f.value.type}|${String(f.value.value)}`));
   const unknown = (k: string) => { const l = byKey.get(k) ?? []; const v = knownValues(l); return v.size !== 1; };
-  const critical = new Set([...i.rules.filter((r) => r.kind === 'hard_stop' || r.kind === 'payer').flatMap((r) => r.inputs.filter((k) => !k.startsWith('facility.'))), ...i.facts.filter((f) => f.is_critical).map((f) => f.key)]);
+  // F8 part 2: payer-only keys never block the overall answer; hard-stop inputs and flagged keys do
+  const hardKeys = i.rules.filter((r) => r.kind === 'hard_stop').flatMap((r) => r.inputs.filter((k) => !k.startsWith('facility.')));
+  const critical = new Set([...hardKeys, ...i.facts.filter((f) => f.is_critical).map((f) => f.key)]);
   const hardInputs = i.rules.filter((r) => r.kind === 'hard_stop').flatMap((r) => r.inputs);
   return { unknown, criticalUnknown: [...critical].some(unknown), hardFactUnknown: hardInputs.some((k) => !k.startsWith('facility.') && unknown(k)), hardProfileEmpty: hardInputs.some((k) => k.startsWith('facility.') && typeof i.profile[k.slice(9)] !== 'boolean') };
 }
@@ -140,7 +142,9 @@ describe('engine properties', () => {
       if (r.outcome !== 'admit') return;
       admits += 1;
       const mustConfirm = new Set([
-        ...i.rules.filter((x) => x.kind !== 'favorable').flatMap((x) => x.inputs),
+        ...i.rules.filter((x) => x.kind === 'hard_stop' || x.kind === 'review').flatMap((x) => x.inputs),
+        // a payer rule with a known result decides the Admit (F8 part 2); its result comes from evaluating that one rule
+        ...i.rules.filter((x) => x.kind === 'payer' && evaluateRule(x, i.facts, i.profile, '2001-01-10').result !== 'unknown').flatMap((x) => x.inputs),
         ...i.facts.filter((f) => f.is_critical).map((f) => f.key),
       ].filter((k) => !k.startsWith('facility.')));
       for (const k of mustConfirm) expect(r.confirmation_set, `${k} decides this Admit`).toContain(k);

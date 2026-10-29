@@ -279,7 +279,10 @@ export function evaluate(input: EvaluateInput): Evaluation {
   // The clinical run drops payer rules and the keys that are critical ONLY because a payer rule reads them; a key a
   // hard stop also reads, or one flagged is_critical, stays critical (2.4: the flag may only add).
   const payerOnly = (k: string) => !flagged.has(k) && !rules.some((o) => o.kind === 'hard_stop' && o.inputs.includes(k)) && rules.some((r) => r.kind === 'payer' && r.inputs.includes(k));
-  const merged = resolve(entries, critical, ctx.facts, ctx.emptyProfileKeys, input.processing_complete, favorableRequired);
+  // F8 part 2 (founder ruling 2026-10-29, "financial only"): a payer unknown affects financial_status only; it
+  // never blocks the overall answer. Keys critical only because a payer rule reads them leave the step-3 set of the
+  // merged run too; a payer rule that FIRES still routes the merged outcome to Needs Review (financial), step 4.
+  const merged = resolve(entries, new Set([...critical].filter((k) => !payerOnly(k))), ctx.facts, ctx.emptyProfileKeys, input.processing_complete, favorableRequired);
   const clinical = resolve(entries.filter((e) => e.kind !== 'payer'), new Set([...critical].filter((k) => !payerOnly(k))), ctx.facts, ctx.emptyProfileKeys, input.processing_complete, favorableRequired);
   const payer = entries.filter((e) => e.kind === 'payer');
   const financial_status: FinancialStatus = payer.some((e) => e.result === 'yes') ? 'hold' : payer.some((e) => e.result === 'unknown') ? 'unknown' : 'clear';
@@ -320,7 +323,8 @@ function confirmationSet(outcome: Outcome, entries: Entry[], rules: readonly Rul
   const keys = outcome === 'do_not_admit'
     ? pick((e) => e.kind === 'hard_stop' && e.result === 'yes')
     : outcome === 'admit'
-      ? [...pick((e) => e.kind !== 'favorable' || e.result === 'yes'), ...flagged, ...conflicts]
+      // a payer rule whose result is unknown decides nothing about an Admit (F8 part 2), so it asks for nothing
+      ? [...pick((e) => (e.kind !== 'favorable' && !(e.kind === 'payer' && e.result === 'unknown')) || e.result === 'yes'), ...flagged, ...conflicts]
       : [...pick((e) => e.kind === 'hard_stop' || e.result === 'yes'), ...flagged, ...conflicts];
   return [...new Set(keys.filter((k) => !k.startsWith('facility.')))];
 }
