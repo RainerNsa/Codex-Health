@@ -47,7 +47,7 @@ export interface Fact {
   note: string | null;
   /** ISO date (YYYY-MM-DD) the fact was true as of; null when the source gives none. */
   as_of_date: string | null;
-  /** Read by a hard-stop or payer rule; unknown here blocks Admit. */
+  /** Flagged critical: unknown here blocks Admit (2.4: may only add to the derived set; payer-only keys never block, F8 part 2). */
   is_critical: boolean;
   /** 42 CFR Part 2 / psychotherapy-note class; display-only, routes to Needs Review only. */
   specially_protected: boolean;

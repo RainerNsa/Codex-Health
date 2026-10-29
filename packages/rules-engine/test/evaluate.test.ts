@@ -257,6 +257,8 @@ describe('financial status and the clinical split', () => {
     const r = run([tri('ventilator_use', 'no'), tri('recent_aggression', 'no'), tri('daily_skilled_need', 'yes'), tri('payer_pending', 'unknown')]);
     expect([r.outcome, r.clinical_outcome, r.financial_status, r.missing]).toEqual(['admit', 'admit', 'unknown', ['payer_pending']]);
     expect(r.confirmation_set).not.toContain('payer_pending'); // an unknown payer rule decides nothing about the Admit
+    const noFav = run([tri('ventilator_use', 'no'), tri('recent_aggression', 'no'), tri('daily_skilled_need', 'no'), tri('payer_pending', 'unknown')]);
+    expect([noFav.outcome, noFav.blocking]).toEqual(['needs_review', []]); // knowing the payer key can never make this an Admit
   });
   it('a key read by a payer rule AND a hard stop stays blocking; an is_critical flag on a payer key keeps it blocking', () => {
     const both = rule('hs.p', 'hard_stop', 'payer_pending is yes AND facility.accepts_ventilator is false', ['payer_pending', 'facility.accepts_ventilator']);
