@@ -50,7 +50,9 @@ export function parseExpression(src: string): Expr {
   const peek = () => toks[pos];
   const take = () => { const t = toks[pos]; if (!t) throw new DslError('unexpected end of expression', src.length); pos += 1; return t; };
   const expectWord = (w: string) => { const t = take(); if (t.kind !== 'word' || t.text !== w) throw new DslError(`expected '${w}'`, t.at); };
-  const isKey = (t: string) => /^[a-z][a-z0-9_]*$/.test(t);
+  const RESERVED = new Set(['is', 'within', 'days', 'yes', 'no', 'unknown', 'true', 'false']);
+  const isKey = (t: string) => /^[a-z][a-z0-9_]*$/.test(t) && !RESERVED.has(t);
+  let depth = 0;
   const isProfile = (t: string) => /^facility\.[a-z][a-z0-9_]*$/.test(t);
 
   const or = (): Expr => { let left = and(); while (peek()?.kind === 'word' && peek()!.text === 'OR') { take(); left = { op: 'or', left, right: and() }; } return left; };
@@ -58,7 +60,12 @@ export function parseExpression(src: string): Expr {
   const not = (): Expr => { if (peek()?.kind === 'word' && peek()!.text === 'NOT') { take(); return { op: 'not', expr: not() }; } return atom(); };
   const atom = (): Expr => {
     const t = take();
-    if (t.kind === 'lparen') { const e = or(); const r = take(); if (r.kind !== 'rparen') throw new DslError("expected ')'", r.at); return e; }
+    if (t.kind === 'lparen') {
+      if ((depth += 1) > 64) throw new DslError('expression nests deeper than 64 parentheses', t.at);
+      const e = or(); const r = take(); if (r.kind !== 'rparen') throw new DslError("expected ')'", r.at);
+      depth -= 1;
+      return e;
+    }
     if (t.kind !== 'word') throw new DslError('expected a fact or facility key', t.at);
     if (isProfile(t.text)) {
       const key = t.text.slice('facility.'.length);
@@ -117,7 +124,13 @@ export interface RuleLike {
   expression: string;
   protected_input?: boolean;
   legal_reviewer?: unknown;
+  tests?: readonly { expected: string }[];
 }
+
+/** A legal_reviewer record is an object with the four non-blank fields rule.v0 requires. */
+export const legalReviewerOk = (r: unknown): boolean =>
+  !!r && typeof r === 'object' && !Array.isArray(r)
+  && ['name', 'firm', 'date', 'memo_ref'].every((k) => typeof (r as Record<string, unknown>)[k] === 'string' && ((r as Record<string, string>)[k] ?? '').trim() !== '');
 
 /** Static checks rule CI applies before any evaluation (SPEC §10.1, §10.2). Returns problems; empty means clean. */
 export function lintRule(rule: RuleLike): string[] {
@@ -127,6 +140,9 @@ export function lintRule(rule: RuleLike): string[] {
   for (const key of referencedKeys(expr)) if (!rule.inputs.includes(key)) problems.push(`${rule.id}: reads '${key}' which is not declared in inputs`);
   for (const key of rule.inputs) if (!referencedKeys(expr).includes(key)) problems.push(`${rule.id}: declares input '${key}' which the expression never reads`);
   if (usesIsUnknown(expr) && rule.kind !== 'review') problems.push(`${rule.id}: 'is unknown' is permitted only in review rules (a ${rule.kind} rule firing on silence would decide on Unknown)`);
-  if (rule.protected_input && rule.kind !== 'review' && !(rule.legal_reviewer && typeof rule.legal_reviewer === 'object')) problems.push(`${rule.id}: a ${rule.kind} rule over a protected input needs a legal_reviewer record`);
+  if (rule.protected_input && rule.kind !== 'review' && !legalReviewerOk(rule.legal_reviewer)) problems.push(`${rule.id}: a ${rule.kind} rule over a protected input needs a legal_reviewer record`);
+  // CONSTRAINTS §4.2: every rule carries a True, a False and an Unknown case
+  const expected = new Set((rule.tests ?? []).map((t) => t.expected));
+  for (const e of ['true', 'false', 'unknown']) if (!expected.has(e)) problems.push(`${rule.id}: no test case with expected '${e}'`);
   return problems;
 }

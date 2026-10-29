@@ -27,6 +27,9 @@ const PATTERNS = [
   { label: 'nondeterministic call', re: /\b(Date\.now\s*\(|new\s+Date\b|performance\.now\s*\(|Math\.random\s*\(|crypto\.randomUUID\s*\(|process\.hrtime\b)/ },
   { label: 'process.env read', re: /\bprocess\.env\b/ },
   { label: 'browser network API', re: /\b(WebSocket|XMLHttpRequest|EventSource)\b/ },
+  { label: 'network tool spawned', re: /\b(spawn|spawnSync|exec|execSync|execFile|execFileSync)\s*\(\s*['"`](curl|wget|nc|ncat|ssh|scp|aws|python3?)\b/ },
+  { label: 'dynamic import of a non-literal', re: /\bimport\s*\(\s*[^'"`)]/ },
+  { label: 'fetch reference', re: /\bfetch\b(?!\s*\()/ },
 ];
 const SRC_PATTERNS = [...PATTERNS, { label: 'I/O import', ...importOf([...IO_MODULES, ...SPAWN_MODULES]) }];
 // Tests may read fixtures and write temp files (fs, os) and spawn the engine's own CLI; they are still held
@@ -43,7 +46,7 @@ const isTest = (f) => f.startsWith(TEST_DIR);
 // else (SPEC §10.4). It is held to every other rule (no network, AWS SDK, fetch, clock, env or browser API);
 // only the file-system import is allowed there. The library (src/index.ts and what it imports) stays pure.
 const isCli = (f) => f === path.join(DIR, 'src', 'cli.ts');
-const CLI_PATTERNS = SRC_PATTERNS.filter((p) => p.label !== 'I/O import');
+const CLI_PATTERNS = [...PATTERNS, { label: 'I/O import', ...importOf(IO_MODULES.filter((m) => !m.endsWith('fs')).concat(SPAWN_MODULES)) }];
 const hits = [
   ...scanFiles(files.filter((f) => !isTest(f) && !isCli(f)), SRC_PATTERNS),
   ...scanFiles(files.filter(isCli), CLI_PATTERNS),

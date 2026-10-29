@@ -20,7 +20,7 @@ describe('OUTCOME_RESOLUTION_ORDER', () => {
 describe('cli', () => {
   it('prints usage and exits 2', () => {
     const cli = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
-    const r = spawnSync(process.execPath, [cli], { encoding: 'utf8' });
+    const r = spawnSync(process.execPath, [cli], { encoding: 'utf8', timeout: 30_000 });
     expect(r.status).toBe(2);
     expect(r.stderr).toContain('evaluate <facts.json> <profile.json> <rules.json>');
   });

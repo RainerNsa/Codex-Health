@@ -178,7 +178,7 @@
           },
           "facts": {
             "type": "object",
-            "description": "Fact key \u2192 tri-state presence, or a full fact value object (fact.v0 value union) for enum/count/date/text/medication_list conditions.",
+            "description": "Fact key \u2192 tri-state presence, a full fact value object, or { value, as_of_date } for recency cases.",
             "additionalProperties": {
               "anyOf": [
                 {
@@ -190,6 +190,37 @@
                 },
                 {
                   "$ref": "urn:codex-health:schema:fact.v0#/properties/value"
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "value",
+                    "as_of_date"
+                  ],
+                  "properties": {
+                    "value": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "yes",
+                            "no",
+                            "unknown"
+                          ]
+                        },
+                        {
+                          "$ref": "urn:codex-health:schema:fact.v0#/properties/value"
+                        }
+                      ]
+                    },
+                    "as_of_date": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                    }
+                  }
                 }
               ]
             }

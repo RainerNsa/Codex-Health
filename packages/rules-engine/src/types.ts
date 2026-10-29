@@ -72,11 +72,12 @@ export function presence(fact: Pick<Fact, 'value' | 'source' | 'evidence' | 'con
   const v = fact.value;
   switch (v.type) {
     case 'tri_state':
-      return v.value;
+      // anything but the three literals (a 'Yes', a null, a number) is unknown, never a value
+      return v.value === 'yes' || v.value === 'no' ? v.value : 'unknown';
     case 'count':
-      return v.value === null ? 'unknown' : v.value === 0 ? 'no' : 'yes';
+      return typeof v.value !== 'number' || !Number.isFinite(v.value) || v.value < 0 ? 'unknown' : v.value === 0 ? 'no' : 'yes';
     case 'medication_list':
-      return v.value === null ? 'unknown' : v.value.length === 0 ? 'no' : 'yes';
+      return !Array.isArray(v.value) ? 'unknown' : v.value.length === 0 ? 'no' : 'yes';
     default:
       return 'unknown';
   }
