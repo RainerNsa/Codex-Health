@@ -90,6 +90,7 @@ async function seed(c) {
     await c.query("INSERT INTO facility_profiles (facility_id, version, capabilities, created_by) VALUES ($1, 0, '{\"accepts_ventilator\": false}', 'platform:test')", [id]);
     // one transition per facility (0009): the owner puts the referral in review, the Reviewer holds it
     await c.query("UPDATE referrals SET status = 'ready_for_review' WHERE facility_id = $1", [id]);
+    await c.query("INSERT INTO decision_requests (facility_id, referral_id, evaluation_id, decision, requested_by) VALUES ($1, $2, $3, 'admit', $4)", [id, ref, ev, user]);
     await c.query("INSERT INTO referral_transitions (facility_id, referral_id, transition, from_status, to_status, note, created_by) VALUES ($1, $2, 'T8', 'ready_for_review', 'on_hold', 'SYNTHETIC hold', $3)", [id, ref, `user:${user}`]);
   }
 }
@@ -134,7 +135,7 @@ test('row-level security, organisation isolation, audit immutability, the hash c
           await asFacility(c, FAC.a1);
         }
         // Exact readable-table count per role: a dropped or added SELECT grant must be a visible change here.
-        assert.equal(checked, { codex_app: 11, codex_worker: 6 }[role], `${role} could read ${checked} tenant tables`);
+        assert.equal(checked, { codex_app: 12, codex_worker: 6 }[role], `${role} could read ${checked} tenant tables`);
       });
     }
 
@@ -189,7 +190,7 @@ test('row-level security, organisation isolation, audit immutability, the hash c
     await sub('the chain is computed by the trigger, never by the writer, and verifies for both facilities and the platform chain', async () => {
       await asFacility(c, FAC.a1);
       const base = await count(c, 'SELECT count(*) AS n FROM audit_log');
-      assert.equal(base, 5, 'the seed wrote exactly five rows per facility: user_role.granted (0005), audit(), decision.finalized, facility_profile.versioned (0008), referral.held (0009)');
+      assert.equal(base, 6, 'the seed wrote exactly six rows per facility: user_role.granted (0005), audit(), decision.finalized, facility_profile.versioned (0008), decision.cosign_requested (0010), referral.held (0009)');
       await audit(c, FAC.a1, 'referral.created');
       await c.query("INSERT INTO audit_log (facility_id, seq, row_hash, actor, action, entity_type, at) VALUES ($1, 0, '\\x00', 'system:test', 'backdated', 'facility', '2001-01-01')", [FAC.a1]);
       const { rows } = await c.query('SELECT seq, prev_hash, row_hash, at FROM audit_log WHERE facility_id = $1 ORDER BY seq', [FAC.a1]);
@@ -316,6 +317,7 @@ test('row-level security, organisation isolation, audit immutability, the hash c
         'codex_anchor organizations SELECT (id)',
         'codex_anchor platform_audit_log SELECT',
         'codex_app audit_log INSERT', 'codex_app audit_log SELECT',
+        'codex_app decision_requests INSERT', 'codex_app decision_requests SELECT',
         'codex_app decisions INSERT', 'codex_app decisions SELECT',
         'codex_app documents INSERT', 'codex_app documents SELECT', 'codex_app documents UPDATE (not_applicable_reason,status,updated_at)',
         'codex_app evaluations INSERT', 'codex_app evaluations SELECT',
@@ -417,6 +419,7 @@ test('row-level security, organisation isolation, audit immutability, the hash c
       const ref = (await c.query('SELECT id FROM referrals WHERE facility_id = $1', [FAC.a1])).rows[0].id;
       const dec = (await c.query('SELECT id FROM decisions WHERE facility_id = $1', [FAC.a1])).rows[0].id;
       const me = `user:${USER.a}`;
+      await c.query("SELECT set_config('app.user_id', $1, true)", [USER.a]); // the acting user (0010)
       await c.query('SET LOCAL ROLE codex_app');
       const status = async () => (await c.query('SELECT status FROM referrals WHERE id = $1', [ref])).rows[0].status;
       assert.equal(await status(), 'on_hold');
@@ -499,6 +502,109 @@ test('row-level security, organisation isolation, audit immutability, the hash c
       assert.deepEqual(actions, ['referral.held', 'referral.resumed', 'referral.finalized']);
       await expectFailure(c, "UPDATE referral_transitions SET note = 'x'", /immutable|permission denied/);
       await expectFailure(c, 'DELETE FROM referral_transitions', /immutable|permission denied/);
+    });
+
+    await sub('co-sign (0010): two people, two requests; every actor column is the acting user', async () => {
+      const ADMIN = '00000000-0000-4000-8000-00000000ee03';
+      const ADMIN2 = '00000000-0000-4000-8000-00000000ee04';
+      const R2 = '00000000-0000-4000-8000-00000000ee05';
+      const VIEWER = '00000000-0000-4000-8000-00000000ee06';
+      await asFacility(c, FAC.a1);
+      await asOrg(c, ORG[0]);
+      for (const [id, role] of [[ADMIN, 'facility_admin'], [ADMIN2, 'facility_admin'], [R2, 'admissions_reviewer'], [VIEWER, 'viewer']]) {
+        await c.query("INSERT INTO users (id, organization_id, email, display_name) VALUES ($1, $2, $3, 'ZZTEST Cosign')", [id, ORG[0], `zztest.${id.slice(-4)}@example.invalid`]);
+        await c.query('INSERT INTO user_facility_roles (user_id, facility_id, role) VALUES ($1, $2, $3)', [id, FAC.a1, role]);
+      }
+      const EVQ = `INSERT INTO evaluations (facility_id, referral_id, raw, outcome, clinical_outcome, financial_status, trace, criteria_document_ref, rule_set_version,
+        facility_profile_version, model_id, prompt_version, extractor_version, ocr_engine_version, engine_version)
+        VALUES ($1, $2, false, 'do_not_admit', 'do_not_admit', 'clear', '{}', 'seed', 1, 1, 'none', 'p0', 'x0', 'o0', 'e0') RETURNING id`;
+      const actAs = async (u) => { await c.query('RESET ROLE'); await c.query("SELECT set_config('app.user_id', $1, true)", [u]); await c.query('SET LOCAL ROLE codex_app'); };
+      // a manual-entry referral whose recommendation is Do Not Admit, submitted for review by the Reviewer
+      await actAs(USER.a);
+      const ref = (await c.query('INSERT INTO referrals (facility_id) VALUES ($1) RETURNING id', [FAC.a1])).rows[0].id;
+      await c.query('RESET ROLE');
+      const ev = (await c.query(`INSERT INTO evaluations (facility_id, referral_id, raw, outcome, clinical_outcome, financial_status, trace, criteria_document_ref, rule_set_version,
+        facility_profile_version, model_id, prompt_version, extractor_version, ocr_engine_version, engine_version)
+        VALUES ($1, $2, false, 'do_not_admit', 'do_not_admit', 'clear', '{}', 'seed', 1, 1, 'none', 'p0', 'x0', 'o0', 'e0') RETURNING id`, [FAC.a1, ref])).rows[0].id;
+      await actAs(USER.a);
+      await c.query("INSERT INTO referral_transitions (facility_id, referral_id, transition, from_status, to_status, created_by) VALUES ($1, $2, 'T14', 'draft', 'ready_for_review', $3)", [FAC.a1, ref, `user:${USER.a}`]);
+      const REQ = 'INSERT INTO decision_requests (facility_id, referral_id, evaluation_id, decision, override_reason, requested_by) VALUES ($1, $2, $3, $4, $5, $6) RETURNING id';
+      await expectFailure(c, REQ, /must be the acting user/, [FAC.a1, ref, ev, 'admit', 'SYNTHETIC', ADMIN]);
+      await expectFailure(c, REQ, /override reason is required exactly/, [FAC.a1, ref, ev, 'admit', null, USER.a]);
+      await expectFailure(c, REQ, /override reason is required exactly/, [FAC.a1, ref, ev, 'do_not_admit', 'SYNTHETIC', USER.a]);
+      // the request guard's other checks: latest evaluation, ready_for_review, a Reviewer or Admin requester
+      await c.query('SAVEPOINT reqg');
+      await c.query('RESET ROLE');
+      await c.query(EVQ, [FAC.a1, ref]);
+      await actAs(USER.a);
+      await expectFailure(c, REQ, /evaluation is not the latest/, [FAC.a1, ref, ev, 'admit', 'SYNTHETIC', USER.a]);
+      await c.query('ROLLBACK TO SAVEPOINT reqg');
+      await c.query('SAVEPOINT reqg');
+      await actAs(USER.a);
+      await c.query("INSERT INTO referral_transitions (facility_id, referral_id, transition, from_status, to_status, note, created_by) VALUES ($1, $2, 'T8', 'ready_for_review', 'on_hold', 'n', $3)", [FAC.a1, ref, `user:${USER.a}`]);
+      await expectFailure(c, REQ, /not ready_for_review/, [FAC.a1, ref, ev, 'admit', 'SYNTHETIC', USER.a]);
+      await c.query('ROLLBACK TO SAVEPOINT reqg');
+      await actAs(VIEWER);
+      await expectFailure(c, REQ, /holds no Reviewer or Admin role/, [FAC.a1, ref, ev, 'admit', 'SYNTHETIC', VIEWER]);
+      // the T12 actor must hold a Reviewer or Admin role, even when it is the acting user
+      await actAs(USER.b);
+      await expectFailure(c, "INSERT INTO referral_transitions (facility_id, referral_id, transition, from_status, to_status, note, created_by) VALUES ($1, $2, 'T8', 'ready_for_review', 'on_hold', 'n', $3)", /may not move referrals/, [FAC.a1, ref, `user:${USER.b}`]);
+      await actAs(USER.a);
+      const req = (await c.query(REQ, [FAC.a1, ref, ev, 'admit', 'SYNTHETIC: hospital confirms weaning', USER.a])).rows[0].id;
+      const DEC = `INSERT INTO decisions (facility_id, referral_id, evaluation_id, recommended_outcome, decision, override_reason, decided_by, cosigned_by, decision_request_id)
+        VALUES ($1, $2, $3, 'do_not_admit', $4, $5, $6, $7, $8) RETURNING id`;
+      const args = (over = {}) => { const a = { decision: 'admit', reason: 'SYNTHETIC: hospital confirms weaning', by: USER.a, co: ADMIN, req, ...over }; return [FAC.a1, ref, ev, a.decision, a.reason, a.by, a.co, a.req]; };
+      // the decider cannot write the co-signer's name, nor the co-signer the decider's own decision
+      await expectFailure(c, DEC, /cosigned_by must be the acting user/, args());
+      // a plain decision never names a request
+      await expectFailure(c, DEC, /decided_by must be the acting user/, args({ co: null }));
+      await actAs(ADMIN);
+      await expectFailure(c, DEC, /decided_by must be the acting user/, args({ co: null, req: null }));
+      await expectFailure(c, DEC, /carry out the latest request by the decider, unchanged/, args({ decision: 'do_not_admit', reason: null }));
+      await expectFailure(c, DEC, /carry out the latest request by the decider, unchanged/, args({ reason: 'SYNTHETIC: different reason' }));
+      await expectFailure(c, DEC, /carry out the latest request by the decider, unchanged/, args({ req: null }));
+      // the co-signer cannot name themselves as the decider (the request guard answers before 0003's different-user CHECK)
+      await expectFailure(c, DEC, /carry out the latest request by the decider, unchanged/, args({ by: ADMIN }));
+      // someone who never filed the request cannot be named as its decider
+      await expectFailure(c, DEC, /carry out the latest request by the decider, unchanged/, args({ by: R2 }));
+      // the request is carried out on the evaluation it was filed on, not a newer one
+      await c.query('SAVEPOINT evm');
+      await c.query('RESET ROLE');
+      const ev2 = (await c.query(EVQ, [FAC.a1, ref])).rows[0].id;
+      await actAs(ADMIN);
+      await expectFailure(c, DEC, /carry out the latest request/, [FAC.a1, ref, ev2, 'admit', 'SYNTHETIC: hospital confirms weaning', USER.a, ADMIN, req]);
+      await c.query('ROLLBACK TO SAVEPOINT evm');
+      await actAs(ADMIN);
+      // a newer request replaces the old one: the old one can no longer be carried out
+      await c.query('SAVEPOINT newer');
+      await actAs(USER.a);
+      await c.query(REQ, [FAC.a1, ref, ev, 'admit', 'SYNTHETIC: second thoughts', USER.a]);
+      await actAs(ADMIN);
+      await expectFailure(c, DEC, /carry out the latest request/, args());
+      await c.query('ROLLBACK TO SAVEPOINT newer');
+      await actAs(ADMIN);
+      const dec = (await c.query(DEC, args())).rows[0].id;
+      // only the decider or the co-signer finalizes it, not another Admin
+      await actAs(ADMIN2);
+      await expectFailure(c, "INSERT INTO referral_transitions (facility_id, referral_id, transition, from_status, to_status, decision_id, created_by) VALUES ($1, $2, 'T12', 'ready_for_review', 'finalized', $3, $4)", /must name the original decision/, [FAC.a1, ref, dec, `user:${ADMIN2}`]);
+      await actAs(ADMIN);
+      await c.query("INSERT INTO referral_transitions (facility_id, referral_id, transition, from_status, to_status, decision_id, created_by) VALUES ($1, $2, 'T12', 'ready_for_review', 'finalized', $3, $4)", [FAC.a1, ref, dec, `user:${ADMIN}`]);
+      await c.query('SET CONSTRAINTS decisions_finalized_check IMMEDIATE');
+      const row = (await c.query('SELECT decided_by, cosigned_by, cosigned_role, hard_stop_override FROM decisions WHERE id = $1', [dec])).rows[0];
+      assert.deepEqual(row, { decided_by: USER.a, cosigned_by: ADMIN, cosigned_role: 'facility_admin', hard_stop_override: true });
+      await c.query('RESET ROLE');
+      const acts = (await c.query("SELECT actor, action FROM audit_log WHERE entity_id IN ($1, $2, $3) AND action <> 'referral.viewed' ORDER BY seq", [req, dec, ref])).rows;
+      assert.deepEqual(acts, [
+        { actor: `user:${USER.a}`, action: 'referral.submitted_for_review' },
+        { actor: `user:${USER.a}`, action: 'decision.cosign_requested' },
+        { actor: `user:${USER.a}`, action: 'decision.finalized' },
+        { actor: `user:${ADMIN}`, action: 'decision.cosigned' },
+        { actor: `user:${ADMIN}`, action: 'referral.finalized' },
+      ]);
+      // amendments by the app role wait for T13
+      await actAs(ADMIN);
+      await expectFailure(c, "INSERT INTO decisions (facility_id, referral_id, evaluation_id, recommended_outcome, decision, override_reason, decided_by, amends_decision_id, amendment_reason) VALUES ($1, $2, $3, 'do_not_admit', 'do_not_admit', null, $4, $5, 'SYNTHETIC')", /amendments arrive with T13/, [FAC.a1, ref, ev, ADMIN, dec]);
+      await expectFailure(c, 'UPDATE decision_requests SET override_reason = $1', /immutable|permission denied/, ['x']);
     });
 
     await sub('CONSTRAINTS check queries return zero rows', async () => {

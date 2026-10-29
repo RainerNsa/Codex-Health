@@ -377,18 +377,100 @@ describe.skipIf(!url)('manual fact entry API', () => {
     expect((await finalize(gap.rid, U.reviewer, { evaluation_id: gap.ev.id, decision: 'do_not_admit', override_reason: 'SYNTHETIC' })).json()).toEqual({ error: 'confirmation_incomplete' });
   });
 
-  it('review: a hard stop overridden to Admit, or a flipped hard-stop input, waits for the co-sign (next slice)', async () => {
+  const requestCosign = (rid: string, user: string, body: unknown) => post(`${refUrl(rid)}/decision-requests`, user, body);
+  const cosign = (rid: string, qid: string, user: string) => post(`${refUrl(rid)}/decision-requests/${qid}/cosign`, user);
+
+  it('co-sign: a hard stop overridden to Admit is filed by the Reviewer and finalized only by a different Admin', async () => {
     const hs = await withFacts(['ventilator_use', 'yes'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
     expect(hs.ev.outcome).toBe('do_not_admit');
     await move(hs.rid, U.reviewer, { action: 'submit' });
-    expect((await finalize(hs.rid, U.admin, { evaluation_id: hs.ev.id, decision: 'admit', override_reason: 'SYNTHETIC' })).json()).toEqual({ error: 'cosign_required' });
-    expect((await finalize(hs.rid, U.reviewer, { evaluation_id: hs.ev.id, decision: 'do_not_admit' })).statusCode).toBe(201);
+    const body = { evaluation_id: hs.ev.id, decision: 'admit', override_reason: 'SYNTHETIC: hospital confirms weaning before transfer' };
+    expect((await finalize(hs.rid, U.admin, body)).json()).toEqual({ error: 'cosign_required' });
+    // a decision that needs no co-sign is not filed as a request
+    expect((await requestCosign(hs.rid, U.reviewer, { evaluation_id: hs.ev.id, decision: 'do_not_admit' })).json()).toEqual({ error: 'cosign_not_needed' });
+    expect((await requestCosign(hs.rid, U.viewer, body)).statusCode).toBe(403);
+    let view = (await requestCosign(hs.rid, U.reviewer, body)).json();
+    const qid = view.pending_request.id as string;
+    expect([view.referral.status, view.pending_request.decision, view.pending_request.can_cosign, view.actions.includes('cosign')]).toEqual(['ready_for_review', 'admit', false, false]);
+    // the requester cannot co-sign; a Reviewer cannot co-sign; the Admin sees it as theirs to co-sign
+    expect((await cosign(hs.rid, qid, U.reviewer)).json()).toEqual({ error: 'cosign_admin_only' });
+    view = (await get(refUrl(hs.rid), U.admin)).json();
+    expect([view.pending_request.can_cosign, view.actions.includes('cosign')]).toEqual([true, true]);
+    view = (await cosign(hs.rid, qid, U.admin)).json();
+    expect([view.referral.status, view.decision.decision, view.decision.decided_by, view.pending_request, view.actions]).toEqual(['finalized', 'admit', U.reviewer, null, []]);
+    await asOwner(FAC.a);
+    const row = (await c.query('SELECT cosigned_by, cosigned_role, hard_stop_override, decision_request_id FROM decisions WHERE referral_id = $1', [hs.rid])).rows[0];
+    expect(row).toEqual({ cosigned_by: U.admin, cosigned_role: 'facility_admin', hard_stop_override: true, decision_request_id: qid });
+    const ev = (await c.query("SELECT attrs FROM product_events WHERE referral_id = $1 AND event = 'decision.finalized'", [hs.rid])).rows[0].attrs;
+    expect([ev.override, ev.cosigner_present]).toEqual([true, true]);
+    expect((await cosign(hs.rid, qid, U.admin)).json()).toEqual({ error: 'transition_not_allowed' });
+  });
+
+  it('co-sign: an Admit after a hard stop cleared by a settings change still needs the second Admin', async () => {
+    const hs = await withFacts(['ventilator_use', 'yes'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
+    expect(hs.ev.outcome).toBe('do_not_admit');
+    await move(hs.rid, U.reviewer, { action: 'submit' });
+    // the Admin switches the capability on and re-evaluates: the recommendation becomes Admit
+    const path = `/api/facilities/${FAC.a}/settings`;
+    const cur = (await get(path, U.admin)).json();
+    const put = (caps: unknown, v: number) => app.inject({ method: 'PUT', url: path, headers: as(U.admin), payload: { capabilities: caps, disabled_rules: cur.profile.disabled_rules, based_on_version: v } });
+    await put({ ...cur.profile.capabilities, accepts_ventilator: true }, cur.profile.version);
+    const view = (await post(`${refUrl(hs.rid)}/evaluate`, U.admin)).json();
+    expect([view.evaluation.outcome, view.cosign.admit]).toEqual(['admit', true]);
+    expect((await finalize(hs.rid, U.admin, { evaluation_id: view.evaluation.id, decision: 'admit' })).json()).toEqual({ error: 'cosign_required' });
+    // a Do Not Admit needs no co-sign; the Admit goes through a second Admin (the Reviewer files, the Admin co-signs)
+    const filed = (await requestCosign(hs.rid, U.reviewer, { evaluation_id: view.evaluation.id, decision: 'admit' })).json().pending_request;
+    expect([filed.requested_by, filed.requested_by_name]).toEqual([U.reviewer, 'ZZTEST API user']);
+    // a requester who loses their role here can no longer have their decision carried out
+    await c.query('SAVEPOINT lost');
+    await asOwner(FAC.a);
+    await c.query("DELETE FROM user_facility_roles WHERE user_id = $1 AND facility_id = $2", [U.reviewer, FAC.a]);
+    expect((await get(refUrl(hs.rid), U.admin)).json().pending_request).toBe(null);
+    expect((await cosign(hs.rid, filed.id, U.admin)).json()).toEqual({ error: 'request_not_current' });
+    await c.query('ROLLBACK TO SAVEPOINT lost');
+    expect((await cosign(hs.rid, filed.id, U.admin)).json().decision).toMatchObject({ decision: 'admit', decided_by: U.reviewer });
+    await put(cur.profile.capabilities, cur.profile.version + 1);
+  });
+
+  it('co-sign: an Admin cannot co-sign their own request; a newer request or a newer evaluation replaces the old one', async () => {
+    const hs = await withFacts(['ventilator_use', 'yes'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
+    await move(hs.rid, U.reviewer, { action: 'submit' });
+    const body = { evaluation_id: hs.ev.id, decision: 'admit', override_reason: 'SYNTHETIC: first request' };
+    // an Admin's own request needs another Admin (this facility has one: open founder item, one-Admin facilities)
+    const ownView = (await requestCosign(hs.rid, U.admin, body)).json();
+    expect([ownView.pending_request.can_cosign, ownView.actions.includes('cosign')]).toEqual([false, false]);
+    const own = ownView.pending_request.id as string;
+    expect((await cosign(hs.rid, own, U.admin)).json()).toEqual({ error: 'cosign_own_request' });
+    const first = (await requestCosign(hs.rid, U.reviewer, body)).json().pending_request.id as string;
+    expect((await cosign(hs.rid, own, U.admin)).json()).toEqual({ error: 'request_not_current' });
+    // a fact entered after the request makes a new evaluation: the request no longer stands
+    await post(factsUrl(hs.rid), U.reviewer, fact('recent_aggression', 'no'));
+    const view = (await get(refUrl(hs.rid), U.admin)).json();
+    expect(view.pending_request).toBe(null);
+    expect((await cosign(hs.rid, first, U.admin)).json()).toEqual({ error: 'evaluation_stale' });
+    // a settings change also retires a filed request
+    const again = await withFacts(['ventilator_use', 'yes'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
+    await move(again.rid, U.reviewer, { action: 'submit' });
+    const filed = (await requestCosign(again.rid, U.reviewer, { ...body, evaluation_id: again.ev.id })).json().pending_request.id as string;
+    const path = `/api/facilities/${FAC.a}/settings`;
+    const cur = (await get(path, U.admin)).json();
+    await app.inject({ method: 'PUT', url: path, headers: as(U.admin), payload: { capabilities: cur.profile.capabilities, disabled_rules: cur.profile.disabled_rules, based_on_version: cur.profile.version } });
+    expect((await get(refUrl(again.rid), U.admin)).json().pending_request).toBe(null);
+    expect((await cosign(again.rid, filed, U.admin)).json()).toEqual({ error: 'evaluation_stale' });
+  });
+
+  it('co-sign: after a flipped hard-stop input every decision is filed for co-sign; unknown -> known and other corrections are not flips', async () => {
     const flip = await withFacts(['ventilator_use', 'yes'], ['ventilator_use', 'no'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
     expect(flip.ev.outcome).toBe('admit');
     const fv = (await move(flip.rid, U.reviewer, { action: 'submit' })).json();
-    expect([fv.cosign.any, fv.actions.includes('finalize')]).toEqual([true, false]);
+    expect([fv.cosign.any, fv.actions.includes('finalize')]).toEqual([true, true]);
     expect((await finalize(flip.rid, U.reviewer, { evaluation_id: flip.ev.id, decision: 'admit' })).json()).toEqual({ error: 'cosign_required' });
-    // unknown -> known is information arriving, and a non-hard-stop correction is no flip: both finalize
+    // after a flip, Do Not Admit needs the co-sign too (the database's hard-stop CHECK covers only Admit)
+    const dna = { evaluation_id: flip.ev.id, decision: 'do_not_admit', override_reason: 'SYNTHETIC' };
+    expect((await finalize(flip.rid, U.reviewer, dna)).json()).toEqual({ error: 'cosign_required' });
+    expect((await requestCosign(flip.rid, U.reviewer, dna)).json().pending_request.decision).toBe('do_not_admit');
+    const qid = (await requestCosign(flip.rid, U.reviewer, { evaluation_id: flip.ev.id, decision: 'admit' })).json().pending_request.id as string;
+    expect((await cosign(flip.rid, qid, U.admin)).json().decision).toMatchObject({ decision: 'admit', override_reason: null });
     for (const steps of [[['ventilator_use', 'unknown'], ['ventilator_use', 'no']], [['ventilator_use', 'no'], ['daily_skilled_need', 'no'], ['daily_skilled_need', 'yes']]] as [string, 'yes' | 'no' | 'unknown'][][]) {
       const r = await withFacts(...steps, ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
       await move(r.rid, U.reviewer, { action: 'submit' });

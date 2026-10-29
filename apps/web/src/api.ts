@@ -12,7 +12,7 @@ export interface Evaluation {
   sub_reasons: string[];
   trace: { resolution_step: string; trace: TraceEntry[]; missing: string[]; conflicts: string[]; blocking: string[]; empty_profile_keys: string[]; confirmation_set?: string[] };
 }
-export type Action = 'submit' | 'hold' | 'request_info' | 'escalate' | 'resume' | 'finalize' | 'reevaluate';
+export type Action = 'submit' | 'hold' | 'request_info' | 'escalate' | 'resume' | 'finalize' | 'reevaluate' | 'cosign';
 export interface TransitionRow { transition: string; from_status: string; to_status: string; note: string | null; department: string | null; requested_items: string[]; created_by: string; created_at: string }
 export interface DecisionRow { id: string; evaluation_id: string; recommended_outcome: string; decision: 'admit' | 'do_not_admit'; override_reason: string | null; decided_by: string; decided_at: string }
 export interface ReferralView {
@@ -25,6 +25,7 @@ export interface ReferralView {
   admit_requires: string[];
   evaluation_outdated: boolean;
   cosign: { admit: boolean; any: boolean };
+  pending_request: { id: string; evaluation_id: string; decision: 'admit' | 'do_not_admit'; override_reason: string | null; requested_by: string; requested_by_name: string; created_at: string; can_cosign: boolean } | null;
   transitions: TransitionRow[];
   decision: DecisionRow | null;
   actions: Action[];
@@ -52,7 +53,11 @@ export const enterFact = (facility: string, referral: string, user: string, fact
 
 export const reevaluateReferral = (facility: string, referral: string, user: string) =>
   call<ReferralView>(`/api/facilities/${facility}/referrals/${referral}/evaluate`, user, { method: 'POST', body: '{}' });
-export const moveReferral = (facility: string, referral: string, user: string, body: { action: Exclude<Action, 'finalize' | 'reevaluate'>; note?: string; department?: string; items?: string[] }) =>
+export const requestCosign = (facility: string, referral: string, user: string, body: { evaluation_id: string; decision: 'admit' | 'do_not_admit'; override_reason?: string }) =>
+  call<ReferralView>(`/api/facilities/${facility}/referrals/${referral}/decision-requests`, user, { method: 'POST', body: JSON.stringify(body) });
+export const cosignRequest = (facility: string, referral: string, request: string, user: string) =>
+  call<ReferralView>(`/api/facilities/${facility}/referrals/${referral}/decision-requests/${request}/cosign`, user, { method: 'POST', body: '{}' });
+export const moveReferral = (facility: string, referral: string, user: string, body: { action: Exclude<Action, 'finalize' | 'reevaluate' | 'cosign'>; note?: string; department?: string; items?: string[] }) =>
   call<ReferralView>(`/api/facilities/${facility}/referrals/${referral}/transitions`, user, { method: 'POST', body: JSON.stringify(body) });
 export const finalizeReferral = (facility: string, referral: string, user: string, body: { evaluation_id: string; decision: 'admit' | 'do_not_admit'; override_reason?: string }) =>
   call<ReferralView>(`/api/facilities/${facility}/referrals/${referral}/decision`, user, { method: 'POST', body: JSON.stringify(body) });
