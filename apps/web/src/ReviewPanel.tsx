@@ -7,15 +7,18 @@ import type { Action, ReferralView } from './api.ts';
 const keyLabel = (k: string) => k.replaceAll('_', ' ');
 const ACTION_LABEL: Record<Action, string> = {
   submit: 'Submit for review', hold: 'Hold', request_info: 'Request information', escalate: 'Escalate', resume: 'Resume review', finalize: 'Record decision',
+  reevaluate: 'Re-evaluate with current settings',
 };
 const STATUS_LABEL: Record<string, string> = {
   draft: 'Draft', ready_for_review: 'Ready for review', on_hold: 'On hold', info_requested: 'Information requested', escalated: 'Escalated', finalized: 'Finalized', amended: 'Amended',
 };
 const OUTCOME_TEXT: Record<string, string> = { admit: 'Admit', do_not_admit: 'Do Not Admit', needs_review: 'Needs Review' };
 
+// Each handler resolves true when the API accepted the request; a refused request keeps what was typed.
 export interface ReviewHandlers {
-  move: (body: { action: Exclude<Action, 'finalize'>; note?: string; department?: string; items?: string[] }) => void;
-  finalize: (body: { evaluation_id: string; decision: 'admit' | 'do_not_admit'; override_reason?: string }) => void;
+  move: (body: { action: Exclude<Action, 'finalize' | 'reevaluate'>; note?: string; department?: string; items?: string[] }) => Promise<boolean>;
+  finalize: (body: { evaluation_id: string; decision: 'admit' | 'do_not_admit'; override_reason?: string }) => Promise<boolean>;
+  reevaluate: () => Promise<boolean>;
 }
 
 export function ReviewPanel({ view, busy, on }: { view: ReferralView; busy: boolean; on: ReviewHandlers }) {
@@ -53,18 +56,21 @@ export function ReviewPanel({ view, busy, on }: { view: ReferralView; busy: bool
         </div>
       )}
 
+      {view.evaluation_outdated && <p role="status" className="mt-2 text-sm text-amber-900">The facility's settings changed after this recommendation. Re-evaluate before deciding.</p>}
+      {view.cosign.any && <p role="status" className="mt-2 text-sm text-amber-900">A hard-stop fact was changed from one known value to another, so any decision needs a second Admin to co-sign. Co-signing arrives in the next build.</p>}
+
       {view.actions.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-2">
           {view.actions.map((a) => (
             <button key={a} type="button" disabled={busy} aria-pressed={open === a}
               className={`rounded px-3 py-1 text-sm disabled:opacity-50 ${a === 'finalize' ? 'bg-gray-900 text-white' : 'border border-gray-900'}`}
-              onClick={() => (a === 'submit' ? on.move({ action: 'submit' }) : setOpen(open === a ? null : a))}>{ACTION_LABEL[a]}</button>
+              onClick={() => (a === 'submit' ? void on.move({ action: 'submit' }) : a === 'reevaluate' ? void on.reevaluate() : setOpen(open === a ? null : a))}>{ACTION_LABEL[a]}</button>
           ))}
         </div>
       )}
 
-      {open && open !== 'finalize' && (
-        <form className="mt-3 rounded border border-gray-300 p-3 text-sm" onSubmit={(e) => { e.preventDefault(); on.move({ action: open as Exclude<Action, 'finalize' | 'submit'>, ...(note.trim() ? { note } : {}), ...(open === 'escalate' ? { department } : {}), ...(open === 'request_info' ? { items } : {}) }); reset(); }}>
+      {open && open !== 'finalize' && open !== 'reevaluate' && (
+        <form className="mt-3 rounded border border-gray-300 p-3 text-sm" onSubmit={(e) => { e.preventDefault(); void on.move({ action: open as Exclude<Action, 'finalize' | 'submit' | 'reevaluate'>, ...(note.trim() ? { note } : {}), ...(open === 'escalate' ? { department } : {}), ...(open === 'request_info' ? { items } : {}) }).then((ok) => ok && reset()); }}>
           {open === 'request_info' && (
             <fieldset>
               <legend className="font-medium">What is needed (pick at least one)</legend>
@@ -90,15 +96,17 @@ export function ReviewPanel({ view, busy, on }: { view: ReferralView; busy: bool
       )}
 
       {open === 'finalize' && ev && (
-        <form className="mt-3 rounded border border-gray-300 p-3 text-sm" onSubmit={(e) => { e.preventDefault(); if (decision) on.finalize({ evaluation_id: ev.id, decision, ...(override ? { override_reason: note } : {}) }); reset(); }}>
+        <form className="mt-3 rounded border border-gray-300 p-3 text-sm" onSubmit={(e) => { e.preventDefault(); if (decision) void on.finalize({ evaluation_id: ev.id, decision, ...(override ? { override_reason: note } : {}) }).then((ok) => ok && reset()); }}>
           <p>Recommendation: <span className="font-medium">{OUTCOME_TEXT[ev.outcome]}</span>. Staff make the decision.</p>
           {unconfirmed.length > 0 && <p role="alert" className="mt-1 text-red-800">State every fact above before deciding: {unconfirmed.map((c) => keyLabel(c.key)).join(', ')}.</p>}
           <fieldset className="mt-2">
             <legend className="font-medium">Decision</legend>
             {(['admit', 'do_not_admit'] as const).map((d) => (
-              <label key={d} className="mr-4"><input type="radio" name="decision" value={d} checked={decision === d} onChange={() => setDecision(d)} /> {OUTCOME_TEXT[d]}</label>
+              <label key={d} className="mr-4"><input type="radio" name="decision" value={d} checked={decision === d} disabled={d === 'admit' && (view.cosign.admit || view.admit_requires.length > 0)} onChange={() => setDecision(d)} /> {OUTCOME_TEXT[d]}</label>
             ))}
           </fieldset>
+          {view.cosign.admit && <p className="mt-1 text-xs">Admit over a hard stop needs a second Admin to co-sign; that arrives in the next build.</p>}
+          {!view.cosign.admit && view.admit_requires.length > 0 && <p className="mt-1 text-xs">Admit needs a known value (not unknown) for: {view.admit_requires.map(keyLabel).join(', ')}.</p>}
           {override && (
             <label className="mt-2 block">Override reason (required: the decision differs from the recommendation)
               <textarea required maxLength={view.form.note_max} rows={2} className="mt-1 block w-full rounded border p-1" value={note} onChange={(e) => setNote(e.target.value)} />

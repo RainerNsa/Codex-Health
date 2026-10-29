@@ -104,7 +104,7 @@ FROM (VALUES
   ('rule_sets', 'rule_sets_version'), ('rule_sets', 'rule_sets_audit'),
   ('facility_profiles', 'facility_profiles_version'), ('facility_profiles', 'facility_profiles_audit'),
   ('referral_transitions', 'referral_transitions_guard'), ('referral_transitions', 'referral_transitions_apply'),
-  ('referrals', 'referrals_app_status_guard')) AS e(tbl, trg)
+  ('referrals', 'referrals_app_status_guard'), ('decisions', 'decisions_app_guard'), ('decisions', 'decisions_finalized_check')) AS e(tbl, trg)
 WHERE to_regclass('public.' || e.tbl) IS NOT NULL
   AND NOT EXISTS (
     SELECT 1 FROM pg_trigger g

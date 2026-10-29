@@ -86,15 +86,62 @@ async function settingsOrRefuse(q: Query, facilityId: string, organizationId: st
   return rs;
 }
 
-interface EvaluationRow { id: string; outcome: string; clinical_outcome: string; trace: { confirmation_set?: string[] } }
+interface EvaluationRow { id: string; outcome: string; clinical_outcome: string; rule_set_version: number; facility_profile_version: number; trace: { confirmation_set?: string[] } }
 
 const latestEvaluation = async (q: Query, facilityId: string, referralId: string) => (await q<EvaluationRow & Record<string, unknown>>(
   `SELECT id, outcome, clinical_outcome, financial_status, sub_reasons, trace, engine_version, rule_set_version, facility_profile_version
    FROM evaluations WHERE facility_id = $1 AND referral_id = $2 ORDER BY evaluated_at DESC LIMIT 1`, [facilityId, referralId])).rows[0];
 
-/** 2.7: each fact the decision rests on, and whether a person has stated it (manual entry: a current user fact). */
-const confirmation = (ev: EvaluationRow | undefined, facts: { key: string; source: string }[]) =>
-  (ev?.trace.confirmation_set ?? []).map((key) => ({ key, confirmed: facts.some((f) => f.key === key && f.source === 'user') }));
+const isKnown = (v: FactValue) => v.value !== null && v.value !== 'unknown';
+
+/** 2.7: each fact the decision rests on, whether a person has stated it (manual entry: a current user fact), and
+ *  whether what they stated is a known value. */
+const confirmation = (keys: string[], facts: { key: string; source: string; value: FactValue }[]) => keys.map((key) => {
+  const f = facts.find((x) => x.key === key && x.source === 'user');
+  return { key, confirmed: f !== undefined, known: f !== undefined && isKnown(f.value) };
+});
+
+/** Admit is reachable only by positive confirmation (§4): an Admit decision needs a stated, known value for every
+ *  fact an enabled hard-stop or review rule reads, as well as the evaluation's own confirmation set. */
+const admitKeys = (ruleSet: RuleSet, ev: EvaluationRow) => [...new Set([
+  ...(ev.trace.confirmation_set ?? []),
+  ...ruleSet.rules.filter((r) => r.enabled && (r.kind === 'hard_stop' || r.kind === 'review')).flatMap((r) => r.inputs).filter((k) => !k.startsWith('facility.')),
+])].sort();
+
+/** A hard-stop input a person changed from one known value to another, at any point in its history (§5.1 T12,
+ *  open question 24). Unknown to known is a fact arriving, not a flip. */
+async function hardStopFlipped(q: Query, facilityId: string, referralId: string, ruleSet: RuleSet): Promise<boolean> {
+  const keys = [...new Set(ruleSet.rules.filter((r) => r.enabled && r.kind === 'hard_stop').flatMap((r) => r.inputs))];
+  const { rows } = await q<{ n: string }>(
+    `SELECT count(*) AS n FROM (
+       SELECT key FROM facts
+       WHERE facility_id = $1 AND referral_id = $2 AND key = ANY($3) AND value->'value' <> 'null'::jsonb AND value->>'value' <> 'unknown'
+       GROUP BY key HAVING count(DISTINCT value) > 1) flipped`, [facilityId, referralId, keys]);
+  return Number(rows[0]!.n) > 0;
+}
+
+/** Evaluate the current facts under the current settings and store the immutable snapshot (§14.2, I6). */
+async function reevaluate(q: Query, fid: string, rid: string, ruleSet: RuleSet, user: string, changedFactCount: number): Promise<void> {
+  const referralDate = todayIso();
+  const facts = await currentFacts(q, fid, rid);
+  const docs = await q<{ open: string }>(
+    "SELECT count(*) AS open FROM documents WHERE facility_id = $1 AND referral_id = $2 AND status NOT IN ('processed', 'not_applicable')", [fid, rid]);
+  const processingComplete = Number(docs.rows[0]!.open) === 0;
+  const result = evaluate({ facts, profile: ruleSet.profile, rules: ruleSet.rules, referral_date: referralDate, processing_complete: processingComplete });
+  const prev = await q<{ id: string }>('SELECT id FROM evaluations WHERE facility_id = $1 AND referral_id = $2 ORDER BY evaluated_at DESC LIMIT 1', [fid, rid]);
+  const { trace, missing, conflicts, blocking, empty_profile_keys, resolution_step, confirmation_set } = result;
+  const ev = await q<{ id: string }>(
+    `INSERT INTO evaluations (facility_id, referral_id, previous_evaluation_id, raw, outcome, clinical_outcome, financial_status, sub_reasons, trace,
+       criteria_document_ref, rule_set_version, facility_profile_version, model_id, prompt_version, extractor_version, ocr_engine_version, engine_version)
+     VALUES ($1, $2, $3, false, $4, $5, $6, $7, $8, $9, $10, $11, 'none', 'none', 'manual-entry', 'none', $12) RETURNING id`,
+    [fid, rid, prev.rows[0]?.id ?? null, result.outcome, result.clinical_outcome, result.financial_status, result.sub_reasons,
+      // every input of evaluate() beyond the facts is pinned, so the snapshot replays (I6)
+      { resolution_step, trace, missing, conflicts, blocking, empty_profile_keys, confirmation_set, inputs: { referral_date: referralDate, processing_complete: processingComplete, fact_ids: facts.map((f) => f.id) } }, ruleSet.criteriaRef, ruleSet.ruleSetVersion, ruleSet.profileVersion, ENGINE_VERSION]);
+  await audit(q, fid, user, 'evaluation.created', 'evaluation', ev.rows[0]!.id);
+  await emit(q, fid, rid, user, 'evaluation.created', {
+    evaluation_id: ev.rows[0]!.id, ...(prev.rows[0] ? { previous_evaluation_id: prev.rows[0].id } : {}), raw: false, outcome: result.outcome, changed_fact_count: changedFactCount,
+  });
+}
 
 async function referralView(q: Query, facilityId: string, referralId: string, ruleSet: RuleSet | null, role = '') {
   const ref = await q<{ id: string; status: string }>('SELECT id, status FROM referrals WHERE facility_id = $1 AND id = $2', [facilityId, referralId]);
@@ -109,6 +156,9 @@ async function referralView(q: Query, facilityId: string, referralId: string, ru
     `SELECT id, evaluation_id, recommended_outcome, decision, override_reason, decided_by, decided_at
      FROM decisions WHERE facility_id = $1 AND referral_id = $2 ORDER BY decided_at DESC LIMIT 1`, [facilityId, referralId]);
   const canWrite = WRITE_ROLES.has(role);
+  // the evaluation was made under settings that have since changed: decide only after re-evaluating
+  const outdated = !!ev && !!ruleSet && (ev.rule_set_version !== ruleSet.ruleSetVersion || ev.facility_profile_version !== ruleSet.profileVersion);
+  const flipped = ruleSet ? await hardStopFlipped(q, facilityId, referralId, ruleSet) : false;
   const explanations = Object.fromEntries((ruleSet?.rules ?? []).map((r) => [r.id, (r as { explanation?: string }).explanation ?? null]));
   return {
     referral: ref.rows[0],
@@ -116,13 +166,19 @@ async function referralView(q: Query, facilityId: string, referralId: string, ru
     form: { fact_keys: ruleSet?.factKeys ?? [], note_max: NOTE_MAX, configured: ruleSet !== null, departments: DEPARTMENTS },
     evaluation: ev ?? null,
     rule_explanations: explanations,
-    confirmation: confirmation(ev, facts),
+    confirmation: confirmation(ev?.trace.confirmation_set ?? [], facts),
+    // keys an Admit decision would also need stated as known values (shown when the recommendation is not Admit)
+    admit_requires: ev && ruleSet ? confirmation(admitKeys(ruleSet, ev), facts).filter((c) => !c.known).map((c) => c.key) : [],
+    evaluation_outdated: outdated,
+    // until the co-sign slice: a hard stop overridden to Admit, or any decision after a flipped hard-stop input
+    cosign: { admit: !!ev && (ev.outcome === 'do_not_admit' || ev.clinical_outcome === 'do_not_admit'), any: flipped },
     transitions: history.rows,
     decision: decision.rows[0] ?? null,
     // what this caller may do now; the API and the database check each again on the write
     actions: canWrite ? [
       ...(Object.keys(TRANSITIONS) as Action[]).filter((a) => (TRANSITIONS[a].from as readonly string[]).includes(status)),
-      ...(status === 'ready_for_review' && ev ? ['finalize'] : []),
+      ...(outdated && OPEN_STATES.has(status) ? ['reevaluate'] : []),
+      ...(status === 'ready_for_review' && ev && !outdated && !flipped ? ['finalize'] : []),
     ] : [],
   };
 }
@@ -230,24 +286,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx }): void {
         await emit(q, fid, rid, user, previous ? 'fact.corrected' : 'fact.entered', { ...(protectedKey ? {} : { fact_key: spec.key }), decisive: spec.critical });
 
         // Re-evaluate on the current fact set (§14.2: every fact change produces a new immutable snapshot).
-        const facts = await currentFacts(q, fid, rid);
-        const docs = await q<{ open: string }>(
-          "SELECT count(*) AS open FROM documents WHERE facility_id = $1 AND referral_id = $2 AND status NOT IN ('processed', 'not_applicable')", [fid, rid]);
-        const processingComplete = Number(docs.rows[0]!.open) === 0;
-        const result = evaluate({ facts, profile: ruleSet.profile, rules: ruleSet.rules, referral_date: referralDate, processing_complete: processingComplete });
-        const prev = await q<{ id: string }>('SELECT id FROM evaluations WHERE facility_id = $1 AND referral_id = $2 ORDER BY evaluated_at DESC LIMIT 1', [fid, rid]);
-        const { trace, missing, conflicts, blocking, empty_profile_keys, resolution_step, confirmation_set } = result;
-        const ev = await q<{ id: string }>(
-          `INSERT INTO evaluations (facility_id, referral_id, previous_evaluation_id, raw, outcome, clinical_outcome, financial_status, sub_reasons, trace,
-             criteria_document_ref, rule_set_version, facility_profile_version, model_id, prompt_version, extractor_version, ocr_engine_version, engine_version)
-           VALUES ($1, $2, $3, false, $4, $5, $6, $7, $8, $9, $10, $11, 'none', 'none', 'manual-entry', 'none', $12) RETURNING id`,
-          [fid, rid, prev.rows[0]?.id ?? null, result.outcome, result.clinical_outcome, result.financial_status, result.sub_reasons,
-            // every input of evaluate() beyond the facts is pinned, so the snapshot replays (I6)
-            { resolution_step, trace, missing, conflicts, blocking, empty_profile_keys, confirmation_set, inputs: { referral_date: referralDate, processing_complete: processingComplete, fact_ids: facts.map((f) => f.id) } }, ruleSet.criteriaRef, ruleSet.ruleSetVersion, ruleSet.profileVersion, ENGINE_VERSION]);
-        await audit(q, fid, user, 'evaluation.created', 'evaluation', ev.rows[0]!.id);
-        await emit(q, fid, rid, user, 'evaluation.created', {
-          evaluation_id: ev.rows[0]!.id, ...(prev.rows[0] ? { previous_evaluation_id: prev.rows[0].id } : {}), raw: false, outcome: result.outcome, changed_fact_count: 1,
-        });
+        await reevaluate(q, fid, rid, ruleSet, user, 1);
         return referralView(q, fid, rid, ruleSet, who.role);
       });
       return reply.code(201).send(body);
@@ -263,7 +302,8 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx }): void {
       const action = typeof b.action === 'string' && Object.hasOwn(TRANSITIONS, b.action) ? b.action as Action : null;
       if (!action) throw new HttpError(400, 'invalid_transition');
       const spec = TRANSITIONS[action];
-      const note = typeof b.note === 'string' && b.note.trim() ? b.note.trim() : null;
+      // a note on hold, escalate, resume (required) and request_info (optional); never on submit
+      const note = action !== 'submit' && typeof b.note === 'string' && b.note.trim() ? b.note.trim() : null;
       const department = action === 'escalate' && typeof b.department === 'string' && (DEPARTMENTS as readonly string[]).includes(b.department) ? b.department : null;
       const items = action === 'request_info' && Array.isArray(b.items) && b.items.every((i) => typeof i === 'string') ? [...new Set(b.items as string[])] : [];
       const needsNote = action === 'hold' || action === 'escalate' || action === 'resume';
@@ -297,6 +337,27 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx }): void {
     } catch (err) { return fail(reply, err); }
   });
 
+  // --- re-evaluate after a settings change (the facts are unchanged; the settings are not) ---------------------
+  app.post<{ Params: { fid: string; rid: string } }>('/api/facilities/:fid/referrals/:rid/evaluate', async (req, reply) => {
+    try {
+      const user = caller(req.headers);
+      const { fid, rid } = ids(req.params);
+      const body = await tx(async (q) => {
+        const who = await enter(q, fid, user);
+        if (!WRITE_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
+        const ruleSet = await settingsOrRefuse(q, fid, who.organizationId);
+        const ref = await q<{ status: string }>('SELECT status FROM referrals WHERE facility_id = $1 AND id = $2 FOR UPDATE', [fid, rid]);
+        if (!ref.rows[0]) throw new HttpError(404, 'not_found');
+        if (!OPEN_STATES.has(ref.rows[0].status)) throw new HttpError(409, 'referral_not_open');
+        const ev = await latestEvaluation(q, fid, rid);
+        if (!ev || (ev.rule_set_version === ruleSet.ruleSetVersion && ev.facility_profile_version === ruleSet.profileVersion)) throw new HttpError(409, 'evaluation_current');
+        await reevaluate(q, fid, rid, ruleSet, user, 0);
+        return referralView(q, fid, rid, ruleSet, who.role);
+      });
+      return reply.code(201).send(body);
+    } catch (err) { return fail(reply, err); }
+  });
+
   // --- finalize (T12): the decision pins the latest evaluation; the database enforces I5 again -----------------
   app.post<{ Params: { fid: string; rid: string }; Body: unknown }>('/api/facilities/:fid/referrals/:rid/decision', async (req, reply) => {
     try {
@@ -314,19 +375,18 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx }): void {
         if (!ref.rows[0]) throw new HttpError(404, 'not_found');
         if (ref.rows[0].status !== 'ready_for_review') throw new HttpError(409, 'transition_not_allowed');
         const ev = await latestEvaluation(q, fid, rid);
-        // decided on what the Reviewer saw: a newer evaluation since the screen loaded is refused
-        if (!ev || ev.id !== b.evaluation_id) throw new HttpError(409, 'evaluation_stale');
+        // decided on what the Reviewer saw, under the settings in force now: anything newer is refused
+        if (!ev || ev.id !== b.evaluation_id || ev.rule_set_version !== ruleSet.ruleSetVersion || ev.facility_profile_version !== ruleSet.profileVersion) {
+          throw new HttpError(409, 'evaluation_stale');
+        }
         const facts = await currentFacts(q, fid, rid);
-        if (confirmation(ev, facts).some((c) => !c.confirmed)) throw new HttpError(409, 'confirmation_incomplete');
+        if (!Array.isArray(ev.trace.confirmation_set) || confirmation(ev.trace.confirmation_set, facts).some((c) => !c.confirmed)) throw new HttpError(409, 'confirmation_incomplete');
+        if (decision === 'admit' && confirmation(admitKeys(ruleSet, ev), facts).some((c) => !c.known)) throw new HttpError(409, 'confirmation_incomplete');
         const override = decision !== ev.outcome;
         if (override !== (reason !== null)) throw new HttpError(400, override ? 'override_reason_required' : 'invalid_decision');
         // A hard stop overridden to Admit, or a correction that flipped a hard-stop input, needs an Admin co-sign
         // (§5.1 T12, I5, open question 24). The co-sign flow is the next slice; until then these are refused.
-        const hardKeys = new Set(ruleSet.rules.filter((r) => r.enabled && r.kind === 'hard_stop').flatMap((r) => r.inputs));
-        const flipped = await q<{ n: string }>(
-          `SELECT count(*) AS n FROM facts f JOIN facts o ON o.facility_id = f.facility_id AND o.id = f.supersedes
-           WHERE f.facility_id = $1 AND f.referral_id = $2 AND f.key = ANY($3) AND f.value <> o.value`, [fid, rid, [...hardKeys]]);
-        if ((decision === 'admit' && (ev.outcome === 'do_not_admit' || ev.clinical_outcome === 'do_not_admit')) || Number(flipped.rows[0]!.n) > 0) {
+        if ((decision === 'admit' && (ev.outcome === 'do_not_admit' || ev.clinical_outcome === 'do_not_admit')) || await hardStopFlipped(q, fid, rid, ruleSet)) {
           throw new HttpError(409, 'cosign_required');
         }
         const d = await q<{ id: string }>(

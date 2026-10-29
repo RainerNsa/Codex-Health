@@ -2,7 +2,7 @@
 // returns is rendered as text (no HTML injection anywhere, CONSTRAINTS Floor). Defaults are the synthetic seed
 // (scripts/dev/seed-synthetic.mjs): ZZTEST Alpha Facility 1 and its Reviewer.
 import { useState, type FormEvent } from 'react';
-import { ApiError, createReferral, enterFact, finalizeReferral, getReferral, moveReferral, type ReferralView, type Tri } from './api.ts';
+import { ApiError, createReferral, enterFact, finalizeReferral, getReferral, moveReferral, reevaluateReferral, type ReferralView, type Tri } from './api.ts';
 import { ReviewPanel } from './ReviewPanel.tsx';
 import { SettingsPanel } from './SettingsPanel.tsx';
 
@@ -27,8 +27,9 @@ const ERROR_TEXT: Record<string, string> = {
   transition_not_allowed: 'That step is not available from the referral\'s current status. Reload it.',
   invalid_decision: 'Check the decision: choose Admit or Do Not Admit; a reason only when it differs from the recommendation.',
   override_reason_required: 'The decision differs from the recommendation, so a reason is required.',
-  evaluation_stale: 'The recommendation changed since this screen loaded. Reload and decide again.',
-  confirmation_incomplete: 'State every fact the decision rests on before deciding.',
+  evaluation_stale: 'The recommendation or the facility settings changed since this screen loaded. Reload, re-evaluate if asked, and decide again.',
+  confirmation_incomplete: 'State every fact the decision rests on before deciding; Admit also needs known values, not unknown.',
+  evaluation_current: 'The recommendation is already up to date.',
   cosign_required: 'This decision needs a second Admin to co-sign. Co-signing arrives in the next build; until then it cannot be recorded.',
 };
 const keyLabel = (k: string) => k.replaceAll('_', ' ');
@@ -41,15 +42,17 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const run = async (fn: () => Promise<ReferralView>) => {
+  const run = async (fn: () => Promise<ReferralView>): Promise<boolean> => {
     setBusy(true);
     setError(null);
     try {
       const v = await fn();
       setView(v);
       setReferralId(v.referral.id);
+      return true;
     } catch (err) {
       setError(err instanceof ApiError ? (ERROR_TEXT[err.code] ?? `Request failed (${err.status}).`) : 'The API is not reachable.');
+      return false;
     } finally {
       setBusy(false);
     }
@@ -101,6 +104,7 @@ export function App() {
             <ReviewPanel view={view} busy={busy} on={{
               move: (body) => run(() => moveReferral(facility, view.referral.id, user, body)),
               finalize: (body) => run(() => finalizeReferral(facility, view.referral.id, user, body)),
+              reevaluate: () => run(() => reevaluateReferral(facility, view.referral.id, user)),
             }} />
           </div>
         </div>

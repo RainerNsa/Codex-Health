@@ -12,7 +12,7 @@ export interface Evaluation {
   sub_reasons: string[];
   trace: { resolution_step: string; trace: TraceEntry[]; missing: string[]; conflicts: string[]; blocking: string[]; empty_profile_keys: string[]; confirmation_set?: string[] };
 }
-export type Action = 'submit' | 'hold' | 'request_info' | 'escalate' | 'resume' | 'finalize';
+export type Action = 'submit' | 'hold' | 'request_info' | 'escalate' | 'resume' | 'finalize' | 'reevaluate';
 export interface TransitionRow { transition: string; from_status: string; to_status: string; note: string | null; department: string | null; requested_items: string[]; created_by: string; created_at: string }
 export interface DecisionRow { id: string; evaluation_id: string; recommended_outcome: string; decision: 'admit' | 'do_not_admit'; override_reason: string | null; decided_by: string; decided_at: string }
 export interface ReferralView {
@@ -21,7 +21,10 @@ export interface ReferralView {
   form: { fact_keys: FactKey[]; note_max: number; configured?: boolean; departments: string[] };
   evaluation: Evaluation | null;
   rule_explanations: Record<string, string | null>;
-  confirmation: { key: string; confirmed: boolean }[];
+  confirmation: { key: string; confirmed: boolean; known: boolean }[];
+  admit_requires: string[];
+  evaluation_outdated: boolean;
+  cosign: { admit: boolean; any: boolean };
   transitions: TransitionRow[];
   decision: DecisionRow | null;
   actions: Action[];
@@ -47,7 +50,9 @@ export const getReferral = (facility: string, referral: string, user: string) =>
 export const enterFact = (facility: string, referral: string, user: string, fact: { key: string; value: { type: 'tri_state'; value: Tri }; note: string; as_of_date: string | null }) =>
   call<ReferralView>(`/api/facilities/${facility}/referrals/${referral}/facts`, user, { method: 'POST', body: JSON.stringify(fact) });
 
-export const moveReferral = (facility: string, referral: string, user: string, body: { action: Exclude<Action, 'finalize'>; note?: string; department?: string; items?: string[] }) =>
+export const reevaluateReferral = (facility: string, referral: string, user: string) =>
+  call<ReferralView>(`/api/facilities/${facility}/referrals/${referral}/evaluate`, user, { method: 'POST', body: '{}' });
+export const moveReferral = (facility: string, referral: string, user: string, body: { action: Exclude<Action, 'finalize' | 'reevaluate'>; note?: string; department?: string; items?: string[] }) =>
   call<ReferralView>(`/api/facilities/${facility}/referrals/${referral}/transitions`, user, { method: 'POST', body: JSON.stringify(body) });
 export const finalizeReferral = (facility: string, referral: string, user: string, body: { evaluation_id: string; decision: 'admit' | 'do_not_admit'; override_reason?: string }) =>
   call<ReferralView>(`/api/facilities/${facility}/referrals/${referral}/decision`, user, { method: 'POST', body: JSON.stringify(body) });
