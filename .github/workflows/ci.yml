@@ -80,9 +80,9 @@ jobs:
           GITLEAKS_ENABLE_SUMMARY: 'false'
       - uses: google/osv-scanner-action/osv-scanner-action@b1d267aea5211fa648d9d442fa64b90dbdcbdd36 # v2.7.0
         with:
+          # exits non-zero on any known vulnerability (v2 default)
           scan-args: |
             --lockfile=package-lock.json
-            --fail-on-vuln
       - uses: actions/setup-node@39370e3970a6d050c480ffad4ff0ed4d3fdee5af # v4.1.0
         with:
           node-version: ${{ env.NODE_VERSION }}
