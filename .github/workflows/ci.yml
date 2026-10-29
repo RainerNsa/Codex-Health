@@ -198,6 +198,8 @@ jobs:
       # binds the owner and a superuser cannot mask a missing policy. Password is the local placeholder from
       # packages/db/sql/init/001_roles_and_database.sql.
       DATABASE_URL: postgres://codex_migrator:migrator-local-only@localhost:5432/codex_ci
+      # The API's production transaction helper is tested against the real codex_app login (local placeholder).
+      DATABASE_URL_APP: postgres://codex_app:app-local-only@localhost:5432/codex_ci
       # The db test suite skips without DATABASE_URL on a developer machine; here that would be a silent hole.
       REQUIRE_DATABASE: '1'
     steps:
@@ -223,6 +225,8 @@ jobs:
         run: npm test -w @codex-health/db
       - name: Anchoring job and verifier against LocalStack (write-once anchors, tamper and truncation detection)
         run: npm test -w @codex-health/anchor
+      - name: API against the database (manual fact entry as codex_app under RLS; auth stub, test env only)
+        run: npm test -w @codex-health/api
       - name: RLS enumeration and grant checks
         # Exit 0 only. A SKIP (2) here means DATABASE_URL was lost, which is a CI bug, not a pass.
         run: node scripts/checks/db-grants.mjs

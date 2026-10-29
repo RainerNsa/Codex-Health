@@ -121,3 +121,20 @@ Reset deletes the Postgres volume and LocalStack state. Nothing of value lives t
 | `Cannot find package 'pg'` | `npm install` not run at the root | `npm install` at the repo root (never inside a package) |
 | `npm run check` returns rows for a new table | New tenant table without FORCE RLS or a policy | Add them to the migration; do not edit the check |
 | LocalStack bucket or queues missing | `ready.d` hook failed or the volume mount is wrong | `docker compose logs localstack`; `docker compose restart localstack` reruns the hook |
+
+## Manual fact entry (M2): run the API and the web form
+
+The first reviewer-facing screen runs entirely on your machine, against the local database, with a local
+sign-in stub: a header carrying a seeded user id, accepted only when `CODEX_ENV` is `development` or `test`.
+The API refuses to start the stub under any other value. Nothing here is deployable; Cognito replaces the stub
+when a sandbox exists.
+
+```sh
+scripts/dev/up.sh                       # Postgres + LocalStack, migrations, synthetic seed
+CODEX_ENV=development DATABASE_URL_APP=postgres://codex_app:app-local-only@127.0.0.1:5432/codex_health \
+  npm run dev -w @codex-health/api      # API on 127.0.0.1:3000, as codex_app under RLS
+npm run dev -w @codex-health/web        # form on http://127.0.0.1:5173, proxies /api to the API
+```
+
+Pick "ZZTEST Reviewer", press **New referral**, enter facts with a note, and the recommendation re-evaluates
+after each one. The Viewer can open a referral but not change it. Every write and every read is audited.
