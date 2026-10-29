@@ -391,6 +391,8 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx }): void {
     if (ref.rows[0].status !== 'ready_for_review') throw new HttpError(409, 'transition_not_allowed');
     const ev = await latestEvaluation(q, fid, rid);
     // decided on what the Reviewer saw, under the settings in force now: anything newer is refused
+    // shortcut: settings are read before the referral lock and a settings save takes no referral lock, so a save
+    // committing in that gap is not seen by this decision; close it (re-read versions under a shared lock) before pilot
     if (!ev || ev.id !== evaluationId || ev.rule_set_version !== ruleSet.ruleSetVersion || ev.facility_profile_version !== ruleSet.profileVersion) {
       throw new HttpError(409, 'evaluation_stale');
     }
