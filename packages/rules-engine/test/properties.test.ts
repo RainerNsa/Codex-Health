@@ -1,7 +1,7 @@
 // Generative properties (dev-alignment 2.3; CONSTRAINTS I1, I6): random facts × random rule sets within the grammar.
 import { describe, expect, it } from 'vitest';
 import fc from 'fast-check';
-import { evaluate, evaluateRule, lintRule, presence, type Fact, type Rule, type TriState } from '../src/index.ts';
+import { evaluate, evaluateRule, lintRule, type Fact, type Rule, type TriState } from '../src/index.ts';
 
 const KEYS = ['a', 'b', 'c', 'd'] as const;
 const PKEYS = ['p', 'q'] as const;
