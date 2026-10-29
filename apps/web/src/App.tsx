@@ -2,7 +2,7 @@
 // returns is rendered as text (no HTML injection anywhere, CONSTRAINTS Floor). Defaults are the synthetic seed
 // (scripts/dev/seed-synthetic.mjs): ZZTEST Alpha Facility 1 and its Reviewer.
 import { useState, type FormEvent } from 'react';
-import { ApiError, createReferral, enterFact, finalizeReferral, getReferral, moveReferral, reevaluateReferral, type ReferralView, type Tri } from './api.ts';
+import { ApiError, cosignRequest, createReferral, enterFact, finalizeReferral, getReferral, moveReferral, reevaluateReferral, requestCosign, type ReferralView, type Tri } from './api.ts';
 import { ReviewPanel } from './ReviewPanel.tsx';
 import { SettingsPanel } from './SettingsPanel.tsx';
 
@@ -30,7 +30,11 @@ const ERROR_TEXT: Record<string, string> = {
   evaluation_stale: 'The recommendation or the facility settings changed since this screen loaded. Reload, re-evaluate if asked, and decide again.',
   confirmation_incomplete: 'State every fact the decision rests on before deciding; Admit also needs known values, not unknown.',
   evaluation_current: 'The recommendation is already up to date.',
-  cosign_required: 'This decision needs a second Admin to co-sign. Co-signing arrives in the next build; until then it cannot be recorded.',
+  cosign_required: 'This decision needs a second Admin to co-sign: file it for co-sign instead.',
+  cosign_not_needed: 'This decision needs no co-sign: record it directly.',
+  cosign_admin_only: 'Only an Admin can co-sign.',
+  cosign_own_request: 'You filed this decision, so a different Admin must co-sign it.',
+  request_not_current: 'A newer decision was filed since this one. Reload.',
 };
 const keyLabel = (k: string) => k.replaceAll('_', ' ');
 
@@ -105,6 +109,8 @@ export function App() {
               move: (body) => run(() => moveReferral(facility, view.referral.id, user, body)),
               finalize: (body) => run(() => finalizeReferral(facility, view.referral.id, user, body)),
               reevaluate: () => run(() => reevaluateReferral(facility, view.referral.id, user)),
+              requestCosign: (body) => run(() => requestCosign(facility, view.referral.id, user, body)),
+              cosign: (request) => run(() => cosignRequest(facility, view.referral.id, request, user)),
             }} />
           </div>
         </div>
