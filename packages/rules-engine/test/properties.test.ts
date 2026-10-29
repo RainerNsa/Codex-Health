@@ -77,8 +77,9 @@ describe('engine properties', () => {
       expect(v.criticalUnknown, 'a critical fact is unknown or conflicting').toBe(false);
       expect(v.hardFactUnknown, 'a hard-stop fact input is unknown').toBe(false);
       expect(v.hardProfileEmpty, 'a hard-stop profile input is empty').toBe(false);
-    }), { numRuns: 600 });
-    expect(admits, 'the Admit path must be reached often enough to test it').toBeGreaterThan(10);
+    }), { numRuns: 1500 });
+    // ~2% of generated inputs admit; 1500 runs give ~30, so a run with fewer than 8 signals a generator change, not noise
+    expect(admits, 'the Admit path must be reached often enough to test it').toBeGreaterThanOrEqual(8);
   });
   it('a stub that admits everything, or refuses everything, is distinguishable: some inputs admit and some do not', () => {
     const outcomes = new Set<string>();
