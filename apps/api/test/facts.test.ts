@@ -397,7 +397,7 @@ describe.skipIf(!url)('manual fact entry API', () => {
     view = (await get(refUrl(hs.rid), U.admin)).json();
     expect([view.pending_request.can_cosign, view.actions.includes('cosign')]).toEqual([true, true]);
     view = (await cosign(hs.rid, qid, U.admin)).json();
-    expect([view.referral.status, view.decision.decision, view.decision.decided_by, view.pending_request, view.actions]).toEqual(['finalized', 'admit', U.reviewer, null, []]);
+    expect([view.referral.status, view.decision.decision, view.decision.decided_by, view.pending_request, view.actions]).toEqual(['finalized', 'admit', U.reviewer, null, ['amend']]);
     await asOwner(FAC.a);
     const row = (await c.query('SELECT cosigned_by, cosigned_role, hard_stop_override, decision_request_id FROM decisions WHERE referral_id = $1', [hs.rid])).rows[0];
     expect(row).toEqual({ cosigned_by: U.admin, cosigned_role: 'facility_admin', hard_stop_override: true, decision_request_id: qid });
@@ -476,6 +476,65 @@ describe.skipIf(!url)('manual fact entry API', () => {
       await move(r.rid, U.reviewer, { action: 'submit' });
       expect((await finalize(r.rid, U.reviewer, { evaluation_id: r.ev.id, decision: 'admit' })).statusCode, JSON.stringify(steps)).toBe(201);
     }
+  });
+
+  // --- amendments (M3 slice 4; T13) ----------------------------------------------------------------------
+  const amend = (rid: string, user: string, body: unknown) => post(`${refUrl(rid)}/amendments`, user, body);
+
+  it('amend: an Admin records a new decision on a finalized referral with a reason; the original stays as it was', async () => {
+    const { rid, ev } = await withFacts(['ventilator_use', 'no'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
+    await move(rid, U.reviewer, { action: 'submit' });
+    const done = (await finalize(rid, U.reviewer, { evaluation_id: ev.id, decision: 'admit' })).json();
+    const original = done.decision;
+    expect([done.actions, (await get(refUrl(rid), U.admin)).json().actions]).toEqual([[], ['amend']]);
+    const body = { evaluation_id: ev.id, decision: 'do_not_admit', override_reason: 'SYNTHETIC: bed no longer available', amendment_reason: 'SYNTHETIC: facility capacity changed' };
+    expect((await amend(rid, U.reviewer, body)).json()).toEqual({ error: 'amend_admin_only' });
+    expect((await amend(rid, U.viewer, body)).statusCode).toBe(403);
+    expect((await amend(rid, U.admin, { ...body, amendment_reason: ' ' })).json()).toEqual({ error: 'amendment_reason_required' });
+    expect((await amend(rid, U.admin, { ...body, override_reason: undefined })).json()).toEqual({ error: 'override_reason_required' });
+    // settings changed after finalize do not block an amendment: the facts are frozen and it decides on the record
+    const path = `/api/facilities/${FAC.a}/settings`;
+    const cur = (await get(path, U.admin)).json();
+    await app.inject({ method: 'PUT', url: path, headers: as(U.admin), payload: { capabilities: cur.profile.capabilities, disabled_rules: cur.profile.disabled_rules, based_on_version: cur.profile.version } });
+    let view = (await amend(rid, U.admin, body)).json();
+    expect([view.referral.status, view.decision.decision, view.decision.amends_decision_id, view.decisions.length]).toEqual(['amended', 'do_not_admit', original.id, 2]);
+    expect(view.decisions[1]).toEqual(original); // untouched
+    // amend again, back to the recommendation: no override reason, a new amendment reason
+    view = (await amend(rid, U.admin, { evaluation_id: ev.id, decision: 'admit', amendment_reason: 'SYNTHETIC: bed reopened' })).json();
+    expect([view.referral.status, view.decisions.map((d: { decision: string }) => d.decision), view.transitions.map((t: { transition: string }) => t.transition)])
+      .toEqual(['amended', ['admit', 'do_not_admit', 'admit'], ['T14', 'T12', 'T13', 'T13']]);
+    // an amendment pins the recorded evaluation
+    const other = (await withFacts(['daily_skilled_need', 'yes'])).ev.id;
+    expect((await amend(rid, U.admin, { ...body, evaluation_id: other })).json()).toEqual({ error: 'evaluation_stale' });
+    // facts stay frozen after amending too
+    expect((await post(factsUrl(rid), U.reviewer, fact('ventilator_use', 'yes'))).json()).toEqual({ error: 'referral_not_open' });
+    await asOwner(FAC.a);
+    const audit = (await c.query("SELECT action FROM audit_log WHERE entity_id = ANY($1) AND action IN ('decision.amended', 'referral.amended') ORDER BY seq",
+      [[rid, ...view.decisions.map((d: { id: string }) => d.id)]])).rows.map((r) => r.action);
+    expect(audit).toEqual(['decision.amended', 'referral.amended', 'decision.amended', 'referral.amended']);
+    const evs = (await c.query("SELECT attrs FROM product_events WHERE referral_id = $1 AND event = 'decision.amended' ORDER BY at", [rid])).rows.map((r) => r.attrs.override);
+    expect(evs).toEqual([true, false]);
+  });
+
+  it('amend: an amendment to Admit over a hard stop is filed by one Admin and co-signed by another', async () => {
+    const ADMIN2 = '00000000-0000-4000-8000-00000000cc15';
+    await c.query("SELECT set_config('app.organization_id', $1, true), set_config('app.facility_id', $2, true)", [ORG.a, FAC.a]);
+    await c.query("INSERT INTO users (id, organization_id, email, display_name) VALUES ($1, $2, 'zztest.api.cc15@example.invalid', 'ZZTEST API admin two') ON CONFLICT DO NOTHING", [ADMIN2, ORG.a]);
+    await c.query("INSERT INTO user_facility_roles (user_id, facility_id, role) VALUES ($1, $2, 'facility_admin') ON CONFLICT DO NOTHING", [ADMIN2, FAC.a]);
+    await c.query("SELECT set_config('app.facility_id', '', true), set_config('app.organization_id', '', true)");
+    const hs = await withFacts(['ventilator_use', 'yes'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
+    await move(hs.rid, U.reviewer, { action: 'submit' });
+    await finalize(hs.rid, U.reviewer, { evaluation_id: hs.ev.id, decision: 'do_not_admit' });
+    const body = { evaluation_id: hs.ev.id, decision: 'admit', override_reason: 'SYNTHETIC: weaned before transfer', amendment_reason: 'SYNTHETIC: new discharge summary' };
+    expect((await amend(hs.rid, U.admin, body)).json()).toEqual({ error: 'cosign_required' });
+    expect((await requestCosign(hs.rid, U.reviewer, body)).json()).toEqual({ error: 'amend_admin_only' });
+    const filed = (await requestCosign(hs.rid, U.admin, body)).json().pending_request;
+    expect([filed.amendment_reason, filed.can_cosign]).toEqual(['SYNTHETIC: new discharge summary', false]);
+    expect((await cosign(hs.rid, filed.id, U.admin)).json()).toEqual({ error: 'cosign_own_request' });
+    const view = (await cosign(hs.rid, filed.id, ADMIN2)).json();
+    expect([view.referral.status, view.decision.decision, view.decision.decided_by, view.decision.cosigned_by, view.pending_request])
+      .toEqual(['amended', 'admit', U.admin, ADMIN2, null]);
+    expect((await cosign(hs.rid, filed.id, ADMIN2)).json()).toEqual({ error: 'request_not_current' });
   });
 
   it('review: hold, request information, escalate and resume move only from the states §5.1 allows, each with its fields', async () => {

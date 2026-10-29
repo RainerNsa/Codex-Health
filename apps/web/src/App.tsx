@@ -2,7 +2,7 @@
 // returns is rendered as text (no HTML injection anywhere, CONSTRAINTS Floor). Defaults are the synthetic seed
 // (scripts/dev/seed-synthetic.mjs): ZZTEST Alpha Facility 1 and its Reviewer.
 import { useState, type FormEvent } from 'react';
-import { ApiError, cosignRequest, createReferral, enterFact, finalizeReferral, getReferral, moveReferral, reevaluateReferral, requestCosign, type ReferralView, type Tri } from './api.ts';
+import { amendReferral, ApiError, cosignRequest, createReferral, enterFact, finalizeReferral, getReferral, moveReferral, reevaluateReferral, requestCosign, type ReferralView, type Tri } from './api.ts';
 import { ReviewPanel } from './ReviewPanel.tsx';
 import { SettingsPanel } from './SettingsPanel.tsx';
 
@@ -21,7 +21,7 @@ const ERROR_TEXT: Record<string, string> = {
   unauthenticated: 'Choose a user first.', not_found: 'Not found, or not visible to this user at this facility.', forbidden: 'This user may read but not change this referral.',
   invalid_fact: 'Check the entry: a value and a note are required, and the date must be real and not in the future.',
   facility_not_configured: 'This facility has no rule set or profile yet. An Admin sets them under Facility settings.',
-  rule_set_refused: 'The organisation\'s rule set is invalid, so referrals cannot be evaluated until it is replaced.', referral_not_open: 'This referral is finalized; it changes only by amendment.',
+  rule_set_refused: 'The organisation\'s rule set is invalid, so referrals cannot be evaluated until it is replaced.', referral_not_open: 'This referral is finalized; its facts are frozen and only the decision can be amended, by an Admin.',
   rejected: 'The database refused this change.',
   invalid_transition: 'Check the entry: a note is required, and a department or at least one requested item where asked.',
   transition_not_allowed: 'That step is not available from the referral\'s current status. Reload it.',
@@ -33,6 +33,8 @@ const ERROR_TEXT: Record<string, string> = {
   cosign_required: 'This decision needs a second Admin to co-sign: file it for co-sign instead.',
   cosign_not_needed: 'This decision needs no co-sign: record it directly.',
   cosign_admin_only: 'Only an Admin can co-sign.',
+  amend_admin_only: 'Only an Admin can amend a decision.',
+  amendment_reason_required: 'Say why the decision is being amended.',
   cosign_own_request: 'You filed this decision, so a different Admin must co-sign it.',
   request_not_current: 'A newer decision was filed since this one. Reload.',
 };
@@ -110,6 +112,7 @@ export function App() {
               finalize: (body) => run(() => finalizeReferral(facility, view.referral.id, user, body)),
               reevaluate: () => run(() => reevaluateReferral(facility, view.referral.id, user)),
               requestCosign: (body) => run(() => requestCosign(facility, view.referral.id, user, body)),
+              amend: (body) => run(() => amendReferral(facility, view.referral.id, user, body)),
               cosign: (request) => run(() => cosignRequest(facility, view.referral.id, request, user)),
             }} />
           </div>

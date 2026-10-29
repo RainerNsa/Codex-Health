@@ -2,12 +2,12 @@
 // actions this user may take now, and the record of what happened. The API returns the allowed actions and
 // checks each again; the database checks the transition and the decision a third time. Text only, no HTML.
 import { useState } from 'react';
-import type { Action, ReferralView } from './api.ts';
+import type { Action, DecisionBody, ReferralView } from './api.ts';
 
 const keyLabel = (k: string) => k.replaceAll('_', ' ');
 const ACTION_LABEL: Record<Action, string> = {
   submit: 'Submit for review', hold: 'Hold', request_info: 'Request information', escalate: 'Escalate', resume: 'Resume review', finalize: 'Record decision',
-  reevaluate: 'Re-evaluate with current settings', cosign: 'Co-sign the filed decision',
+  reevaluate: 'Re-evaluate with current settings', cosign: 'Co-sign the filed decision', amend: 'Amend the decision',
 };
 const STATUS_LABEL: Record<string, string> = {
   draft: 'Draft', ready_for_review: 'Ready for review', on_hold: 'On hold', info_requested: 'Information requested', escalated: 'Escalated', finalized: 'Finalized', amended: 'Amended',
@@ -16,9 +16,10 @@ const OUTCOME_TEXT: Record<string, string> = { admit: 'Admit', do_not_admit: 'Do
 
 // Each handler resolves true when the API accepted the request; a refused request keeps what was typed.
 export interface ReviewHandlers {
-  move: (body: { action: Exclude<Action, 'finalize' | 'reevaluate' | 'cosign'>; note?: string; department?: string; items?: string[] }) => Promise<boolean>;
-  finalize: (body: { evaluation_id: string; decision: 'admit' | 'do_not_admit'; override_reason?: string }) => Promise<boolean>;
-  requestCosign: (body: { evaluation_id: string; decision: 'admit' | 'do_not_admit'; override_reason?: string }) => Promise<boolean>;
+  move: (body: { action: Exclude<Action, 'finalize' | 'reevaluate' | 'cosign' | 'amend'>; note?: string; department?: string; items?: string[] }) => Promise<boolean>;
+  finalize: (body: DecisionBody) => Promise<boolean>;
+  amend: (body: DecisionBody) => Promise<boolean>;
+  requestCosign: (body: DecisionBody) => Promise<boolean>;
   cosign: (request: string) => Promise<boolean>;
   reevaluate: () => Promise<boolean>;
 }
@@ -29,12 +30,14 @@ export function ReviewPanel({ view, busy, on }: { view: ReferralView; busy: bool
   const [department, setDepartment] = useState('');
   const [items, setItems] = useState<string[]>([]);
   const [decision, setDecision] = useState<'admit' | 'do_not_admit' | ''>('');
+  const [amendmentReason, setAmendmentReason] = useState('');
   const ev = view.evaluation;
   const unconfirmed = view.confirmation.filter((c) => !c.confirmed);
   const override = ev !== null && decision !== '' && decision !== ev.outcome;
   // a hard stop overridden to Admit, or any decision after a flipped hard-stop input, is filed for an Admin to co-sign
   const needsCosign = decision !== '' && (view.cosign.any || (decision === 'admit' && view.cosign.admit));
-  const reset = () => { setOpen(null); setNote(''); setDepartment(''); setItems([]); setDecision(''); };
+  const reset = () => { setOpen(null); setNote(''); setDepartment(''); setItems([]); setDecision(''); setAmendmentReason(''); };
+  const amending = open === 'amend';
   const requestable = [...new Set([...(ev?.trace.blocking ?? []), ...(ev?.trace.missing ?? []), ...view.form.fact_keys.map((k) => k.key)])];
 
   return (
@@ -53,10 +56,17 @@ export function ReviewPanel({ view, busy, on }: { view: ReferralView; busy: bool
         </div>
       )}
 
-      {view.decision && (
+      {view.decisions.length > 0 && (
         <div className="mt-3 rounded border-l-4 border-gray-700 bg-gray-50 p-2 text-sm">
-          Decision: <span className="font-medium">{OUTCOME_TEXT[view.decision.decision]}</span> (recommended {OUTCOME_TEXT[view.decision.recommended_outcome]}).
-          {view.decision.override_reason && <> Override reason: {view.decision.override_reason}</>}
+          <h3 className="font-medium">Decisions (newest first; none is ever changed)</h3>
+          <ol>
+            {view.decisions.map((d, i) => (
+              <li key={d.id} className={i === 0 ? 'font-medium' : 'text-gray-700'}>
+                {new Date(d.decided_at).toLocaleString()}: {d.amends_decision_id ? 'Amended to' : 'Decided'} {OUTCOME_TEXT[d.decision]} (recommended {OUTCOME_TEXT[d.recommended_outcome]})
+                {d.cosigned_by ? ', co-signed' : ''}{d.override_reason ? `. Override reason: ${d.override_reason}` : ''}{d.amendment_reason ? `. Amendment reason: ${d.amendment_reason}` : ''}
+              </li>
+            ))}
+          </ol>
         </div>
       )}
 
@@ -65,7 +75,8 @@ export function ReviewPanel({ view, busy, on }: { view: ReferralView; busy: bool
       {!view.cosign.any && view.cosign.admit && view.evaluation?.outcome !== 'do_not_admit' && <p role="status" className="mt-2 text-sm text-amber-900">A hard stop decided this referral earlier, so an Admit is filed for a second Admin to co-sign.</p>}
       {view.pending_request && (
         <div className="mt-2 rounded border-l-4 border-amber-700 bg-amber-50 p-2 text-sm">
-          Filed for co-sign by {view.pending_request.requested_by_name}: <span className="font-medium">{OUTCOME_TEXT[view.pending_request.decision]}</span>
+          {view.pending_request.amends_decision_id ? 'Amendment filed' : 'Filed'} for co-sign by {view.pending_request.requested_by_name}: <span className="font-medium">{OUTCOME_TEXT[view.pending_request.decision]}</span>
+          {view.pending_request.amendment_reason && <> (amendment reason: {view.pending_request.amendment_reason})</>}
           {view.pending_request.override_reason && <> (reason: {view.pending_request.override_reason})</>}.
           {' '}{view.pending_request.can_cosign ? 'You can co-sign it.' : 'Waiting for an Admin who did not file it.'}
           {open === 'cosign' && view.pending_request.can_cosign && (
@@ -90,8 +101,8 @@ export function ReviewPanel({ view, busy, on }: { view: ReferralView; busy: bool
         </div>
       )}
 
-      {open && open !== 'finalize' && open !== 'reevaluate' && open !== 'cosign' && (
-        <form className="mt-3 rounded border border-gray-300 p-3 text-sm" onSubmit={(e) => { e.preventDefault(); void on.move({ action: open as Exclude<Action, 'finalize' | 'submit' | 'reevaluate' | 'cosign'>, ...(note.trim() ? { note } : {}), ...(open === 'escalate' ? { department } : {}), ...(open === 'request_info' ? { items } : {}) }).then((ok) => ok && reset()); }}>
+      {open && open !== 'finalize' && open !== 'reevaluate' && open !== 'cosign' && open !== 'amend' && (
+        <form className="mt-3 rounded border border-gray-300 p-3 text-sm" onSubmit={(e) => { e.preventDefault(); void on.move({ action: open as Exclude<Action, 'finalize' | 'submit' | 'reevaluate' | 'cosign' | 'amend'>, ...(note.trim() ? { note } : {}), ...(open === 'escalate' ? { department } : {}), ...(open === 'request_info' ? { items } : {}) }).then((ok) => ok && reset()); }}>
           {open === 'request_info' && (
             <fieldset>
               <legend className="font-medium">What is needed (pick at least one)</legend>
@@ -116,13 +127,18 @@ export function ReviewPanel({ view, busy, on }: { view: ReferralView; busy: bool
         </form>
       )}
 
-      {open === 'finalize' && ev && (
+      {(open === 'finalize' || amending) && ev && (
         <form className="mt-3 rounded border border-gray-300 p-3 text-sm" onSubmit={(e) => {
           e.preventDefault();
           if (!decision) return;
-          const body = { evaluation_id: ev.id, decision, ...(override ? { override_reason: note } : {}) };
-          void (needsCosign ? on.requestCosign(body) : on.finalize(body)).then((ok) => ok && reset());
+          const body: DecisionBody = { evaluation_id: ev.id, decision, ...(override ? { override_reason: note } : {}), ...(amending ? { amendment_reason: amendmentReason } : {}) };
+          void (needsCosign ? on.requestCosign(body) : amending ? on.amend(body) : on.finalize(body)).then((ok) => ok && reset());
         }}>
+          {amending && (
+            <label className="mb-2 block">Why the decision is being amended (required; the earlier decision stays on record)
+              <textarea required maxLength={view.form.note_max} rows={2} className="mt-1 block w-full rounded border p-1" value={amendmentReason} onChange={(e) => setAmendmentReason(e.target.value)} />
+            </label>
+          )}
           <p>Recommendation: <span className="font-medium">{OUTCOME_TEXT[ev.outcome]}</span>. Staff make the decision.</p>
           {unconfirmed.length > 0 && <p role="alert" className="mt-1 text-red-800">State every fact above before deciding: {unconfirmed.map((c) => keyLabel(c.key)).join(', ')}.</p>}
           <fieldset className="mt-2">
@@ -138,7 +154,7 @@ export function ReviewPanel({ view, busy, on }: { view: ReferralView; busy: bool
               <textarea required maxLength={view.form.note_max} rows={2} className="mt-1 block w-full rounded border p-1" value={note} onChange={(e) => setNote(e.target.value)} />
             </label>
           )}
-          <button type="submit" disabled={busy || !decision || unconfirmed.length > 0 || (override && !note.trim())} className="mt-2 rounded bg-gray-900 px-3 py-1 text-white disabled:opacity-50">{needsCosign ? 'File for co-sign' : 'Record decision'}</button>
+          <button type="submit" disabled={busy || !decision || unconfirmed.length > 0 || (override && !note.trim()) || (amending && !amendmentReason.trim())} className="mt-2 rounded bg-gray-900 px-3 py-1 text-white disabled:opacity-50">{needsCosign ? 'File for co-sign' : amending ? 'Record amendment' : 'Record decision'}</button>
         </form>
       )}
 
