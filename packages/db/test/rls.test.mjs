@@ -267,6 +267,8 @@ test('row-level security, organisation isolation, audit immutability, the hash c
       // the one column the app may name in an UPDATE exists for row locks only; the guard refuses the write itself
       await expectFailure(c, 'UPDATE referrals SET updated_at = now() WHERE facility_id = $1', /only through referral_transitions/, [FAC.a1]);
       await expectFailure(c, "INSERT INTO referrals (facility_id, status) VALUES ($1, 'finalized')", /permission denied/, [FAC.a1]);
+      // no temporary tables for the app role: they would shadow the tables the guards read (re-review of PR #24)
+      await expectFailure(c, 'CREATE TEMP TABLE referrals (facility_id uuid, id uuid, status referral_status)', /permission denied/);
     });
 
     await sub('concurrency: a second session holding one facility chain lock blocks an append to it, not to another facility', async () => {

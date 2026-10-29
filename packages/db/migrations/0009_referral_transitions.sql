@@ -163,5 +163,22 @@ GRANT INSERT (facility_id) ON referrals TO codex_app;
 -- UPDATE on one column only so the API can take the row lock (SELECT ... FOR UPDATE needs it); the guard trigger
 -- refuses every UPDATE the app role actually issues.
 GRANT UPDATE (updated_at) ON referrals TO codex_app;
--- shortcut: codex_app keeps PUBLIC's TEMP on the database (temp tables and triggers); with no UPDATE grant on
--- referrals it cannot move a status that way. Revoke TEMP from PUBLIC when the sandbox database is provisioned.
+-- Temporary tables shadow every unqualified table name in a trigger function (pg_temp is searched first unless
+-- named last), so a role that can create them can feed any guard a fake referrals, user_facility_roles or
+-- audit_log (security re-review of PR #24). Two independent fixes, both checked by grants.sql:
+--   1. no role but the owner may create temporary objects in this database;
+--   2. every function in public, from every migration, pins search_path with pg_temp last.
+DO $$
+BEGIN
+  EXECUTE format('REVOKE TEMPORARY ON DATABASE %I FROM PUBLIC', current_database());
+END
+$$;
+DO $$
+DECLARE
+  f regprocedure;
+BEGIN
+  FOR f IN SELECT p.oid::regprocedure FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace WHERE n.nspname = 'public' LOOP
+    EXECUTE format('ALTER FUNCTION %s SET search_path = pg_catalog, public, pg_temp', f);
+  END LOOP;
+END
+$$;

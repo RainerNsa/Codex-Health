@@ -36,6 +36,17 @@ SELECT k.rolname, 'role has CREATE on schema public'
 FROM checked k
 WHERE has_schema_privilege(k.rolname, 'public', 'CREATE')
 UNION ALL
+-- Temporary tables shadow unqualified table names inside trigger functions (security re-review of PR #24):
+-- no checked role may create them, and every function in public pins search_path with pg_temp last.
+SELECT k.rolname, 'role has TEMPORARY on this database'
+FROM checked k
+WHERE has_database_privilege(k.rolname, current_database(), 'TEMPORARY')
+UNION ALL
+SELECT p.oid::regprocedure::text, 'function in public does not pin search_path = pg_catalog, public, pg_temp'
+FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = 'public'
+  AND NOT coalesce('search_path=pg_catalog, public, pg_temp' = ANY (p.proconfig), false)
+UNION ALL
 -- has_any_column_privilege also counts a table-level grant, and catches GRANT UPDATE (col) ON audit_log,
 -- which has_table_privilege would miss. DELETE and TRUNCATE exist only at table level.
 SELECT k.rolname, 'role has UPDATE on ' || t.tbl || ' (table- or column-level)'

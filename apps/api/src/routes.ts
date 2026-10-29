@@ -116,7 +116,7 @@ async function hardStopFlipped(q: Query, facilityId: string, referralId: string,
     `SELECT count(*) AS n FROM (
        SELECT key FROM facts
        WHERE facility_id = $1 AND referral_id = $2 AND key = ANY($3) AND value->'value' <> 'null'::jsonb AND value->>'value' <> 'unknown'
-       GROUP BY key HAVING count(DISTINCT value) > 1) flipped`, [facilityId, referralId, keys]);
+       GROUP BY key HAVING count(DISTINCT value->'value') > 1) flipped`, [facilityId, referralId, keys]);
   return Number(rows[0]!.n) > 0;
 }
 
