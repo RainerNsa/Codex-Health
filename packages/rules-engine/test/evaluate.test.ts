@@ -239,6 +239,8 @@ describe('minimum confirmation set (2.7), by outcome', () => {
     expect([r.outcome, r.confirmation_set]).toEqual(['needs_review', ['daily_skilled_need', 'payer_pending', 'recent_aggression', 'ventilator_use']]);
     const quiet = run([tri('ventilator_use', 'no'), tri('recent_aggression', 'no'), tri('daily_skilled_need', 'no'), tri('payer_pending', 'no')]);
     expect([quiet.outcome, quiet.confirmation_set]).toEqual(['needs_review', ['ventilator_use']]);
+    const unknownReview = run([tri('ventilator_use', 'no'), tri('daily_skilled_need', 'no'), tri('payer_pending', 'no')]);
+    expect([unknownReview.outcome, unknownReview.confirmation_set.includes('recent_aggression')]).toEqual(['needs_review', false]); // an unknown review rule did not fire
   });
   it('never includes a profile key, and a disabled hard stop adds nothing', () => {
     const r = evaluate({ facts: [], profile: {}, rules: [{ ...HARD, enabled: false }, rule('h2', 'hard_stop', 'a is yes AND facility.k is true', ['a', 'facility.k'])], referral_date: '2001-01-10', processing_complete: true });

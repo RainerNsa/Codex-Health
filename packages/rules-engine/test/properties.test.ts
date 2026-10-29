@@ -145,6 +145,8 @@ describe('engine properties', () => {
       ].filter((k) => !k.startsWith('facility.')));
       for (const k of mustConfirm) expect(r.confirmation_set, `${k} decides this Admit`).toContain(k);
       for (const k of r.confirmation_set) expect(k.startsWith('facility.')).toBe(false);
+      expect(new Set(r.confirmation_set).size, 'no duplicates').toBe(r.confirmation_set.length);
+      expect(r.confirmation_set, 'sorted by code').toEqual([...r.confirmation_set].sort((a, b) => (a < b ? -1 : a > b ? 1 : 0)));
     }), { numRuns: 1500 });
     expect(admits).toBeGreaterThanOrEqual(8);
   });
