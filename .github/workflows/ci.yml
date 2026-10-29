@@ -55,22 +55,24 @@ jobs:
   security:
     name: security
     runs-on: ubuntu-latest
-    container:
-      image: semgrep/semgrep:1.181.1
     steps:
       - uses: actions/checkout@11bd71901bbe5b1630ceea73d27597364c9af683 # v4.2.2
         with:
           fetch-depth: 0   # gitleaks scans every commit, not just the tip
+      # Semgrep runs from its image, pinned by content digest (1.181.1), as a step: a job-level container would
+      # put gitleaks-action and osv-scanner inside Alpine (BusyBox tar, foreign HOME) and break their uploads.
+      # Excluded: docs/tooling/upstream (vendored third-party READMEs and env examples, read-only reference, not
+      # our code) and the RDS "no logging" rule: RDS log exports are off BY DESIGN because statement logs carry
+      # PHI (infra/README.md "Deliberately missing"; CONSTRAINTS data policy 5; SPEC §12). Exclusions live here,
+      # in a guarded file with the reason, never as an inline nosemgrep (CONSTRAINTS Floor).
       - name: semgrep (default rules, no metrics, no upload)
-        # Excluded: docs/tooling/upstream (vendored third-party READMEs and env examples, read-only reference, not our
-        # code) and the RDS "no logging" rule: RDS log exports are off BY DESIGN because statement logs carry PHI
-        # (infra/README.md "Deliberately missing"; CONSTRAINTS data policy 5; SPEC §12). Exclusions live here, in a
-        # guarded file with the reason, never as an inline nosemgrep (CONSTRAINTS Floor).
-        run: >-
-          semgrep scan --config p/default --error --metrics=off
-          --exclude node_modules --exclude '*.lock' --exclude docs/tooling/upstream
-          --exclude-rule terraform.aws.security.aws-db-instance-no-logging.aws-db-instance-no-logging
-          .
+        uses: docker://semgrep/semgrep@sha256:3db5c7af55eb1f512eac0abf0ab69a97b52c74b5e9a27314c221aee1a78d7ab2 # 1.181.1
+        with:
+          args: >-
+            semgrep scan --config p/default --error --metrics=off
+            --exclude node_modules --exclude '*.lock' --exclude docs/tooling/upstream
+            --exclude-rule terraform.aws.security.aws-db-instance-no-logging.aws-db-instance-no-logging
+            .
       - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
