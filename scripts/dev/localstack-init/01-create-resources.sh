@@ -4,6 +4,9 @@
 set -euo pipefail
 
 awslocal s3 mb s3://codex-health-documents-local 2>/dev/null || true
+# Anchor bucket stand-in: versioned so the verifier can read first versions. Object Lock and the deny-delete policy exist only on the real bucket.
+awslocal s3 mb s3://codex-health-audit-anchor-local 2>/dev/null || true
+awslocal s3api put-bucket-versioning --bucket codex-health-audit-anchor-local --versioning-configuration Status=Enabled
 
 awslocal sqs create-queue --queue-name codex-healthcessing-dlq >/dev/null
 DLQ_ARN=$(awslocal sqs get-queue-attributes \

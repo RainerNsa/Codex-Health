@@ -1,0 +1,17 @@
+{
+  "name": "@codex-health/anchor",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Audit-chain anchoring job and verifier: writes each facility's and organisation's chain head to the write-once anchor bucket once a day and checks the database against the first version of every anchor. Read-only database role codex_anchor. Never public.",
+  "type": "module",
+  "scripts": {
+    "anchor": "node src/anchor.mjs",
+    "verify": "node src/verify.mjs",
+    "lint": "eslint --config ../../eslint.config.js src test",
+    "test": "node --test test/anchor.test.mjs"
+  },
+  "dependencies": {
+    "@aws-sdk/client-s3": "^3.700.0",
+    "pg": "^8"
+  }
+}

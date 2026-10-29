@@ -43,6 +43,9 @@ JOIN pg_policy p ON p.polrelid = r.oid
 WHERE r.has_facility_id
   AND coalesce(pg_get_expr(p.polqual, p.polrelid), '') || coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '')
       NOT LIKE '%app.facility_id%'
+  -- the one allowed exception (0006): the anchoring role may enumerate facilities, SELECT only, by this exact policy
+  AND NOT (r.relname = 'facilities' AND p.polname = 'anchor_enumeration' AND p.polcmd = 'r'
+           AND p.polroles = ARRAY[(SELECT oid FROM pg_roles WHERE rolname = 'codex_anchor')]::oid[])
 UNION ALL
 SELECT nspname, relname, 'table in public without facility_id (not on the non-tenant allowlist)'
 FROM rels
@@ -60,6 +63,9 @@ FROM rels r
 LEFT JOIN pg_policy p ON p.polrelid = r.oid
 WHERE r.nspname = 'public' AND r.relname IN ('organizations', 'users', 'platform_audit_log')
   AND (p.oid IS NULL
-       OR coalesce(pg_get_expr(p.polqual, p.polrelid), '') || coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '')
-          NOT LIKE '%app.organization_id%')
+       OR (coalesce(pg_get_expr(p.polqual, p.polrelid), '') || coalesce(pg_get_expr(p.polwithcheck, p.polrelid), '')
+             NOT LIKE '%app.organization_id%'
+           -- the one allowed exception (0006): the anchoring role may enumerate organisations, SELECT only
+           AND NOT (r.relname = 'organizations' AND p.polname = 'anchor_enumeration' AND p.polcmd = 'r'
+                    AND p.polroles = ARRAY[(SELECT oid FROM pg_roles WHERE rolname = 'codex_anchor')]::oid[])))
 ORDER BY 1, 2, 3;
