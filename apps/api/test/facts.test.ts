@@ -7,7 +7,8 @@ import pg from 'pg';
 import { buildServer } from '../src/server.ts';
 import { DEV_USER_HEADER } from '../src/auth.ts';
 import { poolTx, type Tx } from '../src/db.ts';
-import { loadSeedRuleSet } from '../src/ruleset.ts';
+import { readdirSync, readFileSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const url = process.env['DATABASE_URL'];
 const appUrl = process.env['DATABASE_URL_APP'];
@@ -17,6 +18,9 @@ const ORG = { a: '00000000-0000-4000-8000-00000000c101', b: '00000000-0000-4000-
 const FAC = { a: '00000000-0000-4000-8000-00000000fc11', b: '00000000-0000-4000-8000-00000000fc21' };
 const U = { reviewer: '00000000-0000-4000-8000-00000000cc11', viewer: '00000000-0000-4000-8000-00000000cc12', admin: '00000000-0000-4000-8000-00000000cc13', other: '00000000-0000-4000-8000-00000000cc21', both: '00000000-0000-4000-8000-00000000cc14' };
 const NOTE = 'SYNTHETIC: verbal update from the hospital liaison';
+const EXAMPLES = fileURLToPath(new URL('../../../packages/schemas/examples/', import.meta.url));
+const SEED_RULES = readdirSync(`${EXAMPLES}rules`).filter((f) => f.endsWith('.json')).sort().map((f) => JSON.parse(readFileSync(`${EXAMPLES}rules/${f}`, 'utf8')));
+const SEED_CAPS = JSON.parse(readFileSync(`${EXAMPLES}profiles/zztest-facility.json`, 'utf8')).capabilities;
 
 describe.skipIf(!url)('manual fact entry API', () => {
   const c = new pg.Client({ connectionString: url });
@@ -63,6 +67,12 @@ describe.skipIf(!url)('manual fact entry API', () => {
       await c.query("SELECT set_config('app.organization_id', $1, true), set_config('app.facility_id', $2, true)", [ORG[k], FAC[k]]);
       await c.query('INSERT INTO users (id, organization_id, email, display_name) VALUES ($1, $2, $3, $4)', [id, ORG[k], `zztest.api.${id.slice(-4)}@example.invalid`, 'ZZTEST API user']);
       for (const role of roles) await c.query('INSERT INTO user_facility_roles (user_id, facility_id, role) VALUES ($1, $2, $3)', [id, FAC[k], role]);
+    }
+    // settings (0008): the seed rule set for both organisations, the synthetic profile for both facilities
+    for (const k of ['a', 'b'] as const) {
+      await c.query("SELECT set_config('app.organization_id', $1, true), set_config('app.facility_id', $2, true)", [ORG[k], FAC[k]]);
+      await c.query("INSERT INTO rule_sets (organization_id, version, criteria_document_ref, rules, created_by) VALUES ($1, 0, 'seed', $2, 'platform:test')", [ORG[k], JSON.stringify(SEED_RULES)]);
+      await c.query("INSERT INTO facility_profiles (facility_id, version, capabilities, created_by) VALUES ($1, 0, $2, 'platform:test')", [FAC[k], SEED_CAPS]);
     }
     await c.query("SELECT set_config('app.facility_id', '', true), set_config('app.organization_id', '', true)");
   });
@@ -172,15 +182,18 @@ describe.skipIf(!url)('manual fact entry API', () => {
   });
 
   it('count facts: accepted when the rule set reads the key as a count; refused out of range or of the wrong shape', async () => {
-    const seed = loadSeedRuleSet();
-    const countRule = { id: 'zz.count', name: 'ZZTEST', kind: 'review' as const, enabled: true, inputs: ['iv_days'], expression: 'iv_days >= 7', sub_reason: 'clinical' as const };
-    const withCount = { ...seed, rules: [...seed.rules, countRule], factKeys: [...seed.factKeys, { key: 'iv_days', type: 'count' as const, critical: false, read_by: ['zz.count'] }] };
-    const server = buildServer({ tx, auth: 'local-stub', env: 'test', ruleSet: withCount });
-    const r = await newReferral();
-    for (const value of [3, null, 100000]) expect((await post(factsUrl(r), U.reviewer, { key: 'iv_days', value: { type: 'count', value }, note: NOTE }, server)).statusCode, String(value)).toBe(201);
-    for (const value of [-1, 1.5, 100001, '3']) expect((await post(factsUrl(r), U.reviewer, { key: 'iv_days', value: { type: 'count', value }, note: NOTE }, server)).statusCode, String(value)).toBe(400);
-    expect((await post(factsUrl(r), U.reviewer, { key: 'iv_days', value: { type: 'tri_state', value: 'yes' }, note: NOTE }, server)).statusCode).toBe(400);
-    await server.close();
+    const countRule = { id: 'zz.count', name: 'ZZTEST', kind: 'review', enabled: true, inputs: ['iv_days'], expression: 'iv_days >= 7', sub_reason: 'clinical', tests: [{ name: 't', facts: {}, profile: {}, expected: 'true' }, { name: 'f', facts: {}, profile: {}, expected: 'false' }, { name: 'u', facts: {}, profile: {}, expected: 'unknown' }] };
+    await c.query("SELECT set_config('app.organization_id', $1, true)", [ORG.b]);
+    await c.query("INSERT INTO rule_sets (organization_id, version, criteria_document_ref, rules, created_by) VALUES ($1, 0, 'seed', $2, 'platform:test')", [ORG.b, JSON.stringify([...SEED_RULES, countRule])]);
+    await c.query("SELECT set_config('app.organization_id', '', true)");
+    const url = `/api/facilities/${FAC.b}/referrals`;
+    const r = (await post(url, U.other)).json().referral.id as string;
+    const at = `${url}/${r}/facts`;
+    for (const value of [3, null, 100000]) expect((await post(at, U.other, { key: 'iv_days', value: { type: 'count', value }, note: NOTE })).statusCode, String(value)).toBe(201);
+    for (const value of [-1, 1.5, 100001, '3']) expect((await post(at, U.other, { key: 'iv_days', value: { type: 'count', value }, note: NOTE })).statusCode, String(value)).toBe(400);
+    expect((await post(at, U.other, { key: 'iv_days', value: { type: 'tri_state', value: 'yes' }, note: NOTE })).statusCode).toBe(400);
+    const ev = (await get(`${url}/${r}`, U.other)).json().evaluation;
+    expect(ev.rule_set_version).toBe(2); // the evaluation pins the version it used
   });
 
   it('a document still in processing holds the outcome at processing_incomplete', async () => {
@@ -234,6 +247,70 @@ describe.skipIf(!url)('manual fact entry API', () => {
     expect([res.statusCode, res.headers['cache-control']]).toEqual([200, 'no-store']);
     await asOwner(FAC.a);
     expect(await count("SELECT count(*) AS n FROM audit_log WHERE action = 'referral.viewed' AND entity_id = $1", [rid])).toBe(before + 1);
+  });
+
+  it('settings: Reviewers read them with the completeness checklist; only an Admin saves a new profile version, which pins the next evaluation', async () => {
+    const path = `/api/facilities/${FAC.a}/settings`;
+    expect((await get(path, U.viewer)).statusCode).toBe(403);
+    const view = (await get(path, U.reviewer)).json();
+    expect([view.configured, view.rule_set.version, view.profile.version]).toEqual([true, 1, 1]);
+    expect(view.completeness).toEqual({ required_keys: ['accepts_ventilator'], missing_keys: [] });
+    const put = (user: string, payload: unknown) => app.inject({ method: 'PUT', url: path, headers: as(user), payload: payload as object });
+    const v1 = { based_on_version: 1 };
+    expect((await put(U.reviewer, { capabilities: {}, disabled_rules: [], ...v1 })).statusCode).toBe(403);
+    for (const bad of [{ capabilities: { accepts_ventilator: 'yes' }, disabled_rules: [], ...v1 }, { capabilities: { zztest_key: true }, disabled_rules: [], ...v1 },
+      { capabilities: { ventilator_beds: -1 }, disabled_rules: [], ...v1 }, { capabilities: {}, disabled_rules: ['no.such.rule'], ...v1 }, { capabilities: [], disabled_rules: [], ...v1 },
+      { capabilities: {}, disabled_rules: [] }]) {
+      expect((await put(U.admin, bad)).statusCode, JSON.stringify(bad)).toBe(400);
+    }
+    // hard stops and payer rules stay on (interim, pending F9); a save over a stale version is refused
+    for (const id of ['seed.hard_stop.ventilator', 'seed.payer.medicaid_pending']) {
+      expect((await put(U.admin, { capabilities: {}, disabled_rules: [id], ...v1 })).json()).toEqual({ error: 'rule_not_switchable' });
+    }
+    expect([(await put(U.admin, { capabilities: {}, disabled_rules: [], based_on_version: 7 })).statusCode]).toEqual([409]);
+    expect(view.rule_set.rules.find((x: { id: string }) => x.id === 'seed.hard_stop.ventilator').switchable).toBe(false);
+    // the Admin empties the key the hard stop reads and switches the review rule off
+    const saved = (await put(U.admin, { capabilities: {}, disabled_rules: ['seed.review.behavioral_escalation'], ...v1 })).json();
+    expect([saved.profile.version, saved.completeness.missing_keys, saved.rule_set.rules.find((x: { id: string }) => x.id === 'seed.review.behavioral_escalation').enabled_here])
+      .toEqual([2, ['accepts_ventilator'], false]);
+    const r = await newReferral();
+    const ev = (await post(factsUrl(r), U.reviewer, fact('ventilator_use', 'no'))).json().evaluation;
+    expect([ev.outcome, ev.facility_profile_version, ev.trace.empty_profile_keys]).toEqual(['needs_review', 2, ['accepts_ventilator']]);
+    // the switched-off rule's fact is no longer offered or accepted
+    expect((await get(`/api/facilities/${FAC.a}/referrals/${r}`, U.reviewer)).json().form.fact_keys.map((k: { key: string }) => k.key)).not.toContain('recent_aggression');
+    expect((await post(factsUrl(r), U.reviewer, fact('recent_aggression', 'yes'))).json()).toEqual({ error: 'invalid_fact' });
+    await asOwner(FAC.a);
+    expect(await count("SELECT count(*) AS n FROM audit_log WHERE action = 'facility_profile.versioned' AND actor = $1", [`user:${U.admin}`])).toBe(1);
+    // restore the seed profile for the tests that follow
+    const stale = await put(U.admin, { capabilities: SEED_CAPS, disabled_rules: [], ...v1 });
+    expect([stale.statusCode, stale.json()]).toEqual([409, { error: 'settings_changed' }]);
+    expect((await put(U.admin, { capabilities: SEED_CAPS, disabled_rules: [], based_on_version: 2 })).json().profile.version).toBe(3);
+  });
+
+  it('a facility with no settings refuses fact entry rather than guessing', async () => {
+    const lone = '00000000-0000-4000-8000-00000000fc12';
+    await c.query("SELECT set_config('app.organization_id', $1, true), set_config('app.facility_id', $2, true)", [ORG.a, lone]);
+    await c.query('INSERT INTO facilities (facility_id, organization_id, name) VALUES ($1, $2, $3)', [lone, ORG.a, 'ZZTEST API Facility unconfigured']);
+    await c.query("INSERT INTO user_facility_roles (user_id, facility_id, role) VALUES ($1, $2, 'admissions_reviewer')", [U.reviewer, lone]);
+    await c.query("SELECT set_config('app.facility_id', '', true), set_config('app.organization_id', '', true)");
+    const created = (await post(`/api/facilities/${lone}/referrals`, U.reviewer)).json();
+    expect(created.form.configured).toBe(false);
+    const res = await post(`/api/facilities/${lone}/referrals/${created.referral.id}/facts`, U.reviewer, fact('ventilator_use', 'no'));
+    expect([res.statusCode, res.json()]).toEqual([409, { error: 'facility_not_configured' }]);
+    expect((await get(`/api/facilities/${lone}/settings`, U.reviewer)).json()).toEqual({ configured: false });
+    // a stored rule set the engine refuses answers 409 rule_set_refused on every path, never 500
+    await c.query("SELECT set_config('app.organization_id', $1, true), set_config('app.facility_id', $2, true)", [ORG.a, lone]);
+    await c.query("INSERT INTO facility_profiles (facility_id, version, capabilities, created_by) VALUES ($1, 0, '{}', 'platform:test')", [lone]);
+    const broken = { id: 'zz.broken', name: 'ZZTEST', kind: 'hard_stop', enabled: true, inputs: ['x'], expression: 'x is is yes' };
+    await c.query("INSERT INTO rule_sets (organization_id, version, criteria_document_ref, rules, created_by) VALUES ($1, 0, 'zz', $2, 'platform:test')", [ORG.a, JSON.stringify([broken])]);
+    await c.query("SELECT set_config('app.facility_id', '', true), set_config('app.organization_id', '', true)");
+    for (const res2 of [await get(`/api/facilities/${lone}/settings`, U.reviewer), await post(`/api/facilities/${lone}/referrals/${created.referral.id}/facts`, U.reviewer, fact('ventilator_use', 'no'))]) {
+      expect([res2.statusCode, res2.json()]).toEqual([409, { error: 'rule_set_refused' }]);
+    }
+    // restore a valid rule set for organisation A (a newer version) for the tests that follow
+    await c.query("SELECT set_config('app.organization_id', $1, true)", [ORG.a]);
+    await c.query("INSERT INTO rule_sets (organization_id, version, criteria_document_ref, rules, created_by) VALUES ($1, 0, 'seed', $2, 'platform:test')", [ORG.a, JSON.stringify(SEED_RULES)]);
+    await c.query("SELECT set_config('app.organization_id', '', true)");
   });
 
   it('a database refusal is 422 and an infrastructure failure 500, and neither echoes the error message', async () => {

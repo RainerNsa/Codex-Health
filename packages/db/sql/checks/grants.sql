@@ -40,14 +40,14 @@ UNION ALL
 -- which has_table_privilege would miss. DELETE and TRUNCATE exist only at table level.
 SELECT k.rolname, 'role has UPDATE on ' || t.tbl || ' (table- or column-level)'
 FROM checked k
-CROSS JOIN (VALUES ('audit_log'), ('platform_audit_log'), ('evaluations'), ('decisions'), ('facts'), ('product_events')) AS t(tbl)
+CROSS JOIN (VALUES ('audit_log'), ('platform_audit_log'), ('evaluations'), ('decisions'), ('facts'), ('product_events'), ('rule_sets'), ('facility_profiles')) AS t(tbl)
 WHERE to_regclass('public.' || t.tbl) IS NOT NULL
   AND has_any_column_privilege(k.rolname, 'public.' || t.tbl, 'UPDATE')
 UNION ALL
 SELECT k.rolname, 'role has ' || p.priv || ' on ' || t.tbl
 FROM checked k
 CROSS JOIN (VALUES ('DELETE'), ('TRUNCATE')) AS p(priv)
-CROSS JOIN (VALUES ('audit_log'), ('platform_audit_log'), ('evaluations'), ('decisions'), ('facts'), ('product_events')) AS t(tbl)
+CROSS JOIN (VALUES ('audit_log'), ('platform_audit_log'), ('evaluations'), ('decisions'), ('facts'), ('product_events'), ('rule_sets'), ('facility_profiles')) AS t(tbl)
 WHERE to_regclass('public.' || t.tbl) IS NOT NULL
   AND has_table_privilege(k.rolname, 'public.' || t.tbl, p.priv)
 UNION ALL
@@ -76,7 +76,9 @@ FROM (VALUES ('audit_log', 'UPDATE, DELETE and TRUNCATE', 8 | 16 | 32),
              ('evaluations', 'UPDATE, DELETE and TRUNCATE', 8 | 16 | 32),
              ('decisions', 'UPDATE, DELETE and TRUNCATE', 8 | 16 | 32),
              ('facts', 'UPDATE', 16),
-             ('product_events', 'UPDATE', 16)) AS t(tbl, ops, bits)
+             ('product_events', 'UPDATE', 16),
+             ('rule_sets', 'UPDATE, DELETE and TRUNCATE', 8 | 16 | 32),
+             ('facility_profiles', 'UPDATE, DELETE and TRUNCATE', 8 | 16 | 32)) AS t(tbl, ops, bits)
 WHERE to_regclass('public.' || t.tbl) IS NOT NULL
   AND NOT EXISTS (
     SELECT 1
@@ -97,7 +99,9 @@ FROM (VALUES
   ('decisions', 'decisions_guard'), ('decisions', 'decisions_audit'),
   ('organizations', 'organizations_provisioning_audit'), ('facilities', 'facilities_provisioning_audit'),
   ('users', 'users_provisioning_audit'), ('product_events', 'product_events_insert_guard'),
-  ('user_facility_roles', 'user_facility_roles_guard'), ('user_facility_roles', 'user_facility_roles_audit')) AS e(tbl, trg)
+  ('user_facility_roles', 'user_facility_roles_guard'), ('user_facility_roles', 'user_facility_roles_audit'),
+  ('rule_sets', 'rule_sets_version'), ('rule_sets', 'rule_sets_audit'),
+  ('facility_profiles', 'facility_profiles_version'), ('facility_profiles', 'facility_profiles_audit')) AS e(tbl, trg)
 WHERE to_regclass('public.' || e.tbl) IS NOT NULL
   AND NOT EXISTS (
     SELECT 1 FROM pg_trigger g

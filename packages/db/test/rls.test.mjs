@@ -87,6 +87,7 @@ async function seed(c) {
       [id, ref, ev, user],
     );
     await c.query("INSERT INTO product_events (facility_id, referral_id, actor, event, attrs) VALUES ($1, $2, $3, 'referral.held', '{}')", [id, ref, `user:${user}`]);
+    await c.query("INSERT INTO facility_profiles (facility_id, version, capabilities, created_by) VALUES ($1, 0, '{\"accepts_ventilator\": false}', 'platform:test')", [id]);
   }
 }
 
@@ -130,7 +131,7 @@ test('row-level security, organisation isolation, audit immutability, the hash c
           await asFacility(c, FAC.a1);
         }
         // Exact readable-table count per role: a dropped or added SELECT grant must be a visible change here.
-        assert.equal(checked, { codex_app: 9, codex_worker: 6 }[role], `${role} could read ${checked} tenant tables`);
+        assert.equal(checked, { codex_app: 10, codex_worker: 6 }[role], `${role} could read ${checked} tenant tables`);
       });
     }
 
@@ -185,7 +186,7 @@ test('row-level security, organisation isolation, audit immutability, the hash c
     await sub('the chain is computed by the trigger, never by the writer, and verifies for both facilities and the platform chain', async () => {
       await asFacility(c, FAC.a1);
       const base = await count(c, 'SELECT count(*) AS n FROM audit_log');
-      assert.equal(base, 3, 'the seed wrote exactly three rows per facility: user_role.granted (0005 trigger), audit(), decision.finalized');
+      assert.equal(base, 4, 'the seed wrote exactly four rows per facility: user_role.granted (0005), audit(), decision.finalized, facility_profile.versioned (0008)');
       await audit(c, FAC.a1, 'referral.created');
       await c.query("INSERT INTO audit_log (facility_id, seq, row_hash, actor, action, entity_type, at) VALUES ($1, 0, '\\x00', 'system:test', 'backdated', 'facility', '2001-01-01')", [FAC.a1]);
       const { rows } = await c.query('SELECT seq, prev_hash, row_hash, at FROM audit_log WHERE facility_id = $1 ORDER BY seq', [FAC.a1]);
@@ -310,10 +311,12 @@ test('row-level security, organisation isolation, audit immutability, the hash c
         'codex_app documents INSERT', 'codex_app documents SELECT', 'codex_app documents UPDATE (not_applicable_reason,status,updated_at)',
         'codex_app evaluations INSERT', 'codex_app evaluations SELECT',
         'codex_app facilities SELECT',
+        'codex_app facility_profiles INSERT', 'codex_app facility_profiles SELECT',
         'codex_app facts INSERT', 'codex_app facts SELECT',
         'codex_app organizations SELECT',
         'codex_app product_events INSERT', 'codex_app product_events SELECT',
         'codex_app referrals INSERT', 'codex_app referrals SELECT', 'codex_app referrals UPDATE',
+        'codex_app rule_sets SELECT',
         'codex_app user_facility_roles SELECT',
         'codex_app users SELECT',
         'codex_worker audit_log INSERT', 'codex_worker audit_log SELECT',
@@ -343,6 +346,58 @@ test('row-level security, organisation isolation, audit immutability, the hash c
       assert.deepEqual(rows.map((x) => x.action), ['user_role.revoked', 'user_role.granted']);
       assert.ok(rows.every((x) => x.entity_id === USER.b && x.actor.startsWith('platform:')));
       assert.equal(await count(c, 'SELECT count(*) AS n FROM audit_log'), before + 2);
+    });
+
+    await sub('settings (0008): shape checks, database-chosen versions, audit per version, org isolation of rule sets, no cross-facility profile write', async () => {
+      const RS = "INSERT INTO rule_sets (organization_id, version, criteria_document_ref, rules, created_by) VALUES ($1, $2, 'zz', $3, 'platform:test')";
+      const FP = "INSERT INTO facility_profiles (facility_id, version, capabilities, created_by) VALUES ($1, 0, $2, 'platform:test')";
+      const rec = (id, kind = 'review', extra = {}) => ({ id, kind, enabled: true, inputs: ['x'], expression: 'x is yes', ...extra });
+      const set = (...recs) => JSON.stringify(recs);
+      // records: snake_case unique ids, a known kind, boolean enabled, string expression, string inputs
+      await asOrg(c, ORG[0]);
+      for (const bad of [set(rec('zz.a'), rec('zz.a')), set(rec('Bad')), '["zz.a"]', set(rec('zz.a', 'admit')), set(rec('zz.a', 'review', { enabled: 'yes' })),
+        set(rec('zz.a', 'review', { expression: ' ' })), set(rec('zz.a', 'review', { inputs: 'x' })), set(rec('zz.a', 'review', { inputs: [1] }))]) {
+        await expectFailure(c, RS, /rule_sets_records/, [ORG[0], 0, bad]);
+      }
+      // the writer's version is ignored: two inserts asking for 99 land as 1 and 2, each with its platform audit row
+      const auditBefore = await count(c, "SELECT count(*) AS n FROM platform_audit_log WHERE entity_type = 'rule_set'");
+      for (let i = 0; i < 2; i += 1) await c.query(RS, [ORG[0], 99, set(rec('zz.a'), rec('zz.hs', 'hard_stop'), rec('zz.pay', 'payer'))]);
+      assert.deepEqual((await c.query('SELECT version FROM rule_sets WHERE organization_id = $1 ORDER BY version', [ORG[0]])).rows.map((r) => r.version), [1, 2]);
+      const rows = (await c.query("SELECT organization_id, action, actor FROM platform_audit_log WHERE entity_type = 'rule_set' ORDER BY seq")).rows.slice(auditBefore);
+      assert.deepEqual(rows, [0, 1].map(() => ({ organization_id: ORG[0], action: 'rule_set.versioned', actor: 'platform:test' })));
+      await expectFailure(c, 'UPDATE rule_sets SET criteria_document_ref = $1', /append-only|immutable/, ['tampered']);
+      await asOrg(c, ORG[1]);
+      await c.query(RS, [ORG[1], 0, set(rec('zz.b'))]);
+      // rule sets are organisation-scoped: org A's app role sees only its own, nothing when unbound, and cannot write
+      await c.query('SET LOCAL ROLE codex_app');
+      await asOrg(c, ORG[0]);
+      assert.equal(await count(c, 'SELECT count(*) AS n FROM rule_sets'), 2);
+      assert.equal(await count(c, 'SELECT count(*) AS n FROM rule_sets WHERE organization_id <> $1', [ORG[0]]), 0, 'rule_sets leaks across organisations');
+      await expectFailure(c, RS, /permission denied/, [ORG[0], 0, set(rec('zz.c'))]);
+      await asOrg(c, '');
+      assert.equal(await count(c, 'SELECT count(*) AS n FROM rule_sets'), 0, 'rule_sets visible with no organisation bound');
+      // profiles: bound to a1, the app role cannot write another facility's profile
+      await asOrg(c, ORG[0]);
+      await asFacility(c, FAC.a1);
+      const FPU = "INSERT INTO facility_profiles (facility_id, version, capabilities, created_by) VALUES ($1, 0, '{}', $2)";
+      await expectFailure(c, FPU, /row-level security|not an Admin/, [FAC.b1, `user:${USER.a}`]);
+      await expectFailure(c, FPU, /row-level security|not an Admin/, [FAC.a2, `user:${USER.a}`]);
+      // the app role cannot claim the platform, nor a user who is not an Admin here (USER.a is a Reviewer at a1)
+      await expectFailure(c, FPU, /not an Admin/, [FAC.a1, 'platform:owner']);
+      await expectFailure(c, FPU, /not an Admin/, [FAC.a1, `user:${USER.a}`]);
+      await c.query('RESET ROLE');
+      // switched-off ids: present in the organisation's latest rule set, and never a hard stop or payer rule
+      const FPD = "INSERT INTO facility_profiles (facility_id, version, capabilities, disabled_rules, created_by) VALUES ($1, 0, '{}', $2, 'platform:test')";
+      for (const ids of [['no.such.rule'], [''], ['ZZ BAD'], ['zz.hs'], ['zz.pay'], ['zz.b']]) {
+        await expectFailure(c, FPD, /cannot be switched off/, [FAC.a1, ids]);
+      }
+      await c.query(FPD, [FAC.a1, ['zz.a']]);
+      // capabilities: profile v0 keys of their declared types only
+      for (const caps of ['{"zztest_key":true}', '{"accepts_ventilator":"false"}', '{"ventilator_beds":1.5}', '{"ventilator_beds":-1}', '{"ventilator_beds":"2"}']) {
+        await expectFailure(c, FP, /facility_profiles_capabilities_v0/, [FAC.a1, caps]);
+      }
+      await c.query(FP, [FAC.a1, '{"accepts_ventilator":true,"ventilator_beds":2}']);
+      assert.deepEqual((await c.query('SELECT version FROM facility_profiles WHERE facility_id = $1 ORDER BY version', [FAC.a1])).rows.map((r) => r.version), [1, 2, 3]);
     });
 
     await sub('CONSTRAINTS check queries return zero rows', async () => {
