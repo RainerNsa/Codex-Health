@@ -38,16 +38,18 @@ WHERE has_schema_privilege(k.rolname, 'public', 'CREATE')
 UNION ALL
 -- has_any_column_privilege also counts a table-level grant, and catches GRANT UPDATE (col) ON audit_log,
 -- which has_table_privilege would miss. DELETE and TRUNCATE exist only at table level.
-SELECT k.rolname, 'role has UPDATE on audit_log (table- or column-level)'
+SELECT k.rolname, 'role has UPDATE on ' || t.tbl || ' (table- or column-level)'
 FROM checked k
-WHERE to_regclass('public.audit_log') IS NOT NULL
-  AND has_any_column_privilege(k.rolname, 'public.audit_log', 'UPDATE')
+CROSS JOIN (VALUES ('audit_log'), ('platform_audit_log'), ('evaluations'), ('decisions'), ('facts')) AS t(tbl)
+WHERE to_regclass('public.' || t.tbl) IS NOT NULL
+  AND has_any_column_privilege(k.rolname, 'public.' || t.tbl, 'UPDATE')
 UNION ALL
-SELECT k.rolname, 'role has ' || p.priv || ' on audit_log'
+SELECT k.rolname, 'role has ' || p.priv || ' on ' || t.tbl
 FROM checked k
 CROSS JOIN (VALUES ('DELETE'), ('TRUNCATE')) AS p(priv)
-WHERE to_regclass('public.audit_log') IS NOT NULL
-  AND has_table_privilege(k.rolname, 'public.audit_log', p.priv)
+CROSS JOIN (VALUES ('audit_log'), ('platform_audit_log'), ('evaluations'), ('decisions'), ('facts')) AS t(tbl)
+WHERE to_regclass('public.' || t.tbl) IS NOT NULL
+  AND has_table_privilege(k.rolname, 'public.' || t.tbl, p.priv)
 UNION ALL
 SELECT 'audit_log', 'audit_log table is missing'
 WHERE to_regclass('public.audit_log') IS NULL
@@ -58,38 +60,38 @@ WHERE to_regclass('public.' || t.tbl) IS NOT NULL
   AND NOT EXISTS (
     SELECT 1 FROM pg_trigger g
     WHERE g.tgrelid = to_regclass('public.' || t.tbl)
-      AND NOT g.tgisinternal AND g.tgenabled IN ('O', 'A')
+      AND NOT g.tgisinternal AND g.tgenabled = 'A'   -- ENABLE ALWAYS: fires under session_replication_role = replica too
       AND (g.tgtype & 1) <> 0 AND (g.tgtype & 2) <> 0 AND (g.tgtype & 4) <> 0   -- row-level, BEFORE, INSERT
       AND g.tgfoid::regproc::text LIKE '%chain%'
       AND pg_get_functiondef(g.tgfoid) LIKE '%sha256(%'   -- a renamed no-op cannot pass as the chain
   )
 UNION ALL
-SELECT k.rolname, 'role has UPDATE on platform_audit_log (table- or column-level)'
-FROM checked k
-WHERE to_regclass('public.platform_audit_log') IS NOT NULL
-  AND has_any_column_privilege(k.rolname, 'public.platform_audit_log', 'UPDATE')
-UNION ALL
-SELECT k.rolname, 'role has ' || p.priv || ' on platform_audit_log'
-FROM checked k
-CROSS JOIN (VALUES ('DELETE'), ('TRUNCATE')) AS p(priv)
-WHERE to_regclass('public.platform_audit_log') IS NOT NULL
-  AND has_table_privilege(k.rolname, 'public.platform_audit_log', p.priv)
-UNION ALL
+
 -- The owner holds no grant to revoke, so append-only for the owner rests on the trigger. The owner can
 -- disable or drop it (ALTER TABLE ... DISABLE TRIGGER); this row is what catches that.
 -- tgtype bits: 1 = row-level, 8 = DELETE, 16 = UPDATE, 32 = TRUNCATE. tgenabled 'O' = enabled, 'A' = always.
-SELECT t.tbl, 'no enabled statement-level trigger blocks UPDATE, DELETE and TRUNCATE on ' || t.tbl
-FROM (VALUES ('audit_log'), ('platform_audit_log')) AS t(tbl)
+SELECT t.tbl, 'no ENABLE ALWAYS statement-level trigger blocks ' || t.ops || ' on ' || t.tbl
+FROM (VALUES ('audit_log', 'UPDATE, DELETE and TRUNCATE', 8 | 16 | 32),
+             ('platform_audit_log', 'UPDATE, DELETE and TRUNCATE', 8 | 16 | 32),
+             ('evaluations', 'UPDATE, DELETE and TRUNCATE', 8 | 16 | 32),
+             ('decisions', 'UPDATE, DELETE and TRUNCATE', 8 | 16 | 32),
+             ('facts', 'UPDATE', 16)) AS t(tbl, ops, bits)
 WHERE to_regclass('public.' || t.tbl) IS NOT NULL
   AND NOT EXISTS (
     SELECT 1
     FROM pg_trigger t2
     WHERE t2.tgrelid = to_regclass('public.' || t.tbl)
       AND NOT t2.tgisinternal
-      AND t2.tgenabled IN ('O', 'A')
+      AND t2.tgenabled = 'A'
       AND (t2.tgtype & 1) = 0
-      AND (t2.tgtype & 8) <> 0
-      AND (t2.tgtype & 16) <> 0
-      AND (t2.tgtype & 32) <> 0
+      AND (t2.tgtype & t.bits) = t.bits
   )
+UNION ALL
+-- Every guard trigger the data model relies on is ENABLE ALWAYS (0003): a replica-mode session cannot skip it.
+SELECT g.tgrelid::regclass::text, 'guard trigger ' || g.tgname || ' is not ENABLE ALWAYS'
+FROM pg_trigger g
+WHERE NOT g.tgisinternal
+  AND g.tgname IN ('referrals_worker_status_guard', 'documents_status_guard', 'facts_insert_guard', 'evaluations_insert_guard',
+                   'decisions_guard', 'decisions_audit', 'organizations_provisioning_audit', 'facilities_provisioning_audit', 'users_provisioning_audit')
+  AND g.tgenabled <> 'A'
 ORDER BY 1, 2;

@@ -61,8 +61,31 @@ async function seed(c) {
     await asOrg(c, ORG_OF[key]);
     await c.query('INSERT INTO facilities (facility_id, organization_id, name) VALUES ($1, $2, $3)', [id, ORG_OF[key], `ZZTEST Facility ${key}`]);
     await c.query('INSERT INTO referrals (facility_id) VALUES ($1)', [id]);
-    await c.query("INSERT INTO user_facility_roles (user_id, facility_id, role) VALUES ($1, $2, 'admissions_reviewer')", [key.startsWith('a') ? USER.a : USER.b, id]);
+    const user = key.startsWith('a') ? USER.a : USER.b;
+    await c.query("INSERT INTO user_facility_roles (user_id, facility_id, role) VALUES ($1, $2, 'admissions_reviewer')", [user, id]);
     await audit(c, id);
+    // one row per facility in every slice-2 table, so the per-table isolation assertions are never vacuous
+    const ref = (await c.query('SELECT id FROM referrals WHERE facility_id = $1', [id])).rows[0].id;
+    await c.query(
+      `INSERT INTO documents (facility_id, referral_id, type, sha256, storage_key)
+       VALUES ($1::uuid, $2::uuid, 'face_sheet', sha256(convert_to($3::text, 'UTF8')), 'documents/' || $1::uuid::text || '/' || $2::uuid::text || '/' || encode(sha256(convert_to($3::text, 'UTF8')), 'hex'))`,
+      [id, ref, key],
+    );
+    await c.query(
+      `INSERT INTO facts (facility_id, referral_id, key, value, source, note, created_by)
+       VALUES ($1, $2, 'ventilator_use', '{"type":"tri_state","value":"no"}', 'user', 'SYNTHETIC seed', $3)`,
+      [id, ref, `user:${user}`],
+    );
+    const ev = (await c.query(
+      `INSERT INTO evaluations (facility_id, referral_id, raw, outcome, clinical_outcome, financial_status, trace,
+         criteria_document_ref, rule_set_version, facility_profile_version, model_id, prompt_version, extractor_version, ocr_engine_version, engine_version)
+       VALUES ($1, $2, false, 'admit', 'admit', 'clear', '{}', 'seed', 1, 1, 'none', 'p0', 'x0', 'o0', 'e0') RETURNING id`,
+      [id, ref],
+    )).rows[0].id;
+    await c.query(
+      "INSERT INTO decisions (facility_id, referral_id, evaluation_id, recommended_outcome, decision, decided_by) VALUES ($1, $2, $3, 'admit', 'admit', $4)",
+      [id, ref, ev, user],
+    );
   }
 }
 
@@ -105,7 +128,8 @@ test('row-level security, organisation isolation, audit immutability, the hash c
           assert.equal(await count(c, `SELECT count(facility_id) AS n FROM ${tbl}`), 0, `${tbl} visible with no tenant bound for ${role}`);
           await asFacility(c, FAC.a1);
         }
-        assert.ok(checked >= 2, `${role} could read ${checked} tenant tables; expected at least referrals and audit_log`);
+        // Exact readable-table count per role: a dropped or added SELECT grant must be a visible change here.
+        assert.equal(checked, { codex_app: 8, codex_worker: 6 }[role], `${role} could read ${checked} tenant tables`);
       });
     }
 
@@ -159,17 +183,21 @@ test('row-level security, organisation isolation, audit immutability, the hash c
 
     await sub('the chain is computed by the trigger, never by the writer, and verifies for both facilities and the platform chain', async () => {
       await asFacility(c, FAC.a1);
+      const base = await count(c, 'SELECT count(*) AS n FROM audit_log');
+      assert.equal(base, 2, 'the seed wrote exactly two rows per facility: audit() and the decision trigger (decision.finalized)');
       await audit(c, FAC.a1, 'referral.created');
       await c.query("INSERT INTO audit_log (facility_id, seq, row_hash, actor, action, entity_type, at) VALUES ($1, 0, '\\x00', 'system:test', 'backdated', 'facility', '2001-01-01')", [FAC.a1]);
       const { rows } = await c.query('SELECT seq, prev_hash, row_hash, at FROM audit_log WHERE facility_id = $1 ORDER BY seq', [FAC.a1]);
-      assert.deepEqual(rows.map((r) => Number(r.seq)), [1, 2, 3], 'writer-supplied seq 0 was overwritten');
+      assert.deepEqual(rows.map((r) => Number(r.seq)), rows.map((_, i) => i + 1), 'writer-supplied seq 0 was overwritten; seq is dense from 1');
+      assert.equal(rows.length, base + 2);
       assert.equal(rows[0].prev_hash, null);
-      assert.ok(rows[0].row_hash.length === 32 && !rows[0].row_hash.equals(Buffer.from([0])), 'writer-supplied hash was overwritten');
-      assert.ok(rows[1].prev_hash.equals(rows[0].row_hash) && rows[2].prev_hash.equals(rows[1].row_hash));
-      assert.ok(rows[2].at.getFullYear() > 2001, 'writer-supplied at was overwritten');
-      assert.deepEqual(await verify(c, FAC.a1), [true, true, true]);
+      assert.ok(rows.every((r) => r.row_hash.length === 32 && !r.row_hash.equals(Buffer.from([0]))), 'writer-supplied hash was overwritten');
+      for (let i = 1; i < rows.length; i += 1) assert.ok(rows[i].prev_hash.equals(rows[i - 1].row_hash), `row ${i + 1} chains to its predecessor`);
+      assert.ok(rows.at(-1).at.getFullYear() > 2001, 'writer-supplied at was overwritten');
+      assert.deepEqual(await verify(c, FAC.a1), rows.map(() => true));
       await asFacility(c, FAC.b1);
-      assert.deepEqual(await verify(c, FAC.b1), [true]);
+      const vb = await verify(c, FAC.b1);
+      assert.ok(vb.length >= 1 && vb.every(Boolean));
       await asFacility(c, FAC.a2);
       await assert.rejects(c.query('SELECT ok FROM audit_chain_verify($1)', [FAC.b1]), /no audit rows visible/, 'verifying a facility you cannot see is an error, not a pass');
       await c.query('ROLLBACK TO SAVEPOINT sub'); await c.query('SAVEPOINT sub');
@@ -184,13 +212,19 @@ test('row-level security, organisation isolation, audit immutability, the hash c
       await asFacility(c, FAC.a1);
       await audit(c, FAC.a1, 'two');
       await audit(c, FAC.a1, 'three');
+      const n = await count(c, 'SELECT count(*) AS n FROM audit_log');
+      const victim = n - 1; // second-to-last row, so a successor exists
       await c.query('ALTER TABLE audit_log DISABLE TRIGGER audit_log_immutable');
-      await c.query("UPDATE audit_log SET action = 'tampered' WHERE facility_id = $1 AND seq = 2", [FAC.a1]);
-      assert.deepEqual(await verify(c, FAC.a1), [true, false, true], 'only the rewritten row fails; its successor still chains to the stored hash');
-      await c.query('DELETE FROM audit_log WHERE facility_id = $1 AND seq = 2', [FAC.a1]);
-      assert.deepEqual(await verify(c, FAC.a1), [true, false], 'the row after a gap fails');
+      await c.query("UPDATE audit_log SET action = 'tampered' WHERE facility_id = $1 AND seq = $2", [FAC.a1, victim]);
+      const v1 = await verify(c, FAC.a1);
+      assert.deepEqual(v1.map((ok, i) => (ok ? null : i + 1)).filter(Boolean), [victim], 'only the rewritten row fails; its successor still chains to the stored hash');
+      await c.query('DELETE FROM audit_log WHERE facility_id = $1 AND seq = $2', [FAC.a1, victim]);
+      const v2 = await verify(c, FAC.a1);
+      assert.equal(v2.length, n - 1);
+      assert.equal(v2.at(-1), false, 'the row after a gap fails');
+      assert.ok(v2.slice(0, -1).every(Boolean));
       const failures = await runChecks(c);
-      assert.match(JSON.stringify(failures['grants.sql'] ?? []), /no enabled statement-level trigger.*audit_log/);
+      assert.match(JSON.stringify(failures['grants.sql'] ?? []), /no ENABLE ALWAYS statement-level trigger.*audit_log/);
     });
 
     await sub('audit rows carry ids, never names: malformed actor, action and entity_type are rejected', async () => {
@@ -240,8 +274,11 @@ test('row-level security, organisation isolation, audit immutability, the hash c
         await asFacility(c, FRESH);
         await expectFailure(c, "INSERT INTO audit_log (facility_id, seq, row_hash, actor, action, entity_type) VALUES ($1, 0, '\\x00', 'system:test', 'blocked', 'facility')", /statement timeout/, [FRESH]);
         await asFacility(c, FAC.b1);
+        const nb = await count(c, 'SELECT count(*) AS n FROM audit_log');
         await audit(c, FAC.b1, 'unblocked');
-        assert.deepEqual(await verify(c, FAC.b1), [true, true]);
+        const vb = await verify(c, FAC.b1);
+        assert.equal(vb.length, nb + 1);
+        assert.ok(vb.every(Boolean));
       } finally {
         await other.query('ROLLBACK');
         await other.end();
