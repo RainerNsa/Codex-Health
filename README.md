@@ -8,7 +8,7 @@ This is the product monorepo. Research, plans, sector reviews and the decision l
 
 ## Status
 
-M1 (skeleton, tenancy, data model). M0 closed 2026-10-29. No product logic exists yet. Nothing here has touched real patient data,
+M2 (rules engine). M0 and M1 closed 2026-10-29. The engine is the first product logic; no PHI path exists yet. Nothing here has touched real patient data,
 and nothing here may: see `CONSTRAINTS.md` (synthetic data only, Bedrock-only AI calls, RLS on every tenant table).
 
 ## Layout
