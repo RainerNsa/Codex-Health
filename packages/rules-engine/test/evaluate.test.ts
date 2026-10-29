@@ -214,6 +214,22 @@ describe('Prove-It cases from the confirmatory review', () => {
   });
 });
 
+describe('minimum confirmation set (2.7)', () => {
+  it('is every hard-stop fact input plus the fact inputs of rules that fired, and nothing else', () => {
+    const admit = run([tri('ventilator_use', 'no'), tri('recent_aggression', 'no'), tri('daily_skilled_need', 'yes'), tri('payer_pending', 'no')]);
+    expect(admit.confirmation_set).toEqual(['daily_skilled_need', 'ventilator_use']); // hard-stop input + the favorable rule that fired
+    const review = run([tri('ventilator_use', 'no'), tri('recent_aggression', 'yes'), tri('daily_skilled_need', 'yes'), tri('payer_pending', 'yes')]);
+    expect(review.confirmation_set).toEqual(['daily_skilled_need', 'payer_pending', 'recent_aggression', 'ventilator_use']);
+    const quiet = run([tri('ventilator_use', 'no'), tri('recent_aggression', 'no'), tri('daily_skilled_need', 'no'), tri('payer_pending', 'no')]);
+    expect(quiet.confirmation_set).toEqual(['ventilator_use']); // only the hard-stop input: nothing fired
+    expect(quiet.confirmation_set.some((k) => k.startsWith('facility.'))).toBe(false);
+  });
+  it('never includes a profile key, and a disabled hard stop adds nothing', () => {
+    const r = evaluate({ facts: [], profile: {}, rules: [{ ...HARD, enabled: false }, rule('h2', 'hard_stop', 'a is yes AND facility.k is true', ['a', 'facility.k'])], referral_date: '2001-01-10', processing_complete: true });
+    expect(r.confirmation_set).toEqual(['a']);
+  });
+});
+
 describe('financial status and the clinical split', () => {
   it('a true payer rule holds the merged outcome and the financial status while the clinical answer admits', () => {
     const r = run([tri('ventilator_use', 'no'), tri('recent_aggression', 'no'), tri('daily_skilled_need', 'yes'), tri('payer_pending', 'yes')]);

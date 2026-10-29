@@ -61,6 +61,10 @@ export interface Evaluation {
   /** Unknown critical keys ranked by how many rules read them: "would be Admit if this one were known". */
   blocking: string[];
   empty_profile_keys: string[];
+  /** Minimum confirmation set (dev-alignment 2.7, SPEC §4): the fact keys a person must confirm before finalize —
+   *  every fact input of an enabled hard-stop rule, and every fact input of a rule that fired. Nothing else is
+   *  required. Sorted by code. */
+  confirmation_set: string[];
   engine_version: string;
 }
 
@@ -297,6 +301,8 @@ export function evaluate(input: EvaluateInput): Evaluation {
     conflicts,
     blocking,
     empty_profile_keys: [...ctx.emptyProfileKeys].sort(byCode),
+    confirmation_set: [...new Set(entries.filter((e) => e.kind === 'hard_stop' || e.result === 'yes')
+      .flatMap((e) => e.inputs.map((i) => i.key)).filter((k) => !k.startsWith('facility.')))].sort(byCode),
     engine_version: ENGINE_VERSION,
   };
 }

@@ -140,6 +140,7 @@ function Recommendation({ view }: { view: ReferralView }) {
           {ev.trace.missing.length > 0 && <p className="mb-2 text-sm"><span className="font-medium">Missing critical information:</span> {ev.trace.missing.map(keyLabel).join(', ')}</p>}
           {ev.trace.blocking.length > 0 && <p className="mb-2 text-sm"><span className="font-medium">Confirm first:</span> {ev.trace.blocking.map(keyLabel).join(', ')}</p>}
           {ev.trace.conflicts.length > 0 && <p className="mb-2 text-sm"><span className="font-medium">Conflicting:</span> {ev.trace.conflicts.map(keyLabel).join(', ')}</p>}
+          {ev.trace.confirmation_set.length > 0 && <p className="mb-2 text-sm"><span className="font-medium">To confirm before a decision:</span> {ev.trace.confirmation_set.map(keyLabel).join(', ')}</p>}
           <table className="mt-3 w-full text-left text-sm">
             <caption className="text-left font-medium">Why: every rule and what it read</caption>
             <thead><tr><th scope="col">Rule</th><th scope="col">Kind</th><th scope="col">Result</th><th scope="col">Inputs</th></tr></thead>

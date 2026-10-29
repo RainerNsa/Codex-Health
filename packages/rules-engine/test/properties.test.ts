@@ -133,6 +133,13 @@ describe('engine properties', () => {
       expect(r.outcome).toBe('do_not_admit');
     }));
   });
+  it('the confirmation set always covers every fact input of every hard stop and of every rule that fired', () => {
+    fc.assert(fc.property(input, (i) => {
+      const r = run(i);
+      for (const t of r.trace) if (t.kind === 'hard_stop' || t.result === 'yes') for (const inp of t.inputs) if (!inp.key.startsWith('facility.')) expect(r.confirmation_set).toContain(inp.key);
+      for (const k of r.confirmation_set) expect(r.trace.some((t) => (t.kind === 'hard_stop' || t.result === 'yes') && t.inputs.some((inp) => inp.key === k))).toBe(true);
+    }), { numRuns: 300 });
+  });
   it('the trace never carries text: only keys, codes, numbers, tri-states and rule ids', () => {
     fc.assert(fc.property(input, (i) => {
       const s = JSON.stringify(run(i).trace);
