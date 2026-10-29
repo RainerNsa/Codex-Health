@@ -62,7 +62,15 @@ jobs:
         with:
           fetch-depth: 0   # gitleaks scans every commit, not just the tip
       - name: semgrep (default rules, no metrics, no upload)
-        run: semgrep scan --config p/default --error --metrics=off --exclude node_modules --exclude '*.lock' .
+        # Excluded: docs/tooling/upstream (vendored third-party READMEs and env examples, read-only reference, not our
+        # code) and the RDS "no logging" rule: RDS log exports are off BY DESIGN because statement logs carry PHI
+        # (infra/README.md "Deliberately missing"; CONSTRAINTS data policy 5; SPEC §12). Exclusions live here, in a
+        # guarded file with the reason, never as an inline nosemgrep (CONSTRAINTS Floor).
+        run: >-
+          semgrep scan --config p/default --error --metrics=off
+          --exclude node_modules --exclude '*.lock' --exclude docs/tooling/upstream
+          --exclude-rule terraform.aws.security.aws-db-instance-no-logging.aws-db-instance-no-logging
+          .
       - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}

@@ -63,9 +63,10 @@ export function scanFiles(files, patterns, { prepare } = {}) {
     }
     if (text.includes('\0')) continue; // binary
     if (prepare) text = prepare(text, file);
-    for (const { label, re } of patterns) {
+    for (const { label, re, accept } of patterns) {
       const global = new RegExp(re.source, re.flags.includes('g') ? re.flags : re.flags + 'g');
       for (const match of text.matchAll(global)) {
+        if (accept && !accept(match)) continue; // a literal regex captures, a predicate decides: no regex is built from data
         hits.push({ file: rel(file), line: lineOf(text, match.index), label });
       }
     }
