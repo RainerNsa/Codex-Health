@@ -12,7 +12,7 @@
 # Contents are hashes and ids only, never PHI, but the bucket still gets KMS and
 # block-public-access because CONSTRAINTS requires them on every bucket.
 #
-# Key scheme: <facility_id>/<date>.json, one anchor per facility per day. Keys
+# Key scheme: <facility_id>/<date>.json and organization/<organization_id>/<date>.json, one anchor per chain per day. Keys
 # are write-once: the bucket policy denies PutObject without
 # `If-None-Match: *`, so a second write to an existing key fails with 412
 # instead of adding a version, and it denies every delete for everyone. The

@@ -4,7 +4,7 @@
 -- SUPERUSER (which would drop it out of the enumeration) is itself reported. Two further rows (SPEC §12,
 -- security review #2): no role at all may hold BYPASSRLS (the owner included: FORCE RLS binds it only while
 -- it lacks the attribute), and SUPERUSER is allowed only for the bootstrap/master roles named below.
-WITH required(rolname) AS (VALUES ('codex_app'), ('codex_worker')),
+WITH required(rolname) AS (VALUES ('codex_app'), ('codex_worker'), ('codex_anchor')),
 superuser_allowed(rolname) AS (VALUES ('postgres'), ('codex_ci'), ('rdsadmin')),   -- the RDS master codex_admin is not rolsuper
 checked AS (
   SELECT rolname

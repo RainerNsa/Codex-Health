@@ -286,7 +286,7 @@ test('row-level security, organisation isolation, audit immutability, the hash c
       }
     });
 
-    await sub('privilege matrix: every table/column grant of the app and worker roles is exactly the expected set (any relkind)', async () => {
+    await sub('privilege matrix: every table/column grant of the app, worker and anchor roles is exactly the expected set (any relkind)', async () => {
       const { rows } = await c.query(`
         SELECT grantee, table_name, privilege_type, string_agg(column_name, ',' ORDER BY column_name) AS cols
         FROM (
