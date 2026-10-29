@@ -72,9 +72,9 @@ async function currentFacts(q: Query, facilityId: string, referralId: string): P
 }
 
 /** The facility's settings; a stored rule set the engine refuses is 409 rule_set_refused, never a 500. */
-async function loadSettings(q: Query, facilityId: string, organizationId: string): Promise<RuleSet | null> {
+async function loadSettings(q: Query, facilityId: string, organizationId: string, at?: { ruleSetVersion: number; profileVersion: number }): Promise<RuleSet | null> {
   try {
-    return await loadStored(q, facilityId, organizationId);
+    return await loadStored(q, facilityId, organizationId, at);
   } catch (err) {
     if (err instanceof RuleSetRefused) throw new HttpError(409, 'rule_set_refused');
     throw err;
@@ -178,7 +178,8 @@ async function referralView(q: Query, facilityId: string, referralId: string, ru
     `SELECT d.id, d.evaluation_id, d.decision, d.override_reason, d.requested_by, u.display_name AS requested_by_name, d.created_at,
             d.amends_decision_id, d.amendment_reason,
             EXISTS (SELECT 1 FROM user_facility_roles r WHERE r.user_id = d.requested_by AND r.facility_id = d.facility_id
-                    AND r.role IN ('facility_admin', 'admissions_reviewer')) AS active
+                    AND r.role IN ('facility_admin', 'admissions_reviewer')
+                    AND (d.amends_decision_id IS NULL OR r.role = 'facility_admin')) AS active
      FROM decision_requests d JOIN users u ON u.id = d.requested_by
      WHERE d.facility_id = $1 AND d.referral_id = $2 ORDER BY d.created_at DESC LIMIT 1`, [facilityId, referralId])).rows[0];
   // an original request stands while the referral is in review under current settings; an amendment request while
@@ -394,7 +395,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx }): void {
   });
 
   /** Every check a decision passes before it is recorded or filed for co-sign (§5.1 T12; 2.7; I5). */
-  const checkDecision = async (q: Query, fid: string, rid: string, ruleSet: RuleSet, evaluationId: string, decision: 'admit' | 'do_not_admit', reason: string | null, amend = false) => {
+  const checkDecision = async (q: Query, fid: string, org: string, rid: string, ruleSet: RuleSet, evaluationId: string, decision: 'admit' | 'do_not_admit', reason: string | null, amend = false) => {
     const ref = await q<{ status: string }>('SELECT status FROM referrals WHERE facility_id = $1 AND id = $2 FOR UPDATE', [fid, rid]);
     if (!ref.rows[0]) throw new HttpError(404, 'not_found');
     const status = ref.rows[0].status;
@@ -404,28 +405,38 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx }): void {
     const latestDecision = amend ? (await q<{ id: string }>('SELECT id FROM decisions WHERE facility_id = $1 AND referral_id = $2 ORDER BY decided_at DESC LIMIT 1', [fid, rid])).rows[0]?.id ?? null : null;
     // after finalize the facts are frozen and the referral cannot be re-evaluated, so an amendment decides on the
     // recorded evaluation even if the settings changed since
-    if (amend && ev && ev.id === evaluationId) return finishCheck(q, fid, rid, ruleSet, ev, decision, reason, status, latestDecision);
+    // ...but the Admit and flip gates then hold under both the settings the evaluation was made under and the
+    // current ones: switching a rule off and back cannot let an Admit through (security review of PR #26)
+    if (amend && ev && ev.id === evaluationId) {
+      const pinned = await loadSettings(q, fid, org, { ruleSetVersion: ev.rule_set_version, profileVersion: ev.facility_profile_version });
+      if (!pinned) throw new HttpError(409, 'rule_set_refused');
+      return finishCheck(q, fid, rid, [ruleSet, pinned], ev, decision, reason, status, latestDecision);
+    }
     // decided on what the Reviewer saw, under the settings in force now: anything newer is refused
     // shortcut: settings are read before the referral lock and a settings save takes no referral lock, so a save
     // committing in that gap is not seen by this decision; close it (re-read versions under a shared lock) before pilot
     if (!ev || ev.id !== evaluationId || ev.rule_set_version !== ruleSet.ruleSetVersion || ev.facility_profile_version !== ruleSet.profileVersion) {
       throw new HttpError(409, 'evaluation_stale');
     }
-    return finishCheck(q, fid, rid, ruleSet, ev, decision, reason, status, latestDecision);
+    return finishCheck(q, fid, rid, [ruleSet], ev, decision, reason, status, latestDecision);
   };
-  const finishCheck = async (q: Query, fid: string, rid: string, ruleSet: RuleSet, ev: EvaluationRow, decision: 'admit' | 'do_not_admit', reason: string | null, status: string, latestDecision: string | null) => {
+  const finishCheck = async (q: Query, fid: string, rid: string, ruleSets: RuleSet[], ev: EvaluationRow, decision: 'admit' | 'do_not_admit', reason: string | null, status: string, latestDecision: string | null) => {
     const facts = await currentFacts(q, fid, rid);
     if (!Array.isArray(ev.trace.confirmation_set) || confirmation(ev.trace.confirmation_set, facts).some((c) => !c.confirmed)) throw new HttpError(409, 'confirmation_incomplete');
-    if (decision === 'admit' && confirmation(admitKeys(ruleSet, ev), facts).some((c) => !c.known)) throw new HttpError(409, 'confirmation_incomplete');
+    if (decision === 'admit' && ruleSets.some((rs) => confirmation(admitKeys(rs, ev), facts).some((c) => !c.known))) throw new HttpError(409, 'confirmation_incomplete');
     const override = decision !== ev.outcome;
     if (override !== (reason !== null)) throw new HttpError(400, override ? 'override_reason_required' : 'invalid_decision');
     // a hard stop overridden to Admit, or any decision after a flipped hard-stop input, needs an Admin co-sign
-    const needsCosign = (decision === 'admit' && await hardStopEverFired(q, fid, rid)) || await hardStopFlipped(q, fid, rid, ruleSet);
+    let flipped = false;
+    for (const rs of ruleSets) flipped ||= await hardStopFlipped(q, fid, rid, rs);
+    const needsCosign = (decision === 'admit' && await hardStopEverFired(q, fid, rid)) || flipped;
     return { ev, override, needsCosign, status, latestDecision };
   };
   const decisionBody = (body: unknown) => {
     const b = (body ?? {}) as { evaluation_id?: unknown; decision?: unknown; override_reason?: unknown; amendment_reason?: unknown };
-    const amendmentReason = typeof b.amendment_reason === 'string' && b.amendment_reason.trim() ? b.amendment_reason.trim() : null;
+    // present but blank is a missing reason, not an original decision
+    if (b.amendment_reason !== undefined && b.amendment_reason !== null && (typeof b.amendment_reason !== 'string' || !b.amendment_reason.trim())) throw new HttpError(400, 'amendment_reason_required');
+    const amendmentReason = typeof b.amendment_reason === 'string' ? b.amendment_reason.trim() : null;
     if (amendmentReason && amendmentReason.length > NOTE_MAX) throw new HttpError(400, 'invalid_decision');
     const decision: 'admit' | 'do_not_admit' | null = b.decision === 'admit' || b.decision === 'do_not_admit' ? b.decision : null;
     const reason = typeof b.override_reason === 'string' && b.override_reason.trim() ? b.override_reason.trim() : null;
@@ -462,7 +473,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx }): void {
         const who = await enter(q, fid, user);
         if (!WRITE_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
         const ruleSet = await settingsOrRefuse(q, fid, who.organizationId);
-        const { ev, override, needsCosign } = await checkDecision(q, fid, rid, ruleSet, evaluationId, decision, reason);
+        const { ev, override, needsCosign } = await checkDecision(q, fid, who.organizationId, rid, ruleSet, evaluationId, decision, reason);
         if (needsCosign) throw new HttpError(409, 'cosign_required'); // file it with POST .../decision-requests
         await record(q, fid, rid, user, ev, { decision, reason, override, decidedBy: user, request: null, amends: null, amendmentReason: null, from: 'ready_for_review' });
         return referralView(q, fid, rid, ruleSet, who);
@@ -483,7 +494,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx }): void {
         if (!WRITE_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
         if (who.role !== 'facility_admin') throw new HttpError(403, 'amend_admin_only');
         const ruleSet = await settingsOrRefuse(q, fid, who.organizationId);
-        const { ev, override, needsCosign, status, latestDecision } = await checkDecision(q, fid, rid, ruleSet, evaluationId, decision, reason, true);
+        const { ev, override, needsCosign, status, latestDecision } = await checkDecision(q, fid, who.organizationId, rid, ruleSet, evaluationId, decision, reason, true);
         if (needsCosign) throw new HttpError(409, 'cosign_required'); // file it with POST .../decision-requests and an amendment_reason
         await record(q, fid, rid, user, ev, { decision, reason, override, decidedBy: user, request: null, amends: latestDecision, amendmentReason, from: status });
         return referralView(q, fid, rid, ruleSet, who);
@@ -504,7 +515,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx }): void {
         // an amendment_reason makes it an amendment request (T13): Admins only
         if (amendmentReason && who.role !== 'facility_admin') throw new HttpError(403, 'amend_admin_only');
         const ruleSet = await settingsOrRefuse(q, fid, who.organizationId);
-        const { needsCosign, latestDecision } = await checkDecision(q, fid, rid, ruleSet, evaluationId, decision, reason, amendmentReason !== null);
+        const { needsCosign, latestDecision } = await checkDecision(q, fid, who.organizationId, rid, ruleSet, evaluationId, decision, reason, amendmentReason !== null);
         if (!needsCosign) throw new HttpError(409, 'cosign_not_needed'); // record it directly
         await q(
           'INSERT INTO decision_requests (facility_id, referral_id, evaluation_id, decision, override_reason, requested_by, amends_decision_id, amendment_reason) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
@@ -530,14 +541,15 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx }): void {
         const r = (await q<{ id: string; evaluation_id: string; decision: 'admit' | 'do_not_admit'; override_reason: string | null; requested_by: string; active: boolean; amends_decision_id: string | null; amendment_reason: string | null }>(
           `SELECT d.id, d.evaluation_id, d.decision, d.override_reason, d.requested_by, d.amends_decision_id, d.amendment_reason,
                   EXISTS (SELECT 1 FROM user_facility_roles r WHERE r.user_id = d.requested_by AND r.facility_id = d.facility_id
-                          AND r.role IN ('facility_admin', 'admissions_reviewer')) AS active
+                          AND r.role IN ('facility_admin', 'admissions_reviewer')
+                    AND (d.amends_decision_id IS NULL OR r.role = 'facility_admin')) AS active
            FROM decision_requests d WHERE d.facility_id = $1 AND d.referral_id = $2 ORDER BY d.created_at DESC LIMIT 1`, [fid, rid])).rows[0];
         // only the latest request, by someone who can still decide here; an older one was replaced
         if (!r || r.id !== qid || !r.active) throw new HttpError(409, 'request_not_current');
         if (r.requested_by === user) throw new HttpError(409, 'cosign_own_request');
         // the request is re-checked as it stands now: a new evaluation or a settings change makes it stale
         const amend = r.amends_decision_id !== null;
-        const { ev, override, status, latestDecision } = await checkDecision(q, fid, rid, ruleSet, r.evaluation_id, r.decision, r.override_reason, amend);
+        const { ev, override, status, latestDecision } = await checkDecision(q, fid, who.organizationId, rid, ruleSet, r.evaluation_id, r.decision, r.override_reason, amend);
         // an amendment request still amends the latest decision (a newer amendment replaced it otherwise)
         if (amend && latestDecision !== r.amends_decision_id) throw new HttpError(409, 'request_not_current');
         await record(q, fid, rid, user, ev, {

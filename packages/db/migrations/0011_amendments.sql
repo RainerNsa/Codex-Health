@@ -175,6 +175,10 @@ END
 $$;
 REVOKE EXECUTE ON FUNCTION referral_transitions_apply() FROM PUBLIC;
 
+-- one T12/T13 per decision: T13 (amended -> amended) could otherwise be replayed on an existing amendment
+-- (security review of PR #26)
+CREATE UNIQUE INDEX referral_transitions_one_per_decision ON referral_transitions (facility_id, decision_id) WHERE decision_id IS NOT NULL;
+
 -- every function in public pins search_path (grants.sql reports any that does not)
 DO $$
 DECLARE

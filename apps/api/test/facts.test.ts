@@ -535,6 +535,39 @@ describe.skipIf(!url)('manual fact entry API', () => {
     expect([view.referral.status, view.decision.decision, view.decision.decided_by, view.decision.cosigned_by, view.pending_request])
       .toEqual(['amended', 'admit', U.admin, ADMIN2, null]);
     expect((await cosign(hs.rid, filed.id, ADMIN2)).json()).toEqual({ error: 'request_not_current' });
+    // a blank amendment reason is a missing one, not an original request
+    expect((await requestCosign(hs.rid, U.admin, { ...body, amendment_reason: '  ' })).json()).toEqual({ error: 'amendment_reason_required' });
+    // overtaken: a filing is replaced by another Admin's direct amendment and can no longer be co-signed
+    const again = (await requestCosign(hs.rid, U.admin, { ...body, amendment_reason: 'SYNTHETIC: confirm again' })).json().pending_request;
+    expect((await amend(hs.rid, ADMIN2, { evaluation_id: hs.ev.id, decision: 'do_not_admit', amendment_reason: 'SYNTHETIC: direct' })).statusCode).toBe(201);
+    expect((await get(refUrl(hs.rid), ADMIN2)).json().pending_request).toBe(null);
+    expect((await cosign(hs.rid, again.id, ADMIN2)).json()).toEqual({ error: 'request_not_current' });
+    // a filer who is no longer an Admin cannot have an amendment carried out
+    const third = (await requestCosign(hs.rid, U.admin, { ...body, amendment_reason: 'SYNTHETIC: third' })).json().pending_request;
+    await c.query('SAVEPOINT demoted');
+    await c.query("SELECT set_config('app.organization_id', $1, true), set_config('app.facility_id', $2, true)", [ORG.a, FAC.a]);
+    await c.query("DELETE FROM user_facility_roles WHERE user_id = $1 AND facility_id = $2", [U.admin, FAC.a]);
+    await c.query("INSERT INTO user_facility_roles (user_id, facility_id, role) VALUES ($1, $2, 'admissions_reviewer')", [U.admin, FAC.a]);
+    expect((await get(refUrl(hs.rid), ADMIN2)).json().pending_request).toBe(null);
+    expect((await cosign(hs.rid, third.id, ADMIN2)).json()).toEqual({ error: 'request_not_current' });
+    await c.query('ROLLBACK TO SAVEPOINT demoted');
+  });
+
+  it('amend: an Admit amendment holds under the settings the evaluation was made under, not only the current ones', async () => {
+    // a review-rule input left unknown: the Reviewer records Do Not Admit
+    const r = await withFacts(['ventilator_use', 'no'], ['daily_skilled_need', 'unknown'], ['recent_aggression', 'unknown']);
+    expect(r.ev.outcome).toBe('needs_review');
+    await move(r.rid, U.reviewer, { action: 'submit' });
+    expect((await finalize(r.rid, U.reviewer, { evaluation_id: r.ev.id, decision: 'do_not_admit', override_reason: 'SYNTHETIC: cannot confirm' })).statusCode).toBe(201);
+    const body = { evaluation_id: r.ev.id, decision: 'admit', override_reason: 'SYNTHETIC', amendment_reason: 'SYNTHETIC: amend' };
+    expect((await amend(r.rid, U.admin, body)).json()).toEqual({ error: 'confirmation_incomplete' });
+    // switching the review rule off does not open the gate: the recorded evaluation was made with it on
+    const path = `/api/facilities/${FAC.a}/settings`;
+    const cur = (await get(path, U.admin)).json();
+    const put = (disabled: string[], v: number) => app.inject({ method: 'PUT', url: path, headers: as(U.admin), payload: { capabilities: cur.profile.capabilities, disabled_rules: disabled, based_on_version: v } });
+    expect((await put(['seed.review.behavioral_escalation'], cur.profile.version)).statusCode).toBe(200);
+    expect((await amend(r.rid, U.admin, body)).json()).toEqual({ error: 'confirmation_incomplete' });
+    await put(cur.profile.disabled_rules, cur.profile.version + 1);
   });
 
   it('review: hold, request information, escalate and resume move only from the states §5.1 allows, each with its fields', async () => {
