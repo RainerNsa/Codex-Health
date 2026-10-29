@@ -41,7 +41,7 @@ Evaluated in this fixed order; the first match wins.
 | 5 | A favorable rule true and nothing above | Admit | — |
 | 6 | Nothing fired | Needs Review | `missing_info` |
 
-- Step 5 is governed by the flag `favorable_rule_required` (default **on**): with it on, Admit requires a positive favorable rule; with it off, step 5 reads "nothing above fired → Admit" and step 6 disappears. The founders choose before M2 exit (ruling D12); the Needs Review rate is reported from P0 either way.
+- Step 5 is governed by the flag `favorable_rule_required` (default **on**): with it on, Admit requires a positive favorable rule; with it off, step 5 reads "nothing above fired → Admit" and step 6 disappears. **Ruled 2026-10-29 (F8 part 1): the flag stays on — Admit requires at least one positive favorable rule.** The Needs Review rate is reported from P0.
 - Admit is reachable only by positive confirmation: every fact feeding a triggered rule or a hard-stop input is confirmed by a person before finalize (the minimum confirmation set, 2.7); nothing else is required.
 - The critical-input set is derived from the enabled hard-stop and payer rules; a manual `is_critical` flag may only add, never remove (2.4).
 - The engine emits, per evaluation: outcome, sub-reason codes, triggered rules with evidence, missing and conflicting items, a ranked list of blocking facts ("would be Admit if X confirmed"), and `clinical_outcome` and `financial_status` as separate fields (1.5). Whether a payer Unknown still blocks the clinical answer stays on merged behaviour until the founders decide (§4 item 10).
