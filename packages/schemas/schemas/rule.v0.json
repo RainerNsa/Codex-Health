@@ -178,12 +178,50 @@
           },
           "facts": {
             "type": "object",
-            "description": "Fact key \u2192 tri-state presence the engine derives (see fact.v0 description).",
+            "description": "Fact key \u2192 tri-state presence, a full fact value object, or { value, as_of_date } for recency cases.",
             "additionalProperties": {
-              "enum": [
-                "yes",
-                "no",
-                "unknown"
+              "anyOf": [
+                {
+                  "enum": [
+                    "yes",
+                    "no",
+                    "unknown"
+                  ]
+                },
+                {
+                  "$ref": "urn:codex-health:schema:fact.v0#/properties/value"
+                },
+                {
+                  "type": "object",
+                  "additionalProperties": false,
+                  "required": [
+                    "value",
+                    "as_of_date"
+                  ],
+                  "properties": {
+                    "value": {
+                      "anyOf": [
+                        {
+                          "enum": [
+                            "yes",
+                            "no",
+                            "unknown"
+                          ]
+                        },
+                        {
+                          "$ref": "urn:codex-health:schema:fact.v0#/properties/value"
+                        }
+                      ]
+                    },
+                    "as_of_date": {
+                      "type": [
+                        "string",
+                        "null"
+                      ],
+                      "pattern": "^[0-9]{4}-[0-9]{2}-[0-9]{2}$"
+                    }
+                  }
+                }
               ]
             }
           },

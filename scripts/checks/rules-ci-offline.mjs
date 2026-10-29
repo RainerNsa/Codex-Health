@@ -1,7 +1,8 @@
 // CONSTRAINTS: the rules engine is pure and deterministic; its CI never calls Bedrock, Textract
 // or any network. Fails if packages/rules-engine source or tests import a network client, an
 // AWS SDK or an I/O module, call fetch, read process.env, or use a clock or randomness.
-// Exception: packages/rules-engine/test/** may import child_process to spawn the engine's own CLI.
+// Exceptions: packages/rules-engine/test/** may import fs/os (fixtures, temp files) and child_process (spawn the
+// engine's own CLI); src/cli.ts may import fs (it reads the JSON files named on its command line).
 import fs from 'node:fs';
 import path from 'node:path';
 import { repoRoot, walk, scanFiles, formatHits, finish, SOURCE_EXTS } from './lib.mjs';
@@ -26,9 +27,14 @@ const PATTERNS = [
   { label: 'nondeterministic call', re: /\b(Date\.now\s*\(|new\s+Date\b|performance\.now\s*\(|Math\.random\s*\(|crypto\.randomUUID\s*\(|process\.hrtime\b)/ },
   { label: 'process.env read', re: /\bprocess\.env\b/ },
   { label: 'browser network API', re: /\b(WebSocket|XMLHttpRequest|EventSource)\b/ },
+  { label: 'network tool spawned', re: /\b(spawn|spawnSync|exec|execSync|execFile|execFileSync)\s*\(\s*['"`](curl|wget|nc|ncat|ssh|scp|aws|python3?)\b/ },
+  { label: 'dynamic import of a non-literal', re: /\bimport\s*\(\s*[^'"`)]/ },
+  { label: 'fetch reference', re: /\bfetch\b(?!\s*\()/ },
 ];
 const SRC_PATTERNS = [...PATTERNS, { label: 'I/O import', ...importOf([...IO_MODULES, ...SPAWN_MODULES]) }];
-const TEST_PATTERNS = [...PATTERNS, { label: 'I/O import', ...importOf(IO_MODULES) }];
+// Tests may read fixtures and write temp files (fs, os) and spawn the engine's own CLI; they are still held
+// to every other rule (no network, AWS SDK, fetch, clock, env or browser API). Worker threads stay out.
+const TEST_PATTERNS = [...PATTERNS, { label: 'I/O import', ...importOf(IO_MODULES.filter((m) => !m.endsWith('fs'))) }];
 
 if (!fs.existsSync(DIR)) finish('SKIP', NAME, 'packages/rules-engine does not exist yet');
 const files = walk(DIR, { exts: SOURCE_EXTS });
@@ -36,7 +42,16 @@ const manifest = path.join(DIR, 'package.json');
 if (files.length === 0 && !fs.existsSync(manifest)) finish('SKIP', NAME, 'packages/rules-engine has no source yet');
 
 const isTest = (f) => f.startsWith(TEST_DIR);
-const hits = [...scanFiles(files.filter((f) => !isTest(f)), SRC_PATTERNS), ...scanFiles(files.filter(isTest), TEST_PATTERNS)];
+// src/cli.ts is the engine's one I/O boundary: it reads the JSON files named on its command line and nothing
+// else (SPEC §10.4). It is held to every other rule (no network, AWS SDK, fetch, clock, env or browser API);
+// only the file-system import is allowed there. The library (src/index.ts and what it imports) stays pure.
+const isCli = (f) => f === path.join(DIR, 'src', 'cli.ts');
+const CLI_PATTERNS = [...PATTERNS, { label: 'I/O import', ...importOf(IO_MODULES.filter((m) => !m.endsWith('fs')).concat(SPAWN_MODULES)) }];
+const hits = [
+  ...scanFiles(files.filter((f) => !isTest(f) && !isCli(f)), SRC_PATTERNS),
+  ...scanFiles(files.filter(isCli), CLI_PATTERNS),
+  ...scanFiles(files.filter(isTest), TEST_PATTERNS),
+];
 if (fs.existsSync(manifest)) {
   let pkg = {};
   try {

@@ -13,7 +13,7 @@ decision lands in an append-only hash-chained audit log.
 3. `README.md`: where things live (the layout tree there is the map of this repo).
 4. `.claude/rules/`: short always-on rules (`constraints-first.md`, `data-policy.md`).
 
-Milestone now: **M1** (skeleton, tenancy, data model; started 2026-10-29). M0 closed 2026-10-29 (`../ops/decision-log.md`). No `evaluate()` and no PHI path exists yet; M1 builds the data model, the audit chain, provisioning, anchoring and the CI gates, one slice at a time.
+Milestone now: **M2** (rules engine; started 2026-10-29). M0 and M1 closed 2026-10-29 (`../ops/decision-log.md`; M1's infra half is Terraform validated, never applied). No PHI path exists yet. M2 builds the DSL parser, Kleene evaluation, the §4 resolver, the trace and the rule-test runner, one slice at a time with `doubt-driven-development` on the resolver and the logic; `/build auto` is never used here.
 
 ## Non-negotiables
 
