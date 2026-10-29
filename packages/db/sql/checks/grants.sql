@@ -36,18 +36,29 @@ SELECT k.rolname, 'role has CREATE on schema public'
 FROM checked k
 WHERE has_schema_privilege(k.rolname, 'public', 'CREATE')
 UNION ALL
+-- Temporary tables shadow unqualified table names inside trigger functions (security re-review of PR #24):
+-- no checked role may create them, and every function in public pins search_path with pg_temp last.
+SELECT k.rolname, 'role has TEMPORARY on this database'
+FROM checked k
+WHERE has_database_privilege(k.rolname, current_database(), 'TEMPORARY')
+UNION ALL
+SELECT p.oid::regprocedure::text, 'function in public does not pin search_path = pg_catalog, public, pg_temp'
+FROM pg_proc p JOIN pg_namespace n ON n.oid = p.pronamespace
+WHERE n.nspname = 'public'
+  AND NOT coalesce('search_path=pg_catalog, public, pg_temp' = ANY (p.proconfig), false)
+UNION ALL
 -- has_any_column_privilege also counts a table-level grant, and catches GRANT UPDATE (col) ON audit_log,
 -- which has_table_privilege would miss. DELETE and TRUNCATE exist only at table level.
 SELECT k.rolname, 'role has UPDATE on ' || t.tbl || ' (table- or column-level)'
 FROM checked k
-CROSS JOIN (VALUES ('audit_log'), ('platform_audit_log'), ('evaluations'), ('decisions'), ('facts'), ('product_events'), ('rule_sets'), ('facility_profiles')) AS t(tbl)
+CROSS JOIN (VALUES ('audit_log'), ('platform_audit_log'), ('evaluations'), ('decisions'), ('facts'), ('product_events'), ('rule_sets'), ('facility_profiles'), ('referral_transitions')) AS t(tbl)
 WHERE to_regclass('public.' || t.tbl) IS NOT NULL
   AND has_any_column_privilege(k.rolname, 'public.' || t.tbl, 'UPDATE')
 UNION ALL
 SELECT k.rolname, 'role has ' || p.priv || ' on ' || t.tbl
 FROM checked k
 CROSS JOIN (VALUES ('DELETE'), ('TRUNCATE')) AS p(priv)
-CROSS JOIN (VALUES ('audit_log'), ('platform_audit_log'), ('evaluations'), ('decisions'), ('facts'), ('product_events'), ('rule_sets'), ('facility_profiles')) AS t(tbl)
+CROSS JOIN (VALUES ('audit_log'), ('platform_audit_log'), ('evaluations'), ('decisions'), ('facts'), ('product_events'), ('rule_sets'), ('facility_profiles'), ('referral_transitions')) AS t(tbl)
 WHERE to_regclass('public.' || t.tbl) IS NOT NULL
   AND has_table_privilege(k.rolname, 'public.' || t.tbl, p.priv)
 UNION ALL
@@ -78,7 +89,8 @@ FROM (VALUES ('audit_log', 'UPDATE, DELETE and TRUNCATE', 8 | 16 | 32),
              ('facts', 'UPDATE', 16),
              ('product_events', 'UPDATE', 16),
              ('rule_sets', 'UPDATE, DELETE and TRUNCATE', 8 | 16 | 32),
-             ('facility_profiles', 'UPDATE, DELETE and TRUNCATE', 8 | 16 | 32)) AS t(tbl, ops, bits)
+             ('facility_profiles', 'UPDATE, DELETE and TRUNCATE', 8 | 16 | 32),
+             ('referral_transitions', 'UPDATE, DELETE and TRUNCATE', 8 | 16 | 32)) AS t(tbl, ops, bits)
 WHERE to_regclass('public.' || t.tbl) IS NOT NULL
   AND NOT EXISTS (
     SELECT 1
@@ -101,7 +113,9 @@ FROM (VALUES
   ('users', 'users_provisioning_audit'), ('product_events', 'product_events_insert_guard'),
   ('user_facility_roles', 'user_facility_roles_guard'), ('user_facility_roles', 'user_facility_roles_audit'),
   ('rule_sets', 'rule_sets_version'), ('rule_sets', 'rule_sets_audit'),
-  ('facility_profiles', 'facility_profiles_version'), ('facility_profiles', 'facility_profiles_audit')) AS e(tbl, trg)
+  ('facility_profiles', 'facility_profiles_version'), ('facility_profiles', 'facility_profiles_audit'),
+  ('referral_transitions', 'referral_transitions_guard'), ('referral_transitions', 'referral_transitions_apply'),
+  ('referrals', 'referrals_app_status_guard'), ('decisions', 'decisions_app_guard'), ('decisions', 'decisions_finalized_check')) AS e(tbl, trg)
 WHERE to_regclass('public.' || e.tbl) IS NOT NULL
   AND NOT EXISTS (
     SELECT 1 FROM pg_trigger g

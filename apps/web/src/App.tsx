@@ -2,7 +2,8 @@
 // returns is rendered as text (no HTML injection anywhere, CONSTRAINTS Floor). Defaults are the synthetic seed
 // (scripts/dev/seed-synthetic.mjs): ZZTEST Alpha Facility 1 and its Reviewer.
 import { useState, type FormEvent } from 'react';
-import { ApiError, createReferral, enterFact, getReferral, type ReferralView, type Tri } from './api.ts';
+import { ApiError, createReferral, enterFact, finalizeReferral, getReferral, moveReferral, reevaluateReferral, type ReferralView, type Tri } from './api.ts';
+import { ReviewPanel } from './ReviewPanel.tsx';
 import { SettingsPanel } from './SettingsPanel.tsx';
 
 const SEED_FACILITY = '00000000-0000-4000-8000-00000000f0a1';
@@ -22,6 +23,14 @@ const ERROR_TEXT: Record<string, string> = {
   facility_not_configured: 'This facility has no rule set or profile yet. An Admin sets them under Facility settings.',
   rule_set_refused: 'The organisation\'s rule set is invalid, so referrals cannot be evaluated until it is replaced.', referral_not_open: 'This referral is finalized; it changes only by amendment.',
   rejected: 'The database refused this change.',
+  invalid_transition: 'Check the entry: a note is required, and a department or at least one requested item where asked.',
+  transition_not_allowed: 'That step is not available from the referral\'s current status. Reload it.',
+  invalid_decision: 'Check the decision: choose Admit or Do Not Admit; a reason only when it differs from the recommendation.',
+  override_reason_required: 'The decision differs from the recommendation, so a reason is required.',
+  evaluation_stale: 'The recommendation or the facility settings changed since this screen loaded. Reload, re-evaluate if asked, and decide again.',
+  confirmation_incomplete: 'State every fact the decision rests on before deciding; Admit also needs known values, not unknown.',
+  evaluation_current: 'The recommendation is already up to date.',
+  cosign_required: 'This decision needs a second Admin to co-sign. Co-signing arrives in the next build; until then it cannot be recorded.',
 };
 const keyLabel = (k: string) => k.replaceAll('_', ' ');
 
@@ -33,15 +42,17 @@ export function App() {
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
 
-  const run = async (fn: () => Promise<ReferralView>) => {
+  const run = async (fn: () => Promise<ReferralView>): Promise<boolean> => {
     setBusy(true);
     setError(null);
     try {
       const v = await fn();
       setView(v);
       setReferralId(v.referral.id);
+      return true;
     } catch (err) {
       setError(err instanceof ApiError ? (ERROR_TEXT[err.code] ?? `Request failed (${err.status}).`) : 'The API is not reachable.');
+      return false;
     } finally {
       setBusy(false);
     }
@@ -50,7 +61,7 @@ export function App() {
   return (
     <main className="mx-auto max-w-5xl p-6 font-sans text-gray-900">
       <header className="mb-6">
-        <h1 className="text-xl font-semibold">Codex Health — manual fact entry</h1>
+        <h1 className="text-xl font-semibold">Codex Health — referral review</h1>
         <p className="text-sm text-gray-600">Internal build. Synthetic data only. Local sign-in stub: no real accounts.</p>
       </header>
 
@@ -88,7 +99,14 @@ export function App() {
                 onSubmit={(value, note, asOf) => run(() => enterFact(facility, view.referral.id, user, { key: k.key, value: { type: 'tri_state', value }, note, as_of_date: asOf }))} />
             ))}
           </section>
-          <Recommendation view={view} />
+          <div>
+            <Recommendation view={view} />
+            <ReviewPanel view={view} busy={busy} on={{
+              move: (body) => run(() => moveReferral(facility, view.referral.id, user, body)),
+              finalize: (body) => run(() => finalizeReferral(facility, view.referral.id, user, body)),
+              reevaluate: () => run(() => reevaluateReferral(facility, view.referral.id, user)),
+            }} />
+          </div>
         </div>
       )}
     </main>
@@ -152,7 +170,7 @@ function Recommendation({ view }: { view: ReferralView }) {
             <tbody>
               {ev.trace.trace.map((t) => (
                 <tr key={t.rule_id} className="border-t align-top">
-                  <td className="py-1 font-mono text-xs">{t.rule_id}</td>
+                  <td className="py-1 font-mono text-xs">{t.rule_id}{view.rule_explanations[t.rule_id] && <span className="block font-sans text-gray-700">{view.rule_explanations[t.rule_id]}</span>}</td>
                   <td>{t.kind.replaceAll('_', ' ')}</td>
                   <td>{t.result === 'yes' ? 'fired' : t.result === 'no' ? 'did not fire' : 'unknown'}</td>
                   <td className="text-xs">{t.inputs.map((i) => `${keyLabel(i.key)}: ${i.value ?? i.presence}`).join('; ')}</td>
