@@ -35,3 +35,88 @@ resource "aws_sqs_queue_redrive_allow_policy" "dlq" {
     sourceQueueArns   = [aws_sqs_queue.processing.arn]
   })
 }
+
+# --- Queue policy (SPEC §12.2 "Queue sender" row; decision log 2026-10-29) ----
+#
+# Threat: anyone in the account with sqs:SendMessage forges a message naming
+# facility B's key. First control, in the worker: facility_id is derived from
+# the referral row the worker owns, never from the message, and a message whose
+# key disagrees with the row is dead-lettered (XF-13). This policy is the SECOND
+# control: only the API task role may send, only the worker task role may
+# receive, delete or change visibility, and everything needs TLS.
+#
+# Written as Deny statements so IAM policies in the account still grant the
+# listed roles their access and an empty list means "nobody yet" (an Allow with
+# no principal is invalid; a Deny with no condition is a complete deny). A DLQ
+# redrive needs SendMessage on this queue, so an operator redrive is denied
+# unless done as a listed sender; that is the §12 "account operator" threat.
+data "aws_iam_policy_document" "processing" {
+  statement {
+    sid       = "DenyInsecureTransport"
+    effect    = "Deny"
+    actions   = ["sqs:*"]
+    resources = [aws_sqs_queue.processing.arn]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+
+  statement {
+    sid       = "DenySendExceptSenderRoles"
+    effect    = "Deny"
+    actions   = ["sqs:SendMessage"]
+    resources = [aws_sqs_queue.processing.arn]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    dynamic "condition" {
+      for_each = length(var.sender_role_arns) > 0 ? [1] : []
+      content {
+        test     = "ArnNotEquals"
+        variable = "aws:PrincipalArn"
+        values   = var.sender_role_arns
+      }
+    }
+  }
+
+  statement {
+    sid    = "DenyConsumeExceptConsumerRoles"
+    effect = "Deny"
+    actions = [
+      "sqs:ReceiveMessage",
+      "sqs:DeleteMessage",
+      "sqs:ChangeMessageVisibility",
+    ]
+    resources = [aws_sqs_queue.processing.arn]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    dynamic "condition" {
+      for_each = length(var.consumer_role_arns) > 0 ? [1] : []
+      content {
+        test     = "ArnNotEquals"
+        variable = "aws:PrincipalArn"
+        values   = var.consumer_role_arns
+      }
+    }
+  }
+}
+
+resource "aws_sqs_queue_policy" "processing" {
+  queue_url = aws_sqs_queue.processing.id
+  policy    = data.aws_iam_policy_document.processing.json
+}

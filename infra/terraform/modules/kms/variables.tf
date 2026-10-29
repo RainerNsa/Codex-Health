@@ -8,3 +8,9 @@ variable "deletion_window_in_days" {
   type        = number
   default     = 30
 }
+
+variable "user_role_arns" {
+  description = "Task role ARNs (modules/compute-roles) granted use-only actions on the key: api, worker and worker-session. Nobody but the account root gets kms:*."
+  type        = list(string)
+  default     = []
+}

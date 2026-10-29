@@ -24,3 +24,9 @@ variable "force_destroy" {
   type        = bool
   default     = false
 }
+
+variable "principal_role_arns" {
+  description = "Role ARNs allowed to read, write and list objects: the API role and the worker session role (modules/compute-roles). Empty (before compute exists) emits no principal deny."
+  type        = list(string)
+  default     = []
+}

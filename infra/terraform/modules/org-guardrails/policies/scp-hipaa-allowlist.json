@@ -22,6 +22,7 @@
         "secretsmanager:*",
         "dynamodb:*",
         "cloudtrail:*",
+        "guardduty:*",
         "budgets:*",
         "tag:*"
       ],

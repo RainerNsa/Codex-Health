@@ -16,7 +16,8 @@
 # out of the allowlist stops it creeping in as an unreviewed side channel.
 # Secrets Manager is listed because RDS stores the managed master password there;
 # DynamoDB is listed only for the Terraform state lock table; CloudTrail for account
-# audit; tag for resource tagging. All are HIPAA-eligible services.
+# audit; GuardDuty so each workload account runs its own detector (modules/detective,
+# M1); tag for resource tagging. All are HIPAA-eligible services.
 # Deliberately absent until their milestone (see infra/README.md): lambda,
 # elasticloadbalancing, acm, route53, cloudfront, wafv2, events, scheduler, ses, sns.
 
