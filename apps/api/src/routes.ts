@@ -182,14 +182,14 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; ruleSet: Ru
         const processingComplete = Number(docs.rows[0]!.open) === 0;
         const result = evaluate({ facts, profile: ruleSet.profile, rules: ruleSet.rules, referral_date: referralDate, processing_complete: processingComplete });
         const prev = await q<{ id: string }>('SELECT id FROM evaluations WHERE facility_id = $1 AND referral_id = $2 ORDER BY evaluated_at DESC LIMIT 1', [fid, rid]);
-        const { trace, missing, conflicts, blocking, empty_profile_keys, resolution_step } = result;
+        const { trace, missing, conflicts, blocking, empty_profile_keys, resolution_step, confirmation_set } = result;
         const ev = await q<{ id: string }>(
           `INSERT INTO evaluations (facility_id, referral_id, previous_evaluation_id, raw, outcome, clinical_outcome, financial_status, sub_reasons, trace,
              criteria_document_ref, rule_set_version, facility_profile_version, model_id, prompt_version, extractor_version, ocr_engine_version, engine_version)
            VALUES ($1, $2, $3, false, $4, $5, $6, $7, $8, $9, $10, $11, 'none', 'none', 'manual-entry', 'none', $12) RETURNING id`,
           [fid, rid, prev.rows[0]?.id ?? null, result.outcome, result.clinical_outcome, result.financial_status, result.sub_reasons,
             // every input of evaluate() beyond the facts is pinned, so the snapshot replays (I6)
-            { resolution_step, trace, missing, conflicts, blocking, empty_profile_keys, inputs: { referral_date: referralDate, processing_complete: processingComplete, fact_ids: facts.map((f) => f.id) } }, ruleSet.criteriaRef, ruleSet.ruleSetVersion, ruleSet.profileVersion, ENGINE_VERSION]);
+            { resolution_step, trace, missing, conflicts, blocking, empty_profile_keys, confirmation_set, inputs: { referral_date: referralDate, processing_complete: processingComplete, fact_ids: facts.map((f) => f.id) } }, ruleSet.criteriaRef, ruleSet.ruleSetVersion, ruleSet.profileVersion, ENGINE_VERSION]);
         await audit(q, fid, user, 'evaluation.created', 'evaluation', ev.rows[0]!.id);
         await emit(q, fid, rid, user, 'evaluation.created', {
           evaluation_id: ev.rows[0]!.id, ...(prev.rows[0] ? { previous_evaluation_id: prev.rows[0].id } : {}), raw: false, outcome: result.outcome, changed_fact_count: 1,
