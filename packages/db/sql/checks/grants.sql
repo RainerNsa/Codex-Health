@@ -36,6 +36,11 @@ SELECT k.rolname, 'role has CREATE on schema public'
 FROM checked k
 WHERE has_schema_privilege(k.rolname, 'public', 'CREATE')
 UNION ALL
+-- The 0010 actor checks key on current_user = 'codex_app': a login role that inherits it would skip them all.
+SELECT pg_get_userbyid(m.member), 'role inherits codex_app (only the owner may)'
+FROM pg_auth_members m
+WHERE m.roleid = 'codex_app'::regrole AND pg_get_userbyid(m.member) <> 'codex_migrator'
+UNION ALL
 -- Temporary tables shadow unqualified table names inside trigger functions (security re-review of PR #24):
 -- no checked role may create them, and every function in public pins search_path with pg_temp last.
 SELECT k.rolname, 'role has TEMPORARY on this database'

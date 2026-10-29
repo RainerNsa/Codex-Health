@@ -31,7 +31,6 @@ CREATE FUNCTION decision_requests_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   ev evaluations%ROWTYPE;
 BEGIN
-  NEW.created_at := clock_timestamp();
   IF current_user = 'codex_app' AND NEW.requested_by IS DISTINCT FROM app_user() THEN
     RAISE EXCEPTION 'decision_requests: requested_by must be the acting user' USING ERRCODE = 'insufficient_privilege';
   END IF;
@@ -41,6 +40,8 @@ BEGIN
   IF (SELECT status FROM referrals WHERE facility_id = NEW.facility_id AND id = NEW.referral_id FOR UPDATE) IS DISTINCT FROM 'ready_for_review' THEN
     RAISE EXCEPTION 'decision_requests: the referral is not ready_for_review' USING ERRCODE = 'check_violation';
   END IF;
+  -- stamped after the referral lock, so "the latest request" follows commit order
+  NEW.created_at := clock_timestamp();
   SELECT * INTO ev FROM evaluations WHERE facility_id = NEW.facility_id AND referral_id = NEW.referral_id ORDER BY evaluated_at DESC LIMIT 1;
   IF ev.id IS DISTINCT FROM NEW.evaluation_id THEN
     RAISE EXCEPTION 'decision_requests: the evaluation is not the latest' USING ERRCODE = 'check_violation';

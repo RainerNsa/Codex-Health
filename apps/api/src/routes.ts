@@ -145,6 +145,13 @@ async function reevaluate(q: Query, fid: string, rid: string, ruleSet: RuleSet, 
   });
 }
 
+/** A hard stop decided this referral at some point (only hard stops produce Do Not Admit, §4). An Admit after that
+ *  needs the co-sign however the hard stop cleared: a corrected fact, or a facility setting changed and
+ *  re-evaluated (security review of PR #25; engineering default, founder to confirm). */
+const hardStopEverFired = async (q: Query, facilityId: string, referralId: string) => (await q<{ n: string }>(
+  "SELECT count(*) AS n FROM evaluations WHERE facility_id = $1 AND referral_id = $2 AND 'do_not_admit' IN (outcome, clinical_outcome)",
+  [facilityId, referralId])).rows[0]!.n !== '0';
+
 async function referralView(q: Query, facilityId: string, referralId: string, ruleSet: RuleSet | null, who: Caller | null = null) {
   const role = who?.role ?? '';
   const ref = await q<{ id: string; status: string }>('SELECT id, status FROM referrals WHERE facility_id = $1 AND id = $2', [facilityId, referralId]);
@@ -164,11 +171,17 @@ async function referralView(q: Query, facilityId: string, referralId: string, ru
   const flipped = ruleSet ? await hardStopFlipped(q, facilityId, referralId, ruleSet) : false;
   // the latest co-sign request, while it can still be carried out: no decision yet, on the latest evaluation,
   // made under the current settings
-  const pending = (await q<{ id: string; evaluation_id: string; decision: string; override_reason: string | null; requested_by: string; created_at: string }>(
-    `SELECT id, evaluation_id, decision, override_reason, requested_by, created_at FROM decision_requests
-     WHERE facility_id = $1 AND referral_id = $2 ORDER BY created_at DESC LIMIT 1`, [facilityId, referralId])).rows[0];
-  const pendingRequest = pending && status === 'ready_for_review' && !outdated && ev?.id === pending.evaluation_id
-    ? { ...pending, can_cosign: role === 'facility_admin' && who?.userId !== pending.requested_by } : null;
+  // shown with the requester's name (staff, not patient data), and only while the requester can still decide here
+  const pending = (await q<{ id: string; evaluation_id: string; decision: string; override_reason: string | null; requested_by: string; requested_by_name: string; created_at: string; active: boolean }>(
+    `SELECT d.id, d.evaluation_id, d.decision, d.override_reason, d.requested_by, u.display_name AS requested_by_name, d.created_at,
+            EXISTS (SELECT 1 FROM user_facility_roles r WHERE r.user_id = d.requested_by AND r.facility_id = d.facility_id
+                    AND r.role IN ('facility_admin', 'admissions_reviewer')) AS active
+     FROM decision_requests d JOIN users u ON u.id = d.requested_by
+     WHERE d.facility_id = $1 AND d.referral_id = $2 ORDER BY d.created_at DESC LIMIT 1`, [facilityId, referralId])).rows[0];
+  const pendingRequest = pending && pending.active && status === 'ready_for_review' && !outdated && ev?.id === pending.evaluation_id
+    ? { id: pending.id, evaluation_id: pending.evaluation_id, decision: pending.decision, override_reason: pending.override_reason,
+        requested_by: pending.requested_by, requested_by_name: pending.requested_by_name, created_at: pending.created_at,
+        can_cosign: role === 'facility_admin' && who?.userId !== pending.requested_by } : null;
   const explanations = Object.fromEntries((ruleSet?.rules ?? []).map((r) => [r.id, (r as { explanation?: string }).explanation ?? null]));
   return {
     referral: ref.rows[0],
@@ -181,7 +194,7 @@ async function referralView(q: Query, facilityId: string, referralId: string, ru
     admit_requires: ev && ruleSet ? confirmation(admitKeys(ruleSet, ev), facts).filter((c) => !c.known).map((c) => c.key) : [],
     evaluation_outdated: outdated,
     // decisions that need an Admin co-sign: a hard stop overridden to Admit; any decision after a flipped hard-stop input
-    cosign: { admit: !!ev && (ev.outcome === 'do_not_admit' || ev.clinical_outcome === 'do_not_admit'), any: flipped },
+    cosign: { admit: await hardStopEverFired(q, facilityId, referralId), any: flipped },
     pending_request: pendingRequest,
     transitions: history.rows,
     decision: decision.rows[0] ?? null,
@@ -387,7 +400,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx }): void {
     const override = decision !== ev.outcome;
     if (override !== (reason !== null)) throw new HttpError(400, override ? 'override_reason_required' : 'invalid_decision');
     // a hard stop overridden to Admit, or any decision after a flipped hard-stop input, needs an Admin co-sign
-    const needsCosign = (decision === 'admit' && (ev.outcome === 'do_not_admit' || ev.clinical_outcome === 'do_not_admit')) || await hardStopFlipped(q, fid, rid, ruleSet);
+    const needsCosign = (decision === 'admit' && await hardStopEverFired(q, fid, rid)) || await hardStopFlipped(q, fid, rid, ruleSet);
     return { ev, override, needsCosign };
   };
   const decisionBody = (body: unknown) => {
@@ -464,11 +477,13 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx }): void {
         const ruleSet = await settingsOrRefuse(q, fid, who.organizationId);
         // lock before reading the latest request, so a request filed meanwhile is seen here, not refused by the database
         await q('SELECT 1 FROM referrals WHERE facility_id = $1 AND id = $2 FOR UPDATE', [fid, rid]);
-        const r = (await q<{ id: string; evaluation_id: string; decision: 'admit' | 'do_not_admit'; override_reason: string | null; requested_by: string }>(
-          `SELECT id, evaluation_id, decision, override_reason, requested_by FROM decision_requests
-           WHERE facility_id = $1 AND referral_id = $2 ORDER BY created_at DESC LIMIT 1`, [fid, rid])).rows[0];
-        // only the latest request can be carried out; an older one was replaced by its decider
-        if (!r || r.id !== qid) throw new HttpError(409, 'request_not_current');
+        const r = (await q<{ id: string; evaluation_id: string; decision: 'admit' | 'do_not_admit'; override_reason: string | null; requested_by: string; active: boolean }>(
+          `SELECT d.id, d.evaluation_id, d.decision, d.override_reason, d.requested_by,
+                  EXISTS (SELECT 1 FROM user_facility_roles r WHERE r.user_id = d.requested_by AND r.facility_id = d.facility_id
+                          AND r.role IN ('facility_admin', 'admissions_reviewer')) AS active
+           FROM decision_requests d WHERE d.facility_id = $1 AND d.referral_id = $2 ORDER BY d.created_at DESC LIMIT 1`, [fid, rid])).rows[0];
+        // only the latest request, by someone who can still decide here; an older one was replaced
+        if (!r || r.id !== qid || !r.active) throw new HttpError(409, 'request_not_current');
         if (r.requested_by === user) throw new HttpError(409, 'cosign_own_request');
         // the request is re-checked as it stands now: a new evaluation or a settings change makes it stale
         const { ev, override } = await checkDecision(q, fid, rid, ruleSet, r.evaluation_id, r.decision, r.override_reason);

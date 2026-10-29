@@ -62,11 +62,20 @@ export function ReviewPanel({ view, busy, on }: { view: ReferralView; busy: bool
 
       {view.evaluation_outdated && <p role="status" className="mt-2 text-sm text-amber-900">The facility's settings changed after this recommendation. Re-evaluate before deciding.</p>}
       {view.cosign.any && <p role="status" className="mt-2 text-sm text-amber-900">A hard-stop fact was changed from one known value to another, so any decision is filed for a second Admin to co-sign.</p>}
+      {!view.cosign.any && view.cosign.admit && view.evaluation?.outcome !== 'do_not_admit' && <p role="status" className="mt-2 text-sm text-amber-900">A hard stop decided this referral earlier, so an Admit is filed for a second Admin to co-sign.</p>}
       {view.pending_request && (
         <div className="mt-2 rounded border-l-4 border-amber-700 bg-amber-50 p-2 text-sm">
-          Filed for co-sign: <span className="font-medium">{OUTCOME_TEXT[view.pending_request.decision]}</span>
+          Filed for co-sign by {view.pending_request.requested_by_name}: <span className="font-medium">{OUTCOME_TEXT[view.pending_request.decision]}</span>
           {view.pending_request.override_reason && <> (reason: {view.pending_request.override_reason})</>}.
           {' '}{view.pending_request.can_cosign ? 'You can co-sign it.' : 'Waiting for an Admin who did not file it.'}
+          {open === 'cosign' && view.pending_request.can_cosign && (
+            <div className="mt-2">
+              <p>Co-signing records this decision for {view.pending_request.requested_by_name}, with you as the second Admin, and finalizes the referral.</p>
+              <button type="button" disabled={busy} className="mt-1 rounded bg-gray-900 px-3 py-1 text-white disabled:opacity-50"
+                onClick={() => view.pending_request && void on.cosign(view.pending_request.id).then((ok) => ok && reset())}>Co-sign and finalize</button>
+              <button type="button" className="ml-2 rounded border border-gray-900 px-3 py-1" onClick={reset}>Cancel</button>
+            </div>
+          )}
         </div>
       )}
 
@@ -76,7 +85,7 @@ export function ReviewPanel({ view, busy, on }: { view: ReferralView; busy: bool
             <button key={a} type="button" disabled={busy} aria-pressed={open === a}
               className={`rounded px-3 py-1 text-sm disabled:opacity-50 ${a === 'finalize' ? 'bg-gray-900 text-white' : 'border border-gray-900'}`}
               onClick={() => (a === 'submit' ? void on.move({ action: 'submit' }) : a === 'reevaluate' ? void on.reevaluate()
-                : a === 'cosign' && view.pending_request ? void on.cosign(view.pending_request.id) : setOpen(open === a ? null : a))}>{ACTION_LABEL[a]}</button>
+                : setOpen(open === a ? null : a))}>{ACTION_LABEL[a]}</button>
           ))}
         </div>
       )}

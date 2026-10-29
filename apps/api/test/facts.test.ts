@@ -406,6 +406,32 @@ describe.skipIf(!url)('manual fact entry API', () => {
     expect((await cosign(hs.rid, qid, U.admin)).json()).toEqual({ error: 'transition_not_allowed' });
   });
 
+  it('co-sign: an Admit after a hard stop cleared by a settings change still needs the second Admin', async () => {
+    const hs = await withFacts(['ventilator_use', 'yes'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
+    expect(hs.ev.outcome).toBe('do_not_admit');
+    await move(hs.rid, U.reviewer, { action: 'submit' });
+    // the Admin switches the capability on and re-evaluates: the recommendation becomes Admit
+    const path = `/api/facilities/${FAC.a}/settings`;
+    const cur = (await get(path, U.admin)).json();
+    const put = (caps: unknown, v: number) => app.inject({ method: 'PUT', url: path, headers: as(U.admin), payload: { capabilities: caps, disabled_rules: cur.profile.disabled_rules, based_on_version: v } });
+    await put({ ...cur.profile.capabilities, accepts_ventilator: true }, cur.profile.version);
+    const view = (await post(`${refUrl(hs.rid)}/evaluate`, U.admin)).json();
+    expect([view.evaluation.outcome, view.cosign.admit]).toEqual(['admit', true]);
+    expect((await finalize(hs.rid, U.admin, { evaluation_id: view.evaluation.id, decision: 'admit' })).json()).toEqual({ error: 'cosign_required' });
+    // a Do Not Admit needs no co-sign; the Admit goes through a second Admin (the Reviewer files, the Admin co-signs)
+    const filed = (await requestCosign(hs.rid, U.reviewer, { evaluation_id: view.evaluation.id, decision: 'admit' })).json().pending_request;
+    expect([filed.requested_by, filed.requested_by_name]).toEqual([U.reviewer, 'ZZTEST API user']);
+    // a requester who loses their role here can no longer have their decision carried out
+    await c.query('SAVEPOINT lost');
+    await asOwner(FAC.a);
+    await c.query("DELETE FROM user_facility_roles WHERE user_id = $1 AND facility_id = $2", [U.reviewer, FAC.a]);
+    expect((await get(refUrl(hs.rid), U.admin)).json().pending_request).toBe(null);
+    expect((await cosign(hs.rid, filed.id, U.admin)).json()).toEqual({ error: 'request_not_current' });
+    await c.query('ROLLBACK TO SAVEPOINT lost');
+    expect((await cosign(hs.rid, filed.id, U.admin)).json().decision).toMatchObject({ decision: 'admit', decided_by: U.reviewer });
+    await put(cur.profile.capabilities, cur.profile.version + 1);
+  });
+
   it('co-sign: an Admin cannot co-sign their own request; a newer request or a newer evaluation replaces the old one', async () => {
     const hs = await withFacts(['ventilator_use', 'yes'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
     await move(hs.rid, U.reviewer, { action: 'submit' });

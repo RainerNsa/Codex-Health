@@ -25,7 +25,7 @@ export interface ReferralView {
   admit_requires: string[];
   evaluation_outdated: boolean;
   cosign: { admit: boolean; any: boolean };
-  pending_request: { id: string; evaluation_id: string; decision: 'admit' | 'do_not_admit'; override_reason: string | null; requested_by: string; created_at: string; can_cosign: boolean } | null;
+  pending_request: { id: string; evaluation_id: string; decision: 'admit' | 'do_not_admit'; override_reason: string | null; requested_by: string; requested_by_name: string; created_at: string; can_cosign: boolean } | null;
   transitions: TransitionRow[];
   decision: DecisionRow | null;
   actions: Action[];
