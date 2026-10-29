@@ -62,6 +62,7 @@ In CI a `SKIP` from a check marked "must run in CI" is treated as a failure from
 | DB grants and RLS | `node scripts/checks/db-grants.mjs` | Runs `packages/db/sql/checks/rls-enumeration.sql` (every table with `facility_id` has `FORCE ROW LEVEL SECURITY` and at least one policy) and `packages/db/sql/checks/grants.sql` (app and worker roles lack `BYPASSRLS`; `UPDATE`/`DELETE` on `audit_log` fail) against `DATABASE_URL`; exits `2` "skipped" when `DATABASE_URL` is unset (I3, I4) | task end, CI | M1 | M1 (CI provides an ephemeral database) |
 | Rule CI offline | `node scripts/checks/rules-ci-offline.mjs` | The rules-engine package and its tests import no network, Bedrock, Textract or AWS SDK module and read no clock; rule changes re-run only the engine (I9; 2.9) | task end, CI | M1 | M2 (engine exists) |
 | Legal basis | `node scripts/checks/legal-basis.mjs` | Every rule example under `packages/schemas/examples/rules/` carries a non-empty `legal_basis`; from M2 also: a hard-stop or payer rule with `protected_input` and no `legal_reviewer` fails (I10; 2.8) | edit loop, task end, CI | M1 | M1 |
+| Rule tests | `node scripts/checks/rule-tests.mjs` | Every rule record under `packages/schemas/examples/rules/` parses under the SPEC §10.1 grammar, reads exactly its declared inputs, uses `is unknown` only in a review rule, carries a four-field `legal_reviewer` record when it is a non-review rule over a protected input, has a True, a False and an Unknown case, and passes every case, through the engine's own `rules test` (I1, I10; §4.2; 2.3, 2.8) | task end, CI | M2 | M2 |
 
 The ci-checks agent owns the scripts; this table owns their meaning. A script that passes while the row's "what it proves" is false is a bug in the script.
 
@@ -93,7 +94,7 @@ Gate commands arrive with the eval harness (M4/M5, owned by Team B/QA) and are a
 | Signed-URL TTL | ≤ 5 min | Long enough to open a page image, short enough that a leaked URL is dead before it is shared | Terraform policy test and API test | M3 |
 | Idle session timeout | 15 min | Shared SNF workstations | Front-end and Cognito config test | M3 |
 | Exception lifetime | ≤ 90 days | Long enough to plan the fix, short enough to remember | Review of section 7 at every milestone gate | M0 |
-| Rule test coverage | every rule id has a True, a False and an Unknown case | Three-valued logic makes "Unknown treated as No" a structural property only if every rule is tested on Unknown | Rule coverage gate in rule CI | M2 (seeds), M7 (all rules) |
+| Rule test coverage | every rule id has a True, a False and an Unknown case | Three-valued logic makes "Unknown treated as No" a structural property only if every rule is tested on Unknown | `rule-tests.mjs` (§3) | M2 (seeds, wired), M7 (all rules) |
 | Bedrock model id | pinned, exact version string, never an alias | Model drift changes extractions silently; the pinned id is part of I6 | `bedrock-only.mjs` (alias rejection) | M1 |
 
 ## 5. Data policy (dev-alignment 0.11)

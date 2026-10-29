@@ -9,10 +9,10 @@ import { fileURLToPath } from 'node:url';
 const here = path.dirname(fileURLToPath(import.meta.url));
 // Fast subset per CONSTRAINTS.md §3 "Fast subset": the greps only; no database, no build.
 const FAST = ['secrets', 'bedrock-only', 'prohibited-claims', 'canary-phi', 'legal-basis'];
-const ALL = [...FAST, 'web-bundle-hygiene', 'db-grants', 'rules-ci-offline'];
+const ALL = [...FAST, 'web-bundle-hygiene', 'db-grants', 'rules-ci-offline', 'rule-tests'];
 // "Must run in CI from M1" rows of CONSTRAINTS.md §3 that can run on every tree today; db-grants joins
 // when CI provides a database. canary-phi and web-bundle-hygiene legitimately SKIP until artefacts exist.
-const MUST_RUN_IN_CI = ['secrets', 'bedrock-only', 'prohibited-claims', 'legal-basis', ...(process.env.DATABASE_URL ? ['db-grants'] : [])];
+const MUST_RUN_IN_CI = ['secrets', 'bedrock-only', 'prohibited-claims', 'legal-basis', 'rule-tests', ...(process.env.DATABASE_URL ? ['db-grants'] : [])];
 const STATUS_BY_CODE = { 0: 'PASS', 1: 'FAIL', 2: 'SKIP' };
 
 const fast = process.argv.includes('--fast');
