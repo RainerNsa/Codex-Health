@@ -68,7 +68,7 @@ try {
     if (!has.rowCount) await c.query("INSERT INTO rule_sets (organization_id, version, criteria_document_ref, rules, created_by) VALUES ($1, 0, 'seed', $2, 'platform:seed')", [o.id, JSON.stringify(SEED_RULES)]);
   }
   for (const f of FACILITIES) {
-    await c.query("SELECT set_config('app.facility_id', $1, true)", [f.id]);
+    await c.query("SELECT set_config('app.facility_id', $1, true), set_config('app.organization_id', $2, true)", [f.id, f.org]);
     const has = await c.query('SELECT 1 FROM facility_profiles WHERE facility_id = $1', [f.id]);
     if (!has.rowCount) await c.query("INSERT INTO facility_profiles (facility_id, version, capabilities, disabled_rules, created_by) VALUES ($1, 0, $2, '{}', 'platform:seed')", [f.id, SEED_CAPABILITIES]);
   }

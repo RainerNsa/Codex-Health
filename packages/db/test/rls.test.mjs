@@ -351,40 +351,53 @@ test('row-level security, organisation isolation, audit immutability, the hash c
     await sub('settings (0008): shape checks, database-chosen versions, audit per version, org isolation of rule sets, no cross-facility profile write', async () => {
       const RS = "INSERT INTO rule_sets (organization_id, version, criteria_document_ref, rules, created_by) VALUES ($1, $2, 'zz', $3, 'platform:test')";
       const FP = "INSERT INTO facility_profiles (facility_id, version, capabilities, created_by) VALUES ($1, 0, $2, 'platform:test')";
-      // rule ids: snake_case and unique
+      const rec = (id, kind = 'review', extra = {}) => ({ id, kind, enabled: true, inputs: ['x'], expression: 'x is yes', ...extra });
+      const set = (...recs) => JSON.stringify(recs);
+      // records: snake_case unique ids, a known kind, boolean enabled, string expression, string inputs
       await asOrg(c, ORG[0]);
-      await expectFailure(c, RS, /rule_sets_rule_ids/, [ORG[0], 0, '[{"id":"zz.a"},{"id":"zz.a"}]']);
-      await expectFailure(c, RS, /rule_sets_rule_ids/, [ORG[0], 0, '[{"id":"Bad"}]']);
-      await expectFailure(c, RS, /rule_sets_rule_ids/, [ORG[0], 0, '["zz.a"]']);
+      for (const bad of [set(rec('zz.a'), rec('zz.a')), set(rec('Bad')), '["zz.a"]', set(rec('zz.a', 'admit')), set(rec('zz.a', 'review', { enabled: 'yes' })),
+        set(rec('zz.a', 'review', { expression: ' ' })), set(rec('zz.a', 'review', { inputs: 'x' })), set(rec('zz.a', 'review', { inputs: [1] }))]) {
+        await expectFailure(c, RS, /rule_sets_records/, [ORG[0], 0, bad]);
+      }
       // the writer's version is ignored: two inserts asking for 99 land as 1 and 2, each with its platform audit row
       const auditBefore = await count(c, "SELECT count(*) AS n FROM platform_audit_log WHERE entity_type = 'rule_set'");
-      for (let i = 0; i < 2; i += 1) await c.query(RS, [ORG[0], 99, '[{"id":"zz.a"}]']);
+      for (let i = 0; i < 2; i += 1) await c.query(RS, [ORG[0], 99, set(rec('zz.a'), rec('zz.hs', 'hard_stop'), rec('zz.pay', 'payer'))]);
       assert.deepEqual((await c.query('SELECT version FROM rule_sets WHERE organization_id = $1 ORDER BY version', [ORG[0]])).rows.map((r) => r.version), [1, 2]);
       const rows = (await c.query("SELECT organization_id, action, actor FROM platform_audit_log WHERE entity_type = 'rule_set' ORDER BY seq")).rows.slice(auditBefore);
       assert.deepEqual(rows, [0, 1].map(() => ({ organization_id: ORG[0], action: 'rule_set.versioned', actor: 'platform:test' })));
       await expectFailure(c, 'UPDATE rule_sets SET criteria_document_ref = $1', /append-only|immutable/, ['tampered']);
       await asOrg(c, ORG[1]);
-      await c.query(RS, [ORG[1], 0, '[{"id":"zz.b"}]']);
+      await c.query(RS, [ORG[1], 0, set(rec('zz.b'))]);
       // rule sets are organisation-scoped: org A's app role sees only its own, nothing when unbound, and cannot write
       await c.query('SET LOCAL ROLE codex_app');
       await asOrg(c, ORG[0]);
       assert.equal(await count(c, 'SELECT count(*) AS n FROM rule_sets'), 2);
       assert.equal(await count(c, 'SELECT count(*) AS n FROM rule_sets WHERE organization_id <> $1', [ORG[0]]), 0, 'rule_sets leaks across organisations');
-      await expectFailure(c, RS, /permission denied/, [ORG[0], 0, '[{"id":"zz.c"}]']);
+      await expectFailure(c, RS, /permission denied/, [ORG[0], 0, set(rec('zz.c'))]);
       await asOrg(c, '');
       assert.equal(await count(c, 'SELECT count(*) AS n FROM rule_sets'), 0, 'rule_sets visible with no organisation bound');
       // profiles: bound to a1, the app role cannot write another facility's profile
       await asOrg(c, ORG[0]);
       await asFacility(c, FAC.a1);
-      await expectFailure(c, FP, /row-level security/, [FAC.b1, '{}']);
-      await expectFailure(c, FP, /row-level security/, [FAC.a2, '{}']);
+      const FPU = "INSERT INTO facility_profiles (facility_id, version, capabilities, created_by) VALUES ($1, 0, '{}', $2)";
+      await expectFailure(c, FPU, /row-level security|not an Admin/, [FAC.b1, `user:${USER.a}`]);
+      await expectFailure(c, FPU, /row-level security|not an Admin/, [FAC.a2, `user:${USER.a}`]);
+      // the app role cannot claim the platform, nor a user who is not an Admin here (USER.a is a Reviewer at a1)
+      await expectFailure(c, FPU, /not an Admin/, [FAC.a1, 'platform:owner']);
+      await expectFailure(c, FPU, /not an Admin/, [FAC.a1, `user:${USER.a}`]);
       await c.query('RESET ROLE');
+      // switched-off ids: present in the organisation's latest rule set, and never a hard stop or payer rule
+      const FPD = "INSERT INTO facility_profiles (facility_id, version, capabilities, disabled_rules, created_by) VALUES ($1, 0, '{}', $2, 'platform:test')";
+      for (const ids of [['no.such.rule'], [''], ['ZZ BAD'], ['zz.hs'], ['zz.pay'], ['zz.b']]) {
+        await expectFailure(c, FPD, /cannot be switched off/, [FAC.a1, ids]);
+      }
+      await c.query(FPD, [FAC.a1, ['zz.a']]);
       // capabilities: profile v0 keys of their declared types only
       for (const caps of ['{"zztest_key":true}', '{"accepts_ventilator":"false"}', '{"ventilator_beds":1.5}', '{"ventilator_beds":-1}', '{"ventilator_beds":"2"}']) {
         await expectFailure(c, FP, /facility_profiles_capabilities_v0/, [FAC.a1, caps]);
       }
       await c.query(FP, [FAC.a1, '{"accepts_ventilator":true,"ventilator_beds":2}']);
-      assert.deepEqual((await c.query('SELECT version FROM facility_profiles WHERE facility_id = $1 ORDER BY version', [FAC.a1])).rows.map((r) => r.version), [1, 2]);
+      assert.deepEqual((await c.query('SELECT version FROM facility_profiles WHERE facility_id = $1 ORDER BY version', [FAC.a1])).rows.map((r) => r.version), [1, 2, 3]);
     });
 
     await sub('CONSTRAINTS check queries return zero rows', async () => {

@@ -19,7 +19,8 @@ const REASON_LABEL: Record<string, string> = {
 const ERROR_TEXT: Record<string, string> = {
   unauthenticated: 'Choose a user first.', not_found: 'Not found, or not visible to this user at this facility.', forbidden: 'This user may read but not change this referral.',
   invalid_fact: 'Check the entry: a value and a note are required, and the date must be real and not in the future.',
-  facility_not_configured: 'This facility has no rule set or profile yet. An Admin sets them under Facility settings.', referral_not_open: 'This referral is finalized; it changes only by amendment.',
+  facility_not_configured: 'This facility has no rule set or profile yet. An Admin sets them under Facility settings.',
+  rule_set_refused: 'The organisation\'s rule set is invalid, so referrals cannot be evaluated until it is replaced.', referral_not_open: 'This referral is finalized; it changes only by amendment.',
   rejected: 'The database refused this change.',
 };
 const keyLabel = (k: string) => k.replaceAll('_', ' ');

@@ -6,7 +6,7 @@ import type { FastifyInstance, FastifyReply } from 'fastify';
 import { evaluate, ENGINE_VERSION, isRealDate, type Fact, type FactValue } from '@codex-health/rules-engine';
 import { bindFacility, bindOrganization, type Query, type Tx } from './db.ts';
 import { userFromHeaders } from './auth.ts';
-import { loadSettings, PROFILE_KEYS, type RuleSet } from './ruleset.ts';
+import { loadSettings as loadStored, NOT_SWITCHABLE, PROFILE_KEYS, RuleSetRefused, type RuleSet } from './ruleset.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const WRITE_ROLES = new Set(['facility_admin', 'admissions_reviewer']);
@@ -57,6 +57,16 @@ async function currentFacts(q: Query, facilityId: string, referralId: string): P
        AND NOT EXISTS (SELECT 1 FROM facts n WHERE n.facility_id = f.facility_id AND n.supersedes = f.id)
      ORDER BY f.key`, [facilityId, referralId]);
   return rows as unknown as (Fact & { id: string; created_by: string })[];
+}
+
+/** The facility's settings; a stored rule set the engine refuses is 409 rule_set_refused, never a 500. */
+async function loadSettings(q: Query, facilityId: string, organizationId: string): Promise<RuleSet | null> {
+  try {
+    return await loadStored(q, facilityId, organizationId);
+  } catch (err) {
+    if (err instanceof RuleSetRefused) throw new HttpError(409, 'rule_set_refused');
+    throw err;
+  }
 }
 
 /** The facility's settings, or 409 when it has none: a facility without a rule set and profile cannot evaluate. */
@@ -214,7 +224,12 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx }): void {
     rule_set: {
       version: rs.ruleSetVersion,
       criteria_document_ref: rs.criteriaRef,
-      rules: rs.rules.map((r) => ({ id: r.id, kind: r.kind, inputs: r.inputs, enabled_here: r.enabled, explanation: (r as { explanation?: string }).explanation ?? null })),
+      rules: rs.rules.map((r) => ({
+        id: r.id, kind: r.kind, inputs: r.inputs, enabled_here: r.enabled,
+        enabled_in_rule_set: !rs.baseDisabled.has(r.id),
+        switchable: !rs.baseDisabled.has(r.id) && !NOT_SWITCHABLE.has(r.kind),
+        explanation: (r as { explanation?: string }).explanation ?? null,
+      })),
     },
     profile: { version: rs.profileVersion, capabilities: rs.profile, disabled_rules: rs.disabledRules },
     profile_keys: PROFILE_KEYS,
@@ -237,19 +252,22 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx }): void {
     try {
       const user = caller(req.headers);
       const { fid } = ids(req.params);
-      const b = (req.body ?? {}) as { capabilities?: unknown; disabled_rules?: unknown };
+      const b = (req.body ?? {}) as { capabilities?: unknown; disabled_rules?: unknown; based_on_version?: unknown };
       const caps = b.capabilities;
       const okCaps = !!caps && typeof caps === 'object' && !Array.isArray(caps) && Object.entries(caps as Record<string, unknown>).every(([k, v]) =>
         PROFILE_KEYS[k] === 'boolean' ? typeof v === 'boolean' : PROFILE_KEYS[k] === 'count' ? Number.isInteger(v) && (v as number) >= 0 && (v as number) <= 999999 : false);
       const disabled = b.disabled_rules;
       const okDisabled = Array.isArray(disabled) && disabled.length <= 500 && disabled.every((d) => typeof d === 'string');
-      if (!okCaps || !okDisabled) throw new HttpError(400, 'invalid_settings');
+      if (!okCaps || !okDisabled || !Number.isInteger(b.based_on_version)) throw new HttpError(400, 'invalid_settings');
       return reply.send(await tx(async (q) => {
         const who = await enter(q, fid, user);
         if (who.role !== 'facility_admin') throw new HttpError(403, 'forbidden');
         const current = await settingsOrRefuse(q, fid, who.organizationId);
-        const known = new Set(current.rules.map((r) => r.id));
-        if (!(disabled as string[]).every((d) => known.has(d))) throw new HttpError(400, 'invalid_settings');
+        // saved over a version someone else replaced meanwhile: refuse rather than silently undo their change
+        if (b.based_on_version !== current.profileVersion) throw new HttpError(409, 'settings_changed');
+        const kind = new Map(current.rules.map((r) => [r.id, r.kind]));
+        if (!(disabled as string[]).every((d) => kind.has(d))) throw new HttpError(400, 'invalid_settings');
+        if ((disabled as string[]).some((d) => NOT_SWITCHABLE.has(kind.get(d) as string))) throw new HttpError(400, 'rule_not_switchable');
         await q('INSERT INTO facility_profiles (facility_id, version, capabilities, disabled_rules, created_by) VALUES ($1, 0, $2, $3, $4)',
           [fid, caps, [...new Set(disabled as string[])].sort(), `user:${user}`]);
         return settingsView(await loadSettings(q, fid, who.organizationId));

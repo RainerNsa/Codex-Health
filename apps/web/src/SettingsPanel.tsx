@@ -18,17 +18,24 @@ export function SettingsPanel({ facility, user }: { facility: string; user: stri
       setCaps({ ...(v.profile?.capabilities ?? {}) });
       setOff([...(v.profile?.disabled_rules ?? [])]);
     } catch (err) {
-      setMsg(err instanceof ApiError && err.code === 'forbidden' ? 'Settings are for Reviewers and Admins.' : 'Could not load settings.');
+      setMsg(err instanceof ApiError && err.code === 'forbidden' ? 'Settings are for Reviewers and Admins.'
+        : err instanceof ApiError && err.code === 'rule_set_refused' ? 'The organisation\'s rule set is invalid; referrals cannot be evaluated until it is replaced.'
+        : 'Could not load settings.');
     }
   };
   const save = async () => {
     setMsg(null);
     try {
-      const v = await saveSettings(facility, user, { capabilities: caps, disabled_rules: off });
+      const v = await saveSettings(facility, user, { capabilities: caps, disabled_rules: off, based_on_version: s?.profile?.version ?? 0 });
       setS(v);
+      setOff([...(v.profile?.disabled_rules ?? [])]);
       setMsg(`Saved as profile version ${v.profile?.version ?? '?'}.`);
     } catch (err) {
-      setMsg(err instanceof ApiError && err.code === 'forbidden' ? 'Only an Admin can change settings.' : 'The settings were not saved: check every value.');
+      const code = err instanceof ApiError ? err.code : '';
+      setMsg(code === 'forbidden' ? 'Only an Admin can change settings.'
+        : code === 'settings_changed' ? 'Someone saved these settings meanwhile. Load them again, then make your change.'
+        : code === 'rule_not_switchable' ? 'Hard-stop and payer rules cannot be switched off at a facility.'
+        : 'The settings were not saved: check every value.');
     }
   };
   return (
@@ -64,8 +71,10 @@ export function SettingsPanel({ facility, user }: { facility: string; user: stri
             <legend className="font-medium">Rules at this facility</legend>
             {s.rule_set.rules.map((r) => (
               <label key={r.id} className="block text-sm">
-                <input type="checkbox" checked={!off.includes(r.id)} onChange={(e) => setOff(e.target.checked ? off.filter((x) => x !== r.id) : [...off, r.id])} />{' '}
+                <input type="checkbox" checked={r.enabled_in_rule_set && !off.includes(r.id)} disabled={!r.switchable}
+                  onChange={(e) => setOff(e.target.checked ? off.filter((x) => x !== r.id) : [...off, r.id])} />{' '}
                 <span className="font-mono text-xs">{r.id}</span> ({label(r.kind)}){r.explanation ? ` — ${r.explanation}` : ''}
+                {!r.enabled_in_rule_set ? ' (off in the organisation rule set)' : !r.switchable ? ' (always on)' : ''}
               </label>
             ))}
           </fieldset>

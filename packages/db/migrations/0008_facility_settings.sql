@@ -10,9 +10,16 @@
 -- replayed against the exact settings it used.
 
 -- Shape checks live in functions: a CHECK cannot hold a subquery.
-CREATE FUNCTION rule_set_ids_ok(rules jsonb) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
+-- Record shape only (the DSL is checked by the engine on read; a set it refuses answers 409, never 500).
+CREATE FUNCTION rule_set_records_ok(rules jsonb) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
   SELECT NOT EXISTS (SELECT 1 FROM jsonb_array_elements(rules) r
-                     WHERE jsonb_typeof(r) <> 'object' OR coalesce(r->>'id', '') !~ '^[a-z][a-z0-9_.]*$')
+                     WHERE jsonb_typeof(r) <> 'object'
+                        OR coalesce(r->>'id', '') !~ '^[a-z][a-z0-9_.]*$'
+                        OR coalesce(r->>'kind', '') NOT IN ('hard_stop', 'review', 'favorable', 'payer')
+                        OR jsonb_typeof(r->'enabled') IS DISTINCT FROM 'boolean'
+                        OR jsonb_typeof(r->'expression') IS DISTINCT FROM 'string' OR btrim(r->>'expression') = ''
+                        OR jsonb_typeof(r->'inputs') IS DISTINCT FROM 'array'
+                        OR EXISTS (SELECT 1 FROM jsonb_array_elements(r->'inputs') i WHERE jsonb_typeof(i) <> 'string'))
      AND (SELECT count(DISTINCT r->>'id') FROM jsonb_array_elements(rules) r) = jsonb_array_length(rules)
 $$;
 CREATE FUNCTION profile_capabilities_ok(capabilities jsonb) RETURNS boolean LANGUAGE sql IMMUTABLE AS $$
@@ -36,7 +43,7 @@ CREATE TABLE rule_sets (
   created_at             timestamptz NOT NULL DEFAULT clock_timestamp(),
   PRIMARY KEY (organization_id, version),
   -- every record has a snake_case id and the ids are unique within the set (the engine refuses duplicates too)
-  CONSTRAINT rule_sets_rule_ids CHECK (rule_set_ids_ok(rules))
+  CONSTRAINT rule_sets_records CHECK (rule_set_records_ok(rules))
 );
 
 CREATE TABLE facility_profiles (
@@ -53,10 +60,34 @@ CREATE TABLE facility_profiles (
 );
 
 -- Versions are dense from 1 and chosen by the database, never by the writer; one writer per scope at a time.
+-- For a profile the database also checks, whatever the writer:
+--   * the actor: the app role may only write as a user holding facility_admin at that facility (no platform:*);
+--   * every switched-off rule id exists in the organisation's latest rule set and is not a hard stop or payer
+--     rule (interim, until the founder rules on switching those off; decision log 2026-10-29).
 CREATE FUNCTION settings_version_guard() RETURNS trigger LANGUAGE plpgsql AS $$
 DECLARE
   latest integer;
+  org uuid;
+  bad text;
 BEGIN
+  IF TG_TABLE_NAME = 'facility_profiles' THEN
+    IF current_user = 'codex_app' AND NOT (NEW.created_by LIKE 'user:%' AND EXISTS (
+         SELECT 1 FROM user_facility_roles
+         WHERE user_id = substr(NEW.created_by, 6)::uuid AND facility_id = NEW.facility_id AND role = 'facility_admin')) THEN
+      RAISE EXCEPTION 'facility_profiles: actor % is not an Admin of this facility', NEW.created_by USING ERRCODE = 'check_violation';
+    END IF;
+    IF cardinality(NEW.disabled_rules) > 0 THEN
+      SELECT organization_id INTO org FROM facilities WHERE facility_id = NEW.facility_id;
+      SELECT d INTO bad FROM unnest(NEW.disabled_rules) d
+      WHERE d IS NULL OR d !~ '^[a-z][a-z0-9_.]*$' OR NOT EXISTS (
+        SELECT 1 FROM jsonb_array_elements((SELECT rules FROM rule_sets WHERE organization_id = org ORDER BY version DESC LIMIT 1)) r
+        WHERE r->>'id' = d AND r->>'kind' NOT IN ('hard_stop', 'payer'))
+      LIMIT 1;
+      IF FOUND THEN
+        RAISE EXCEPTION 'facility_profiles: rule % cannot be switched off here', coalesce(bad, 'NULL') USING ERRCODE = 'check_violation';
+      END IF;
+    END IF;
+  END IF;
   IF TG_TABLE_NAME = 'rule_sets' THEN
     PERFORM pg_advisory_xact_lock(hashtext('rule_sets'), hashtext(NEW.organization_id::text));
     SELECT max(version) INTO latest FROM rule_sets WHERE organization_id = NEW.organization_id;
@@ -70,6 +101,8 @@ BEGIN
 END
 $$;
 
+-- shortcut: the audit row names the actor and the action, not the version (entity_id is a uuid); the version row
+-- itself is immutable and carries created_by and created_at. Upgrade when audit_log gains an attrs column.
 CREATE FUNCTION settings_audit() RETURNS trigger LANGUAGE plpgsql AS $$
 BEGIN
   IF TG_TABLE_NAME = 'rule_sets' THEN

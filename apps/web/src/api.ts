@@ -41,11 +41,11 @@ export const enterFact = (facility: string, referral: string, user: string, fact
 
 export interface Settings {
   configured: boolean;
-  rule_set?: { version: number; criteria_document_ref: string; rules: { id: string; kind: string; inputs: string[]; enabled_here: boolean; explanation: string | null }[] };
+  rule_set?: { version: number; criteria_document_ref: string; rules: { id: string; kind: string; inputs: string[]; enabled_here: boolean; enabled_in_rule_set: boolean; switchable: boolean; explanation: string | null }[] };
   profile?: { version: number; capabilities: Record<string, boolean | number>; disabled_rules: string[] };
   profile_keys?: Record<string, 'boolean' | 'count'>;
   completeness?: { required_keys: string[]; missing_keys: string[] };
 }
 export const getSettings = (facility: string, user: string) => call<Settings>(`/api/facilities/${facility}/settings`, user);
-export const saveSettings = (facility: string, user: string, body: { capabilities: Record<string, boolean | number>; disabled_rules: string[] }) =>
+export const saveSettings = (facility: string, user: string, body: { capabilities: Record<string, boolean | number>; disabled_rules: string[]; based_on_version: number }) =>
   call<Settings>(`/api/facilities/${facility}/settings`, user, { method: 'PUT', body: JSON.stringify(body) });
