@@ -5,8 +5,9 @@
 --   2. a different Admin co-signs it in their own request: the decisions row names the request, the decider
 --      as decided_by and the co-signer as cosigned_by, and the co-signer's T12 row finalizes the referral.
 -- Who is acting: the API binds app.user_id per transaction (like app.facility_id). For codex_app every actor
--- column checked here must equal it, so one request can never write two people's names (security review of
--- PR #24, finding 4). Amendments by the app role are refused until T13 ships with its own checks.
+-- column checked here must equal it, so one API request can never write two people's names (security review of
+-- PR #24, finding 4). This catches API mistakes; a compromised app role can rebind the setting, so identity
+-- itself rests on authentication. Amendments by the app role are refused until T13 ships with its own checks.
 
 CREATE FUNCTION app_user() RETURNS uuid LANGUAGE sql STABLE AS $$
   SELECT NULLIF(current_setting('app.user_id', true), '')::uuid

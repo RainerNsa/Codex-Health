@@ -180,7 +180,7 @@ async function referralView(q: Query, facilityId: string, referralId: string, ru
     // keys an Admit decision would also need stated as known values (shown when the recommendation is not Admit)
     admit_requires: ev && ruleSet ? confirmation(admitKeys(ruleSet, ev), facts).filter((c) => !c.known).map((c) => c.key) : [],
     evaluation_outdated: outdated,
-    // until the co-sign slice: a hard stop overridden to Admit, or any decision after a flipped hard-stop input
+    // decisions that need an Admin co-sign: a hard stop overridden to Admit; any decision after a flipped hard-stop input
     cosign: { admit: !!ev && (ev.outcome === 'do_not_admit' || ev.clinical_outcome === 'do_not_admit'), any: flipped },
     pending_request: pendingRequest,
     transitions: history.rows,
@@ -462,6 +462,8 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx }): void {
         if (!WRITE_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
         if (who.role !== 'facility_admin') throw new HttpError(403, 'cosign_admin_only');
         const ruleSet = await settingsOrRefuse(q, fid, who.organizationId);
+        // lock before reading the latest request, so a request filed meanwhile is seen here, not refused by the database
+        await q('SELECT 1 FROM referrals WHERE facility_id = $1 AND id = $2 FOR UPDATE', [fid, rid]);
         const r = (await q<{ id: string; evaluation_id: string; decision: 'admit' | 'do_not_admit'; override_reason: string | null; requested_by: string }>(
           `SELECT id, evaluation_id, decision, override_reason, requested_by FROM decision_requests
            WHERE facility_id = $1 AND referral_id = $2 ORDER BY created_at DESC LIMIT 1`, [fid, rid])).rows[0];
