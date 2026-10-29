@@ -9,16 +9,20 @@ const usage = 'usage: evaluate <facts.json> <profile.json> <rules.json> --referr
 const readJson = (p: string): unknown => JSON.parse(readFileSync(p, 'utf8'));
 const isRule = (r: unknown): r is Rule => !!r && typeof r === 'object' && typeof (r as Rule).id === 'string' && typeof (r as Rule).expression === 'string'
   && Array.isArray((r as Rule).inputs) && typeof (r as Rule).enabled === 'boolean' && ['hard_stop', 'review', 'favorable', 'payer'].includes((r as Rule).kind);
+/** Every file is reported, one line each, before exiting; a bad file never hides the next one. */
 const loadRules = (p: string): Rule[] => {
   const files = statSync(p).isDirectory() ? readdirSync(p).filter((f) => f.endsWith('.json')).sort().map((f) => join(p, f)) : [p];
   const rules: Rule[] = [];
+  const problems: string[] = [];
   for (const file of files) {
-    const parsed = readJson(file);
+    let parsed: unknown;
+    try { parsed = readJson(file); } catch (err) { problems.push(`${file}: ${(err as Error).message}`); continue; }
     for (const r of Array.isArray(parsed) ? parsed : [parsed]) {
-      if (!isRule(r)) { process.stderr.write(`${file}: not a rule record (needs string id and expression, array inputs, boolean enabled, a known kind)\n`); process.exit(1); }
+      if (!isRule(r)) { problems.push(`${file}: not a rule record (needs string id and expression, array inputs, boolean enabled, a known kind)`); continue; }
       rules.push(r);
     }
   }
+  if (problems.length) { process.stderr.write(`${problems.join('\n')}\n`); process.exit(1); }
   return rules;
 };
 
@@ -53,7 +57,7 @@ if (cmd === 'evaluate' && rest.length >= 3) {
   }
 }
 if (cmd === 'rules' && rest[0] === 'test' && rest[1]) {
-  const rules = loadRules(rest[1]);
+  const rules = ((): Rule[] => { try { return loadRules(rest[1]!); } catch (err) { return fail(`rules test failed: ${(err as Error).message}`); } })();
   const problems = rules.flatMap((r) => lintRule(r));
   const results = runRuleTests(rules);
   for (const p of problems) process.stdout.write(`LINT  ${p}\n`);

@@ -49,6 +49,7 @@ describe('lintRule (rule CI static checks)', () => {
     expect(lintRule({ ...base, kind: 'favorable', protected_input: true, legal_reviewer: { name: 'x' } })).toEqual(['r: a favorable rule over a protected input needs a legal_reviewer record']);
     expect(lintRule({ ...base, kind: 'favorable', protected_input: true, legal_reviewer: [] })).toHaveLength(1);
     expect(lintRule({ ...base, kind: 'favorable', protected_input: true, legal_reviewer: { name: 'ZZTEST', firm: 'ZZTEST LLP', date: '2001-01-01', memo_ref: 'M-1' } })).toEqual([]);
+    expect(lintRule({ ...base, kind: 'favorable', protected_input: true, legal_reviewer: { name: 'ZZTEST', firm: 'ZZTEST LLP', date: 'yesterday', memo_ref: 'M-1' } })).toHaveLength(1);
   });
   it('requires a true, a false and an unknown case per rule (CONSTRAINTS §4.2)', () => {
     const cases = (...e: string[]) => e.map((expected) => ({ expected }));

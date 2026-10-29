@@ -142,7 +142,8 @@ export interface RuleLike {
 /** A legal_reviewer record is an object with the four non-blank fields rule.v0 requires. */
 export const legalReviewerOk = (r: unknown): boolean =>
   !!r && typeof r === 'object' && !Array.isArray(r)
-  && ['name', 'firm', 'date', 'memo_ref'].every((k) => typeof (r as Record<string, unknown>)[k] === 'string' && ((r as Record<string, string>)[k] ?? '').trim() !== '');
+  && ['name', 'firm', 'date', 'memo_ref'].every((k) => typeof (r as Record<string, unknown>)[k] === 'string' && ((r as Record<string, string>)[k] ?? '').trim() !== '')
+  && /^\d{4}-\d{2}-\d{2}$/.test((r as Record<string, string>)['date'] ?? '');
 
 /** Static checks rule CI applies before any evaluation (SPEC §10.1, §10.2). Returns problems; empty means clean. */
 export function lintRule(rule: RuleLike): string[] {

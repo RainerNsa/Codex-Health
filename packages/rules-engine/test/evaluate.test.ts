@@ -136,10 +136,11 @@ describe('Prove-It cases from the reviews', () => {
     expect(evaluate({ facts: [], profile: {}, rules, referral_date: '2001-01-10', processing_complete: true }).trace[0]?.result).toBe('yes');
     expect(evaluate({ facts: [tri('b', 'no')], profile: {}, rules, referral_date: '2001-01-10', processing_complete: true }).trace[0]?.result).toBe('no');
   });
-  it('within boundaries: 0 and N days inclusive, N+1 and a future as_of are no, null or unknown presence is unknown', () => {
+  it('within boundaries: 0 and N days inclusive, N+1 is no, a future as_of, null or unknown presence is unknown', () => {
     const rules = [rule('w', 'review', 'a within 30 days', ['a'])];
     const at = (as_of_date: string | null, v: 'yes' | 'unknown' = 'yes') => evaluate({ facts: [tri('a', v, { as_of_date })], profile: {}, rules, referral_date: '2001-01-31', processing_complete: true }).trace[0]?.result;
-    expect([at('2001-01-31'), at('2001-01-01'), at('2000-12-31'), at('2001-02-01'), at(null), at('2001-01-20', 'unknown')]).toEqual(['yes', 'yes', 'no', 'no', 'unknown', 'unknown']);
+    // a post-referral as_of_date is silence (unknown), never false
+    expect([at('2001-01-31'), at('2001-01-01'), at('2000-12-31'), at('2001-02-01'), at(null), at('2001-01-20', 'unknown')]).toEqual(['yes', 'yes', 'no', 'unknown', 'unknown', 'unknown']);
   });
   it('every comparison operator at the boundary, and wrong types are unknown', () => {
     const cmp = (expr: string, value: Fact['value']) => evaluate({ facts: [fact('n', value)], profile: { b: true, c: 3 }, rules: [rule('c', 'review', expr, ['n'])], referral_date: '2001-01-10', processing_complete: true }).trace[0]?.result;
@@ -193,6 +194,19 @@ describe('Prove-It cases from the confirmatory review', () => {
   it('a protected fact read by the expression but not declared in inputs still refuses the set; an unknown rule kind is refused', () => {
     expect(() => base([rule('h', 'hard_stop', 'sud is yes', [])], [tri('sud', 'yes', { specially_protected: true })])).toThrow(/protected input/);
     expect(() => base([{ ...rule('x', 'review', 'a is yes', ['a']), kind: 'bogus' as Rule['kind'] }], [])).toThrow(/not a rule record/);
+  });
+  it('duplicate rule ids are refused, so one record can never be checked against another\'s expression', () => {
+    const dup = [rule('r', 'hard_stop', 'v is unknown', []), rule('r', 'review', 'a is yes', ['a'])];
+    expect(() => base(dup, [])).toThrow(/duplicate rule id/);
+    expect(() => base([...dup].reverse(), [])).toThrow(/duplicate rule id/);
+  });
+  it('a post-referral as_of_date is silence for within, never false; malformed records are refused, not crashed', () => {
+    const r = base([rule('h', 'hard_stop', 'x within 30 days', ['x']), fav], [tri('x', 'yes', { source: 'user', evidence: null, note: 'S', confidence_band: null, as_of_date: '2001-01-05' }), tri('x', 'yes', { source: 'user', evidence: null, note: 'S', confidence_band: null, as_of_date: '2001-03-01' }), tri('daily_skilled_need', 'yes')]);
+    expect([r.outcome, r.trace[0]?.result]).toEqual(['needs_review', 'unknown']);
+    expect(() => base([{ ...rule('x', 'review', 'a is yes', ['a']), inputs: [5 as unknown as string] }], [])).toThrow(/not a rule record/);
+    expect(() => base([{ ...rule('x', 'review', 'a is yes', ['a']), enabled: 'true' as unknown as boolean }], [])).toThrow(/not a rule record/);
+    expect(() => base([], [{ ...tri('a', 'yes'), value: undefined as unknown as Fact['value'] }])).toThrow(/no typed value/);
+    expect(base([rule('h', 'hard_stop', 'meds is yes', ['meds'])], [fact('meds', { type: 'medication_list', value: [null, 5, 'x'] as unknown as [] })]).outcome).toBe('needs_review');
   });
   it('very long or deeply negated expressions are a DslError, never a stack overflow', () => {
     expect(() => parseOnly(`${'NOT '.repeat(100)}a is yes`)).toThrow(/nests deeper/);

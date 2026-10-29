@@ -37,7 +37,7 @@ describe('example rules', () => {
       unlinkSync(tmp);
     }
   });
-  it('the CLI evaluates a packet', () => {
+  it('the CLI evaluates a packet', async () => {
     const cli = fileURLToPath(new URL('../src/cli.ts', import.meta.url));
     const factsFile = fileURLToPath(new URL('../../schemas/examples/facts/ventilator_use.json', import.meta.url));
     const profile = fileURLToPath(new URL('../../schemas/examples/profiles/zztest-facility.json', import.meta.url));
@@ -54,6 +54,17 @@ describe('example rules', () => {
       for (const args of [['--referral-date', '2001-13-45'], ['--referral-date', '2001-01-04', '--processing-incomplete=true'], []]) {
         expect(spawnSync(process.execPath, [cli, 'evaluate', facts, profile, dir, ...args], { encoding: 'utf8', timeout: 30_000 }).status, args.join(' ')).toBe(2);
       }
+      const badDir = `${tmpdir()}/zztest-rules-${process.pid}`;
+      const { mkdirSync, rmSync } = await import('node:fs');
+      mkdirSync(badDir, { recursive: true });
+      writeFileSync(`${badDir}/a.json`, '{}');
+      writeFileSync(`${badDir}/b.json`, '{ not json');
+      try {
+        const bad = spawnSync(process.execPath, [cli, 'rules', 'test', badDir], { encoding: 'utf8', timeout: 30_000 });
+        expect(bad.status).toBe(1);
+        expect(bad.stderr.trim().split('\n')).toHaveLength(2); // every bad file reported, one line each
+        expect(bad.stderr).not.toMatch(/^\s+at /m); // no stack frames
+      } finally { rmSync(badDir, { recursive: true, force: true }); }
       const notArray = `${tmpdir()}/zztest-notarray-${process.pid}.json`;
       writeFileSync(notArray, '{}');
       try {

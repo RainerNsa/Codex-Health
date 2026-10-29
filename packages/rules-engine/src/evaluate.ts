@@ -77,7 +77,8 @@ function viewFacts(facts: readonly Fact[]): Map<string, FactView> {
     // Only a TRUSTED, well-formed assertion is known (I2, §3): a user fact, or an ai fact with verified evidence
     // and not a low confidence band, whose value is a real value of its type. Everything else is silence.
     // A conflict is a disagreement in VALUE between known assertions of one key (§3, §10.2); trust, as_of_date
-    // and enum option lists never make one. The view never reads a value from an untrusted assertion.
+    // and enum option lists never make one (a reviewer confirming the AI value is a confirmation, not a
+    // contradiction). The view never reads a value from an untrusted assertion.
     const known = list.filter((f) => trusted(f) && wellFormed(f.value));
     const canonical = (f: Fact): string => `${f.value.type}|${JSON.stringify(f.value.value)}`;
     const conflict = new Set(known.map(canonical)).size > 1;
@@ -104,7 +105,7 @@ function wellFormed(v: FactValue): boolean {
     case 'enum': return typeof v.value === 'string' && KEY.test(v.value);
     case 'date': return typeof v.value === 'string' && isRealDate(v.value);
     case 'text': return typeof v.value === 'string' && v.value.trim() !== '';
-    case 'medication_list': return Array.isArray(v.value);
+    case 'medication_list': return Array.isArray(v.value) && v.value.every((m) => !!m && typeof m === 'object' && typeof m.name === 'string');
     default: return false;
   }
 }
@@ -151,8 +152,8 @@ function evalExpr(e: Expr, ctx: Ctx): TriState {
       const f = ctx.facts.get(e.key);
       if (!f || f.presence === 'unknown' || !f.as_of_date) return 'unknown';
       const d = daysBetween(f.as_of_date, ctx.referral_date);
-      if (!Number.isFinite(d)) return 'unknown'; // a malformed date is silence, never false
-      return bool(d >= 0 && d <= e.days);
+      if (!Number.isFinite(d) || d < 0) return 'unknown'; // a malformed or post-referral date is silence, never false
+      return bool(d <= e.days);
     }
     case 'profile_is': {
       const v = ctx.profile[e.key];
@@ -234,9 +235,17 @@ function resolve(entries: Entry[], critical: Set<string>, facts: Map<string, Fac
 
 export function evaluate(input: EvaluateInput): Evaluation {
   if (!isRealDate(input.referral_date)) throw new Error('evaluate: referral_date must be a real YYYY-MM-DD date');
-  for (const f of input.facts) if (!KEY.test(f.key)) throw new Error('evaluate: a fact key must be snake_case (SPEC §8)');
+  for (const f of input.facts) {
+    if (!KEY.test(f.key)) throw new Error('evaluate: a fact key must be snake_case (SPEC §8)');
+    if (!f.value || typeof f.value !== 'object' || typeof f.value.type !== 'string') throw new Error(`evaluate: fact ${f.key} has no typed value`);
+  }
   const KINDS = new Set<string>(['hard_stop', 'review', 'favorable', 'payer']);
-  for (const r of input.rules) if (!KINDS.has(r.kind) || !Array.isArray(r.inputs) || typeof r.expression !== 'string') throw new Error(`evaluate: rule ${String(r.id)} is not a rule record`);
+  for (const r of input.rules) {
+    if (typeof r.id !== 'string' || !KINDS.has(r.kind) || !Array.isArray(r.inputs) || !r.inputs.every((k) => typeof k === 'string') || typeof r.expression !== 'string' || typeof r.enabled !== 'boolean') {
+      throw new Error(`evaluate: rule ${String(r.id)} is not a rule record`);
+    }
+  }
+  if (new Set(input.rules.map((r) => r.id)).size !== input.rules.length) throw new Error('rule set refused: duplicate rule id');
   const rules = input.rules.filter((r) => r.enabled === true);
   const ctx: Ctx = { facts: viewFacts(input.facts), profile: input.profile, referral_date: input.referral_date, emptyProfileKeys: new Set() };
   // The engine is the trust boundary for rule content, whether or not rule CI ran (§10.2, I10):
@@ -244,12 +253,12 @@ export function evaluate(input: EvaluateInput): Evaluation {
   //   fact) needs a legal_reviewer record;
   // - a non-review rule may not test `is unknown` (silence would become a decision).
   // Either refuses the whole rule set rather than deciding on it.
-  const parsed = new Map(rules.map((r) => [r.id, parseExpression(r.expression)] as const));
-  const keysRead = (r: Rule) => new Set([...r.inputs, ...referencedKeys(parsed.get(r.id)!)]);
+  const parsed = new Map(rules.map((r) => [r, parseExpression(r.expression)] as const)); // keyed by the record, never by id
+  const keysRead = (r: Rule) => new Set([...r.inputs, ...referencedKeys(parsed.get(r)!)]);
   const illegal = rules.filter((r) => r.kind !== 'review' && !legalReviewerOk(r.legal_reviewer)
     && (r.protected_input || [...keysRead(r)].some((k) => ctx.facts.get(k)?.protected)));
   if (illegal.length) throw new Error(`rule set refused: ${illegal.map((r) => r.id).join(', ')} read a protected input without a legal_reviewer record (SPEC §10.2)`);
-  const silent = rules.filter((r) => r.kind !== 'review' && usesIsUnknown(parsed.get(r.id)!));
+  const silent = rules.filter((r) => r.kind !== 'review' && usesIsUnknown(parsed.get(r)!));
   if (silent.length) throw new Error(`rule set refused: ${silent.map((r) => r.id).join(', ')} test 'is unknown' outside a review rule (SPEC §10.2)`);
   const entries: Entry[] = rules.map((r) => ({ ...evaluateRuleWith(r, ctx), sub_reason: r.sub_reason ?? null }));
   const critical = new Set<string>();
