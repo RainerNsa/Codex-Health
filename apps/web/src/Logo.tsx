@@ -1,12 +1,12 @@
-// The Codex Health mark: a C drawn as a square citation bracket holding a health cross, because every answer in the
-// product shows its source. Drawn on a 64 grid; the bracket takes the text colour, the cross the signal colour.
+// The Codex Health mark: a heavy round C with a small health cross in its opening. Drawn on a 64 grid; the C takes the
+// text colour, the cross the signal colour.
 import { Flex, Text } from '@chakra-ui/react';
 
 export function LogoMark({ size = 28 }: { size?: number }) {
   return (
-    <svg width={size} height={size} viewBox="8 6 49 52" aria-hidden="true" focusable="false">
-      <path fill="currentColor" d="M13 11h39v8H21v26h31v8H13z" />
-      <path fill="var(--chakra-colors-signal)" d="M36 23h6v6h6v6h-6v6h-6v-6h-6v-6h6z" />
+    <svg width={size} height={size} viewBox="4 4 56 56" aria-hidden="true" focusable="false">
+      <path fill="currentColor" d="M52 18A25 25 0 1 0 52 46l-7-6a16 16 0 1 1 0-16z" />
+      <path fill="var(--chakra-colors-signal)" d="M47.5 25h5v4.5h4.5v5h-4.5v4.5h-5v-4.5h-4.5v-5h4.5z" />
     </svg>
   );
 }
