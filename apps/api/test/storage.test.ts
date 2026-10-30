@@ -45,6 +45,12 @@ describe.skipIf(!endpoint)('move', () => {
 });
 
 describe('presign with the bucket key', () => {
+  // signing is local, but the client still needs a region and credentials: placeholders where CI sets none
+  beforeAll(() => {
+    process.env['AWS_REGION'] ??= 'us-east-1';
+    process.env['AWS_ACCESS_KEY_ID'] ??= 'test';
+    process.env['AWS_SECRET_ACCESS_KEY'] ??= 'test';
+  });
   it('signs the SSE-KMS headers and hands them to the browser to send (the real bucket refuses uploads without them)', async () => {
     const st = s3Storage('zz-bucket', 'arn:aws:kms:us-east-1:000000000000:key/zz-key');
     const { url, headers } = await st.presignPut('quarantine/zz/zz/zz', 10);
