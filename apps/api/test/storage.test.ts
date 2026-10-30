@@ -1,6 +1,7 @@
 // The storage gate (SPEC §12.1): file signatures, and promotion of exactly the inspected bytes. The move test runs
 // against LocalStack; it is skipped without it locally and required in the db-checks job.
-import { describe, expect, it } from 'vitest';
+import { beforeAll, describe, expect, it } from 'vitest';
+import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3';
 import { sniff, s3Storage } from '../src/storage.ts';
 
 const endpoint = process.env['AWS_ENDPOINT_URL']; // localstack only
@@ -20,8 +21,15 @@ describe('sniff', () => {
 });
 
 describe.skipIf(!endpoint)('move', () => {
+  const bucket = process.env['S3_DOCUMENTS_BUCKET'] ?? 'codex-health-documents-local';
+  beforeAll(async () => {
+    // CI's LocalStack starts empty, and test files may run in any order
+    await new S3Client({ endpoint, forcePathStyle: true }).send(new CreateBucketCommand({ Bucket: bucket })).catch((err: { name?: string }) => {
+      if (err.name !== 'BucketAlreadyOwnedByYou' && err.name !== 'BucketAlreadyExists') throw err;
+    });
+  });
   it('promotes exactly the inspected bytes: an object swapped after the check is refused', async () => {
-    const st = s3Storage(process.env['S3_DOCUMENTS_BUCKET'] ?? 'codex-health-documents-local');
+    const st = s3Storage(bucket);
     const key = `quarantine/zz-test/move/${Date.now()}`;
     const to = `documents/zz-test/move/${Date.now()}`;
     const good = Buffer.from('%PDF-1.4 ZZTEST good');
