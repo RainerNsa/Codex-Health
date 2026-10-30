@@ -14,7 +14,7 @@ export interface Evaluation {
   raw?: boolean;
   trace: { disagreements?: string[]; resolution_step: string; trace: TraceEntry[]; missing: string[]; conflicts: string[]; blocking: string[]; empty_profile_keys: string[]; confirmation_set?: string[] };
 }
-export type Action = 'submit' | 'process' | 'hold' | 'request_info' | 'escalate' | 'resume' | 'finalize' | 'reevaluate' | 'cosign' | 'amend' | 'upload' | 'resolve_failures';
+export type Action = 'submit' | 'process' | 'hold' | 'request_info' | 'escalate' | 'resume' | 'finalize' | 'reevaluate' | 'cosign' | 'amend' | 'upload' | 'resolve_failures' | 'retry_failed';
 export interface DocumentRow { id: string; type: string; status: 'uploaded' | 'processed' | 'failed' | 'unreadable' | 'not_applicable'; pages: number | null; not_applicable_reason: string | null; created_at: string }
 export interface TransitionRow { transition: string; from_status: string; to_status: string; note: string | null; department: string | null; requested_items: string[]; created_by: string; created_at: string }
 export interface DecisionRow { id: string; evaluation_id: string; recommended_outcome: string; decision: 'admit' | 'do_not_admit'; override_reason: string | null; decided_by: string; cosigned_by: string | null; amends_decision_id: string | null; amendment_reason: string | null; decided_at: string }
@@ -23,6 +23,7 @@ export interface ReferralView {
   facts: FactRow[];
   form: { fact_keys: FactKey[]; note_max: number; configured?: boolean; departments: string[] };
   evaluation: Evaluation | null;
+  changes: { previous_outcome: Evaluation['outcome']; facts: { key: string; from: unknown; to: unknown }[] } | null;
   rule_explanations: Record<string, string | null>;
   confirmation: { key: string; confirmed: boolean; known: boolean }[];
   admit_requires: string[];
@@ -93,12 +94,14 @@ export async function uploadDocument(facility: string, referral: string, user: s
   if (!put.ok) throw new ApiError(put.status, 'upload_failed');
   return call<ReferralView>(base, user, { method: 'POST', body: JSON.stringify({ sha256, type, ...(replaces ? { replaces } : {}) }) });
 }
+export const retryFailed = (facility: string, referral: string, user: string) =>
+  call<ReferralView>(`/api/facilities/${facility}/referrals/${referral}/documents/retry`, user, { method: 'POST' });
 export const resolveFailures = (facility: string, referral: string, user: string, documents: { id: string; reason: string }[]) =>
   call<ReferralView>(`/api/facilities/${facility}/referrals/${referral}/documents/resolve`, user, { method: 'POST', body: JSON.stringify({ documents }) });
 
 export interface QueueRow { id: string; status: string; referral_type: string; created_at: string; updated_at: string; outcome: Evaluation['outcome'] | null; raw: boolean | null; sub_reasons: string[] | null; documents: number; failed_documents: number; cosign_waiting: boolean }
-export const viewDocument = (facility: string, referral: string, user: string, document: string, fact: string) =>
-  call<{ url: string; expires_in: number }>(`/api/facilities/${facility}/referrals/${referral}/documents/${document}/view?fact=${fact}`, user);
+export const viewDocument = (facility: string, referral: string, user: string, document: string, fact?: string) =>
+  call<{ url: string; expires_in: number }>(`/api/facilities/${facility}/referrals/${referral}/documents/${document}/view${fact ? `?fact=${fact}` : ''}`, user);
 export type QueueFilter = 'open' | 'processing' | 'closed';
 export const listReferrals = (facility: string, user: string, filter: QueueFilter, after?: string) =>
   call<{ filter: QueueFilter; referrals: QueueRow[]; next: string | null }>(`/api/facilities/${facility}/referrals?filter=${filter}${after ? `&after=${encodeURIComponent(after)}` : ''}`, user);

@@ -762,14 +762,23 @@ describe.skipIf(!url)('manual fact entry API', () => {
       expect((await open(other, docId)).statusCode).toBe(404);
       expect((await open(rid, 'not-a-uuid')).statusCode).toBe(404);
       expect((await open(rid, docId, '', U.viewer)).statusCode).toBe(403); // a Viewer sees no referral, and so no document
+      const fresh = await newReferral();
+      const waiting = (await upload(fresh, PDF(60))).json().documents[0].id as string;
+      expect((await open(fresh, waiting)).statusCode).toBe(404); // not read yet
       let n = 60;
-      for (const status of ['uploaded', 'failed', 'unreadable']) { // only a document that was read opens inline
-        const fresh = await newReferral();
-        const id = (await upload(fresh, PDF((n += 1)))).json().documents[0].id as string;
+      for (const status of ['failed', 'unreadable']) { // readable by a person before dismissal, but saved, never opened inline
+        const r = await newReferral();
+        const id = (await upload(r, PDF((n += 1)))).json().documents[0].id as string;
         await asOwner(FAC.a);
         await c.query('UPDATE documents SET status = $2 WHERE id = $1', [id, status]);
         await c.query("SELECT set_config('app.facility_id', '', true)");
-        expect((await open(fresh, id)).statusCode).toBe(404);
+        const res2 = await open(r, id);
+        expect(res2.statusCode).toBe(200);
+        expect(res2.json().url).toContain('response-content-disposition=attachment');
+        await asOwner(FAC.a);
+        await c.query("UPDATE documents SET status = 'not_applicable', not_applicable_reason = 'SYNTHETIC' WHERE id = $1", [id]);
+        await c.query("SELECT set_config('app.facility_id', '', true)");
+        expect((await open(r, id)).statusCode).toBe(404); // dismissed: no longer part of the review
       }
     });
 
@@ -810,6 +819,96 @@ describe.skipIf(!url)('manual fact entry API', () => {
       const attrs = (await c.query("SELECT attrs FROM product_events WHERE referral_id = $1 AND event = 'evidence.viewed'", [rid])).rows;
       expect(attrs).toEqual([{ attrs: { document_id: docId, page: 2, decisive: false } }]);
       await c.query("SELECT set_config('app.facility_id', '', true)");
+    });
+
+    it('trying again sends the same file back through the pipeline; only failed documents, only from a partial failure', async () => {
+      const sent: string[] = [];
+      docApp = buildServer({ tx, auth: 'local-stub', env: 'test', storage: s3Storage(BUCKET), enqueue: async (_f, r) => { sent.push(r); } });
+      const retry = (rid: string, user = U.reviewer) => docApp.inject({ method: 'POST', url: `${refUrl(rid)}/documents/retry`, headers: as(user) });
+      const rid = await newReferral();
+      const a = (await upload(rid, PDF(71))).json().documents[0].id as string;
+      const b = (await upload(rid, PDF(72))).json().documents.find((d: { id: string }) => d.id !== a).id as string;
+      expect((await retry(rid)).json().error).toBe('transition_not_allowed'); // not a partial failure
+      await asOwner(FAC.a);
+      await c.query("UPDATE documents SET status = 'failed' WHERE id = $1", [a]);
+      await c.query("UPDATE documents SET status = 'unreadable' WHERE id = $1", [b]);
+      await c.query("UPDATE referrals SET status = 'partial_failure' WHERE id = $1", [rid]);
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      expect((await retry(rid, U.viewer)).statusCode).toBe(403);
+      const res = await retry(rid);
+      expect(res.statusCode).toBe(201);
+      const view = res.json();
+      const status = (id: string) => view.documents.find((d: { id: string }) => d.id === id).status;
+      expect([view.referral.status, status(a), status(b)]).toEqual(['processing', 'uploaded', 'unreadable']);
+      expect(sent).toEqual([rid]);
+      await asOwner(FAC.a);
+      expect(await count("SELECT count(*) AS n FROM audit_log WHERE action = 'document.retried' AND entity_id = $1", [a])).toBe(1);
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      expect((await retry(rid)).json().error).toBe('transition_not_allowed');
+    });
+
+    it('retry is offered and allowed only with a failed document on a partial failure; the database refuses anything else', async () => {
+      const retry = (rid: string) => docApp.inject({ method: 'POST', url: `${refUrl(rid)}/documents/retry`, headers: as(U.reviewer) });
+      const setUp = async (n: number, doc: string, ref: string) => {
+        const rid = await newReferral();
+        const id = (await upload(rid, PDF(n))).json().documents[0].id as string;
+        await asOwner(FAC.a);
+        await c.query('UPDATE documents SET status = $2 WHERE id = $1', [id, doc]);
+        await c.query('UPDATE referrals SET status = $2 WHERE id = $1', [rid, ref]);
+        await c.query("SELECT set_config('app.facility_id', '', true)");
+        return { rid, id };
+      };
+      const onlyUnreadable = await setUp(81, 'unreadable', 'partial_failure');
+      expect((await get(refUrl(onlyUnreadable.rid), U.reviewer)).json().actions).not.toContain('retry_failed');
+      const refused = await retry(onlyUnreadable.rid);
+      expect([refused.statusCode, refused.json().error]).toEqual([409, 'transition_not_allowed']);
+
+      const failedInReview = await setUp(82, 'failed', 'ready_for_review');
+      expect((await get(refUrl(failedInReview.rid), U.reviewer)).json().actions).not.toContain('retry_failed');
+      const wrongState = await retry(failedInReview.rid);
+      expect([wrongState.statusCode, wrongState.json().error]).toEqual([409, 'transition_not_allowed']);
+
+      // the guard itself, as the app role, on a partial failure: only failed moves back
+      const processed = await setUp(83, 'processed', 'partial_failure');
+      await asOwner(FAC.a);
+      for (const id of [onlyUnreadable.id, processed.id]) {
+        await c.query('SAVEPOINT guard');
+        await c.query('SET LOCAL ROLE codex_app');
+        await expect(c.query("UPDATE documents SET status = 'uploaded' WHERE id = $1", [id])).rejects.toThrow(/codex_app may not move document/);
+        await c.query('ROLLBACK TO SAVEPOINT guard');
+        await c.query('RESET ROLE');
+      }
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+    });
+
+    it('a document can be retried three times, then a person must replace or dismiss it', async () => {
+      docApp = buildServer({ tx, auth: 'local-stub', env: 'test', storage: s3Storage(BUCKET) });
+      const rid = await newReferral();
+      const id = (await upload(rid, PDF(91))).json().documents[0].id as string;
+      const fail = async () => {
+        await asOwner(FAC.a);
+        await c.query("UPDATE documents SET status = 'failed' WHERE id = $1", [id]);
+        await c.query("UPDATE referrals SET status = 'partial_failure' WHERE id = $1", [rid]);
+        await c.query("SELECT set_config('app.facility_id', '', true)");
+      };
+      const retry = () => docApp.inject({ method: 'POST', url: `${refUrl(rid)}/documents/retry`, headers: as(U.reviewer) });
+      for (let i = 0; i < 3; i += 1) {
+        await fail();
+        expect((await retry()).statusCode).toBe(201);
+      }
+      await fail();
+      expect((await retry()).json().error).toBe('retry_limit');
+    });
+
+    it('what changed: the outcome and each fact that differs from the evaluation before', async () => {
+      const rid = await newReferral();
+      expect((await post(factsUrl(rid), U.reviewer, fact('ventilator_use', 'no'))).json().changes).toBeNull();
+      await post(factsUrl(rid), U.reviewer, fact('recent_aggression', 'no'));
+      const v = (await post(factsUrl(rid), U.reviewer, fact('ventilator_use', 'yes'))).json();
+      expect(v.changes.facts).toEqual([{ key: 'ventilator_use', from: 'no', to: 'yes' }]);
+      expect(v.changes.previous_outcome).not.toBe(v.evaluation.outcome);
+      const added = (await post(factsUrl(rid), U.reviewer, fact('daily_skilled_need', 'yes'))).json();
+      expect(added.changes.facts).toEqual([{ key: 'daily_skilled_need', from: null, to: 'yes' }]);
     });
 
     it('confirming needs the page opened by this person, on the current reading, and keeps the flag', async () => {
@@ -900,7 +999,7 @@ describe.skipIf(!url)('manual fact entry API', () => {
       await move(rid, U.reviewer, { action: 'process' });
       await asPipeline(rid, 'failed', 'partial_failure');
       let view = (await get(refUrl(rid), U.reviewer)).json();
-      expect(view.actions).toEqual(['upload', 'resolve_failures']);
+      expect(view.actions).toEqual(['upload', 'resolve_failures', 'retry_failed']);
       const failed = view.documents[0].id as string;
       expect((await upload(rid, PDF(7))).json()).toEqual({ error: 'replace_required' });
       view = (await upload(rid, PDF(8), { replaces: failed })).json();

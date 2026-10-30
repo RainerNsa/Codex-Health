@@ -1,7 +1,8 @@
 // The document pipeline for one referral (SPEC §5.1 T2/T3, §12.1, §14.2). OCR and extraction run first, touching
 // nothing; then one transaction writes every result. A crash anywhere leaves no half-written facts, and a redelivered
 // job repeats cleanly (4.3). The model never sees the rules or emits an outcome: the engine decides from verified facts.
-// shortcut: one write per run, so no document-level partial results yet; slice 4 (4.1) splits this per document.
+// Each document is extracted alone, so one the model cannot finish fails by itself and the rest still count (3.4, 4.1). If
+// none can be extracted that is an outage, not a bad document: the job throws, retries, and in the end dead-letters.
 import { ENGINE_VERSION, evaluate, keyTypes, parseExpression, parseFactValue, referencedKeys, type Fact, type FactValue, type KeyType, type Rule } from '@codex-health/rules-engine';
 import { isNegative, verifyEvidence } from './verify.ts';
 
@@ -9,7 +10,7 @@ export type Query = <R = Record<string, unknown>>(sql: string, params?: unknown[
 export type Tx = <T>(fn: (q: Query) => Promise<T>) => Promise<T>;
 
 export interface Page { page: number; text: string }
-export interface DocumentRef { id: string; storage_key: string }
+export interface DocumentRef { id: string; storage_key: string; version?: string }
 export interface Extracted { key: string; value: FactValue; document_id: string; page: number; quote: string; confidence_band: 'high' | 'medium' | 'low' }
 export interface Ports {
   /** Page text of one document. Throws when it cannot be read; an empty result means nothing was legible. */
@@ -20,7 +21,7 @@ export interface Ports {
 }
 export interface Job { facilityId: string; referralId: string; jobId: string }
 
-type Outcome = { doc: DocumentRef; status: 'processed'; pages: Page[]; ms: number } | { doc: DocumentRef; status: 'failed' | 'unreadable'; pages: []; ms: number };
+type Outcome = { doc: DocumentRef; status: 'processed'; pages: Page[]; ms: number } | { doc: DocumentRef; status: 'failed' | 'unreadable'; pages: []; ms: number; stage: 'ocr' | 'extract' };
 
 const isKnown = (v: FactValue) => v.value !== null && v.value !== 'unknown';
 const JOB_ID = /^[a-z0-9-]{1,64}$/;
@@ -87,7 +88,7 @@ export async function processReferral(tx: Tx, ports: Ports, job: Job): Promise<'
     if (ref.status !== 'processing') return null;
     const set = await settings(q, fid, org);
     if (!set) throw new Error('facility has no rule set or profile');
-    const docs = (await q<DocumentRef>("SELECT id, storage_key FROM documents WHERE facility_id = $1 AND referral_id = $2 AND status = 'uploaded' ORDER BY created_at", [fid, rid])).rows;
+    const docs = (await q<DocumentRef>("SELECT id, storage_key, updated_at::text AS version FROM documents WHERE facility_id = $1 AND referral_id = $2 AND status = 'uploaded' ORDER BY created_at", [fid, rid])).rows;
     const enabled = set.rules.filter((r) => r.enabled);
     const keys = [...new Set(enabled.flatMap((r) => referencedKeys(parseExpression(r.expression))).filter((k) => !k.startsWith('facility.')))].sort();
     return { docs, keys, types: keyTypes(enabled.map((r) => r.expression)), hardKeys: new Set(enabled.filter((r) => r.kind === 'hard_stop').flatMap((r) => r.inputs)) };
@@ -99,21 +100,33 @@ export async function processReferral(tx: Tx, ports: Ports, job: Job): Promise<'
     const start = Date.now();
     try {
       const pages = (await ports.ocr(doc)).filter((p) => p.text.trim() !== '');
-      results.push(pages.length ? { doc, status: 'processed', pages, ms: Date.now() - start } : { doc, status: 'unreadable', pages: [], ms: Date.now() - start });
+      results.push(pages.length ? { doc, status: 'processed', pages, ms: Date.now() - start } : { doc, status: 'unreadable', pages: [], ms: Date.now() - start, stage: 'ocr' });
     } catch {
-      results.push({ doc, status: 'failed', pages: [], ms: Date.now() - start }); // never the error text: it can quote the document
+      results.push({ doc, status: 'failed', pages: [], ms: Date.now() - start, stage: 'ocr' }); // never the error text: it can quote the document
+    }
+  }
+  const extracted: Extracted[] = [];
+  let attempted = 0;
+  for (const [i, r] of results.entries()) {
+    if (r.status !== 'processed') continue;
+    attempted += 1;
+    try {
+      extracted.push(...await ports.extract([{ document_id: r.doc.id, pages: r.pages }], plan.keys, plan.types));
+    } catch {
+      results[i] = { doc: r.doc, status: 'failed', pages: [], ms: r.ms, stage: 'extract' };
     }
   }
   const read = results.filter((r) => r.status === 'processed');
-  const extracted = read.length ? await ports.extract(read.map((r) => ({ document_id: r.doc.id, pages: r.pages })), plan.keys, plan.types) : [];
+  if (attempted > 0 && read.length === 0) throw new Error('no document could be extracted');
 
   return tx(async (q) => {
     const org = await bind(q, fid);
     const ref = (await q<{ status: string }>('SELECT status FROM referrals WHERE facility_id = $1 AND id = $2 FOR UPDATE', [fid, rid])).rows[0];
     if (ref?.status !== 'processing') return 'skipped'; // a duplicate delivery finished first
     // this job must still own exactly the documents it read: a stale job never finishes a newer round of work
-    const waiting = (await q<{ id: string }>("SELECT id FROM documents WHERE facility_id = $1 AND referral_id = $2 AND status = 'uploaded'", [fid, rid])).rows.map((d) => d.id).sort();
-    if (waiting.join() !== plan.docs.map((d) => d.id).sort().join()) return 'skipped';
+    // (by version too: a retried document keeps its id)
+    const waiting = (await q<{ v: string }>("SELECT id || ':' || updated_at::text AS v FROM documents WHERE facility_id = $1 AND referral_id = $2 AND status = 'uploaded'", [fid, rid])).rows.map((d) => d.v).sort();
+    if (waiting.join() !== plan.docs.map((d) => `${d.id}:${d.version}`).sort().join()) return 'skipped';
     const set = await settings(q, fid, org);
     if (!set) throw new Error('facility has no rule set or profile');
 
@@ -121,7 +134,7 @@ export async function processReferral(tx: Tx, ports: Ports, job: Job): Promise<'
       await q('UPDATE documents SET status = $3, pages = $4, updated_at = now() WHERE facility_id = $1 AND id = $2', [fid, r.doc.id, r.status, r.pages.length || null]);
       await q('INSERT INTO audit_log (facility_id, actor, action, entity_type, entity_id) VALUES ($1, $2, $3, $4, $5)', [fid, actor, `document.${r.status}`, 'document', r.doc.id]);
       await q('INSERT INTO product_events (facility_id, referral_id, actor, event, attrs) VALUES ($1, $2, $3, $4, $5)', [fid, rid, actor, r.status === 'processed' ? 'document.processed' : 'document.failed',
-        r.status === 'processed' ? { document_id: r.doc.id, pages_ocr: r.pages.length, duration_ms: r.ms } : { document_id: r.doc.id, pages_ocr: 0, stage: 'ocr', duration_ms: r.ms }]);
+        r.status === 'processed' ? { document_id: r.doc.id, pages_ocr: r.pages.length, duration_ms: r.ms } : { document_id: r.doc.id, pages_ocr: 0, stage: r.stage, duration_ms: r.ms }]);
     }
 
     const pageText = new Map(read.flatMap((r) => r.pages.map((p) => [`${r.doc.id}:${p.page}`, p.text] as const)));
@@ -220,10 +233,10 @@ export async function processReferral(tx: Tx, ports: Ports, job: Job): Promise<'
 /** The way out for a job that used up its deliveries: the referral goes to a person as a partial failure (T3) instead of
  *  sitting in processing. Evaluated when it can be; with no usable settings there is nothing to evaluate against. */
 export async function failReferral(tx: Tx, versions: Ports['versions'], job: Job, sentAt: number): Promise<void> {
-  // a dead letter ends only its own round: a document that arrived after the job was sent has a job of its own coming
+  // a dead letter ends only its own round: a document that arrived or was retried after the job was sent has a job of its own coming
   const newest = await tx(async (q) => {
     await bind(q, job.facilityId);
-    return (await q<{ newest: Date | null }>("SELECT max(created_at) AS newest FROM documents WHERE facility_id = $1 AND referral_id = $2 AND status = 'uploaded'", [job.facilityId, job.referralId])).rows[0]?.newest;
+    return (await q<{ newest: Date | null }>("SELECT max(updated_at) AS newest FROM documents WHERE facility_id = $1 AND referral_id = $2 AND status = 'uploaded'", [job.facilityId, job.referralId])).rows[0]?.newest;
   });
   if (newest && newest.getTime() > sentAt + CLOCK_MARGIN_MS) return;
   const nothingRead: Ports = { versions, ocr: async () => { throw new Error('job dead-lettered'); }, extract: async () => [] };

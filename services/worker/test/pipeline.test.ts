@@ -437,10 +437,55 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
     }
   });
 
+  test('one document the model cannot finish fails alone: the others count, and its error text goes nowhere', async () => {
+    const { rid, docs } = await referral('w1', 'w2');
+    const bad = docs[0]!;
+    const seen: string[][] = [];
+    const p: Ports = { versions: VERSIONS, ocr: async () => [{ page: 1, text: PAGE }], extract: async (pages) => {
+      seen.push(pages.map((x) => x.document_id));
+      if (pages[0]!.document_id === bad) throw new Error('SYNTHETIC-CANARY refused');
+      return pages.flatMap((x) => clean(x.document_id));
+    } };
+    await processReferral(tx, p, job(rid));
+    assert.deepEqual(seen.map((x) => x.length), [1, 1]); // one document per call
+    const s = await state(rid);
+    assert.equal(s.status, 'partial_failure');
+    assert.deepEqual(s.docs.map((d) => d.status).sort(), ['failed', 'processed']);
+    assert.equal(s.facts.length, 3);
+    assert.deepEqual([s.evals[0].outcome, s.evals[0].sub_reasons], ['needs_review', ['processing_incomplete']]);
+    const events = (await c.query("SELECT attrs FROM product_events WHERE referral_id = $1 AND event = 'document.failed'", [rid])).rows;
+    assert.deepEqual(events.map((e) => [e.attrs.document_id, e.attrs.stage]), [[bad, 'extract']]);
+    assert.ok(!JSON.stringify(events).includes('CANARY'));
+  });
+
+  test('a retried document is read on its own: earlier facts stay, and the referral goes to review', async () => {
+    const { rid, docs } = await referral('w5', 'w6');
+    const bad = docs[0]!;
+    const onlyGood: Ports = { versions: VERSIONS, ocr: async () => [{ page: 1, text: PAGE }], extract: async (p) => { if (p[0]!.document_id === bad) throw new Error('x'); return p.flatMap((d) => clean(d.document_id)); } };
+    await processReferral(tx, onlyGood, job(rid));
+    assert.equal((await state(rid)).status, 'partial_failure');
+    await asOwner();
+    await c.query("UPDATE documents SET status = 'uploaded' WHERE id = $1", [bad]); // what the API's retry does under T4
+    await c.query("UPDATE referrals SET status = 'processing' WHERE id = $1", [rid]);
+    const p = ports(() => [{ page: 1, text: PAGE }], clean);
+    await processReferral(tx, p, job(rid));
+    assert.equal(p.ocrCalls, 1); // only the retried document
+    const s = await state(rid);
+    assert.deepEqual([s.status, s.docs.every((d) => d.status === 'processed'), s.facts.length], ['ready_for_review', true, 3]);
+    assert.equal(s.evals.at(-1).sub_reasons.includes('processing_incomplete'), false);
+  });
+
+  test('an unreadable document with an extraction outage on the rest is still an outage', async () => {
+    const { rid, docs } = await referral('w3', 'w4');
+    const p: Ports = { versions: VERSIONS, ocr: async (d) => (d.id === docs[0] ? [] : [{ page: 1, text: PAGE }]), extract: async () => { throw new Error('down'); } };
+    await assert.rejects(processReferral(tx, p, job(rid)), /no document could be extracted/);
+    assert.equal((await state(rid)).status, 'processing');
+  });
+
   test('a crash in extraction leaves nothing written, and the job can run again', async () => {
     const { rid } = await referral('i');
     const crash: Ports = { versions: VERSIONS, ocr: async () => [{ page: 1, text: PAGE }], extract: async () => { throw new Error('boom'); } };
-    await assert.rejects(processReferral(tx, crash, job(rid)), /boom/);
+    await assert.rejects(processReferral(tx, crash, job(rid)), /no document could be extracted/);
     let s = await state(rid);
     assert.deepEqual([s.status, s.docs[0].status, s.facts, s.evals], ['processing', 'uploaded', [], []]);
     assert.equal(await processReferral(tx, ports(() => [{ page: 1, text: PAGE }], clean), job(rid)), 'done');
@@ -500,6 +545,20 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
     assert.equal((await state(rid)).status, 'processing');
     await failReferral(tx, VERSIONS, job(rid), Date.now() - 30_000); // inside the margin: the clocks may differ, so it is its own round
     assert.equal((await state(rid)).status, 'partial_failure');
+  });
+
+  test('a retried document is a newer round: an old dead letter spares it, and a stale job cannot finish it', async () => {
+    const { rid, docs } = await referral('x1');
+    await asOwner();
+    await c.query("UPDATE documents SET updated_at = now() + interval '1 hour' WHERE id = $1", [docs[0]]);
+    await failReferral(tx, VERSIONS, job(rid), Date.now());
+    assert.equal((await state(rid)).status, 'processing');
+    // a job holding the same document id, from before the retry
+    const stale: Ports = { versions: VERSIONS, ocr: async () => [{ page: 1, text: PAGE }], extract: async () => {
+      await asOwner();
+      await c.query("UPDATE documents SET updated_at = now() + interval '2 hours' WHERE id = $1", [docs[0]]);
+      return []; } };
+    assert.equal(await processReferral(tx, stale, job(rid)), 'skipped');
   });
 
   test('each queue does its own job: a dead letter reaches a person, stamped with the running versions', async () => {

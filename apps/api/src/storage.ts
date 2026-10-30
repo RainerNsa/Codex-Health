@@ -23,8 +23,8 @@ export interface Storage {
    *  checked file type and served as an attachment; then delete that quarantine version. */
   move(from: string, to: string, checked: Inspected, kind: keyof typeof CONTENT_TYPE): Promise<void>;
   remove(key: string, versionId?: string): Promise<void>;
-  /** A short-lived URL to read one stored document, shown in the browser. */
-  presignGet(key: string): Promise<string>;
+  /** A short-lived URL to one stored document: shown in the browser, or saved when it did not read cleanly. */
+  presignGet(key: string, disposition: 'inline' | 'attachment'): Promise<string>;
 }
 
 /** PDF, PNG, JPEG or TIFF, by their first bytes: the declared type and the file name are never trusted. */
@@ -83,7 +83,7 @@ export function s3Storage(bucket: string, kmsKeyId?: string): Storage {
       await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: from, ...(checked.versionId ? { VersionId: checked.versionId } : {}) }));
     },
     // inline, on the storage host: a hostile file opens on S3's origin, never this app's
-    presignGet: (key) => getSignedUrl(s3, new GetObjectCommand({ Bucket: bucket, Key: key, ResponseContentDisposition: 'inline', ResponseCacheControl: 'no-store' }), { expiresIn: VIEW_TTL_SECONDS }),
+    presignGet: (key, disposition) => getSignedUrl(s3, new GetObjectCommand({ Bucket: bucket, Key: key, ResponseContentDisposition: disposition, ResponseCacheControl: 'no-store' }), { expiresIn: VIEW_TTL_SECONDS }),
     async remove(key, versionId) {
       await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: key, ...(versionId ? { VersionId: versionId } : {}) }));
     },
