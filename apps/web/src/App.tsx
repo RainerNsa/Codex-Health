@@ -102,7 +102,8 @@ export function App() {
         </div>
       </section>
 
-      <QueuePanel facility={facility} user={user} onOpen={(id) => void run(() => getReferral(facility, id, user))} />
+      {/* a new facility or user starts an empty list: one person's queue never shows under another's name */}
+      <QueuePanel key={`${facility}:${user}`} facility={facility} user={user} onOpen={(id) => void run(() => getReferral(facility, id, user))} />
 
       <SettingsPanel facility={facility} user={user} />
 

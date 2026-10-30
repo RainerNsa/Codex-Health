@@ -296,24 +296,40 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
     closed: ['finalized', 'amended'],
   };
   const QUEUE_LIMIT = 100;
+  /** Exactly the timestamp text the API issues as a cursor (Postgres' timestamptz output), and a real date. */
+  const realTimestamp = (t: string) => {
+    const m = /^(\d{4})-(\d\d)-(\d\d) \d\d:\d\d:\d\d(\.\d{1,6})?[+-]\d\d(:\d\d)?$/.exec(t);
+    if (!m) return false;
+    const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
+    return d.getUTCFullYear() === Number(m[1]) && d.getUTCMonth() === Number(m[2]) - 1 && d.getUTCDate() === Number(m[3]);
+  };
   app.get<{ Params: { fid: string }; Querystring: { filter?: string; after?: string } }>('/api/facilities/:fid/referrals', async (req, reply) => {
     try {
       const user = caller(req.headers);
       const { fid } = ids(req.params);
       const filter = req.query.filter ?? 'open';
-      const states = QUEUE_FILTERS[filter];
+      const states = typeof filter === 'string' && Object.hasOwn(QUEUE_FILTERS, filter) ? QUEUE_FILTERS[filter] : undefined;
       // paging: an opaque cursor the API returned, "<updated_at as Postgres prints it>|<referral id>"; rows are ordered
       // by both, so ties never skip or repeat a referral
       const after = req.query.after;
-      const [cursorAt, cursorId] = typeof after === 'string' ? after.split('|') : [];
-      if (!states || (after !== undefined && (!cursorAt || Number.isNaN(Date.parse(cursorAt)) || !cursorId || !UUID.test(cursorId)))) throw new HttpError(400, 'invalid_query');
+      const parts = typeof after === 'string' ? after.split('|') : [];
+      const [cursorAt, cursorId] = parts;
+      if (!states || (after !== undefined && (parts.length !== 2 || !cursorAt || !realTimestamp(cursorAt) || !cursorId || !UUID.test(cursorId)))) throw new HttpError(400, 'invalid_query');
       return reply.send(await tx(async (q) => {
         const who = await enter(q, fid, user);
         if (!READ_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
-        // open referrals: longest waiting first; closed ones: most recent first
+        // open referrals: longest waiting first; closed ones: most recent first. A referral that changes while someone
+        // pages (an amendment, a status move) moves in the order: it can reappear or slip past the cursor until a reload.
         const order = filter === 'closed' ? 'DESC' : 'ASC';
+        // the page is chosen first (served by the referrals_queue index), and only its rows get the lookups below
         const { rows } = await q<Record<string, unknown>>(
-          `SELECT r.id, r.status, r.referral_type, r.created_at, r.updated_at, r.updated_at::text AS cursor_at,
+          `WITH page AS (
+             SELECT r.* FROM referrals r
+             WHERE r.facility_id = $1 AND r.status = ANY($2::referral_status[])
+               AND ($3::timestamptz IS NULL OR (r.updated_at, r.id) ${order === 'ASC' ? '>' : '<'} ($3::timestamptz, $4::uuid))
+             ORDER BY r.updated_at ${order}, r.id ${order}
+             LIMIT ${QUEUE_LIMIT + 1})
+           SELECT r.id, r.status, r.referral_type, r.created_at, r.updated_at, r.updated_at::text AS cursor_at,
                   e.outcome, e.sub_reasons,
                   (SELECT count(*)::int FROM documents d WHERE d.facility_id = r.facility_id AND d.referral_id = r.id AND d.status <> 'not_applicable') AS documents,
                   (SELECT count(*)::int FROM documents d WHERE d.facility_id = r.facility_id AND d.referral_id = r.id AND d.status IN ('failed', 'unreadable')) AS failed_documents,
@@ -322,13 +338,10 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
                           WHERE dr.facility_id = r.facility_id AND dr.referral_id = r.id AND dr.evaluation_id = e.id
                             AND dr.created_at > coalesce((SELECT max(dd.decided_at) FROM decisions dd WHERE dd.facility_id = r.facility_id AND dd.referral_id = r.id), '-infinity')
                             AND NOT EXISTS (SELECT 1 FROM decision_requests n WHERE n.facility_id = dr.facility_id AND n.referral_id = dr.referral_id AND n.created_at > dr.created_at)) AS cosign_waiting
-           FROM referrals r
+           FROM page r
            LEFT JOIN LATERAL (SELECT id, outcome, sub_reasons FROM evaluations ev
                               WHERE ev.facility_id = r.facility_id AND ev.referral_id = r.id ORDER BY ev.evaluated_at DESC LIMIT 1) e ON true
-           WHERE r.facility_id = $1 AND r.status = ANY($2::referral_status[])
-             AND ($3::timestamptz IS NULL OR (r.updated_at, r.id) ${order === 'ASC' ? '>' : '<'} ($3::timestamptz, $4::uuid))
-           ORDER BY r.updated_at ${order}, r.id ${order}
-           LIMIT ${QUEUE_LIMIT + 1}`, [fid, states, cursorAt ?? null, cursorId ?? null]);
+           ORDER BY r.updated_at ${order}, r.id ${order}`, [fid, states, cursorAt ?? null, cursorId ?? null]);
         // I4: a list of a facility's referrals is a read of referral data, audited like opening one
         await audit(q, fid, user, 'referrals.listed', 'facility', fid);
         const page = rows.slice(0, QUEUE_LIMIT);

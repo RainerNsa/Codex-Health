@@ -720,13 +720,23 @@ describe.skipIf(!url)('manual fact entry API', () => {
     await c.query("INSERT INTO facility_profiles (facility_id, version, capabilities, created_by) VALUES ($1, 0, $2, 'platform:test')", [QF, SEED_CAPS]);
     await c.query("SELECT set_config('app.facility_id', '', true), set_config('app.organization_id', '', true)");
     const base = `/api/facilities/${QF}/referrals`;
-    const list = async (query = '', user = U.reviewer) => (await get(`${base}${query}`, user));
+    let reads = 0; // successful list reads, each audited
+    const list = async (query = '', user = U.reviewer) => { const r = await get(`${base}${query}`, user); if (r.statusCode === 200 && user === U.reviewer) reads += 1; return r; };
+    const owner = async (sql: string, params: unknown[]) => {
+      await c.query("SELECT set_config('app.facility_id', $1, true)", [QF]);
+      await c.query(sql, params);
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+    };
     const mk = async () => (await post(base, U.reviewer)).json().referral.id as string;
     const factIn = (rid: string, k: string, v: 'yes' | 'no' | 'unknown') => post(`${base}/${rid}/facts`, U.reviewer, fact(k, v));
 
     expect((await list('', U.viewer)).statusCode).toBe(403);
     expect((await list('', U.other)).statusCode).toBe(404);
-    for (const bad of ['?filter=everything', '?after=garbage', `?after=2026-10-30|not-a-uuid`]) expect((await list(bad)).json(), bad).toEqual({ error: 'invalid_query' });
+    const someId = '00000000-0000-4000-8000-0000000000aa';
+    for (const bad of ['?filter=everything', '?filter=__proto__', '?filter=constructor', '?after=garbage', `?after=2026-10-30|not-a-uuid`,
+      `?after=1|${someId}`, `?after=${encodeURIComponent(`2026-02-30 10:00:00+00|${someId}`)}`, `?after=${encodeURIComponent(`2026-10-30 10:00:00+00|${someId}|x`)}`]) {
+      expect((await list(bad)).json(), bad).toEqual({ error: 'invalid_query' });
+    }
 
     const draft = await mk();
     const ready = await mk();
@@ -762,6 +772,42 @@ describe.skipIf(!url)('manual fact entry API', () => {
     expect([processing.length, processing[0].id, processing[0].documents, processing[0].failed_documents]).toEqual([1, proc, 1, 1]);
     expect((await list('?filter=closed')).json().referrals.map((r: { id: string }) => r.id)).toEqual([done]);
 
+    // real ordering, with distinct times: open work longest waiting first
+    await owner("UPDATE referrals SET updated_at = now() - interval '2 hours' WHERE id = $1", [ready]);
+    await owner("UPDATE referrals SET updated_at = now() - interval '1 hour' WHERE id = $1", [draft]);
+    expect((await list()).json().referrals.map((r: { id: string }) => r.id)).toEqual([ready, draft, filed]);
+    // a document failure needs staff (open, not processing); an amended referral is decided; counts leave out
+    // not-applicable documents and count everything else, failed and unreadable as failures
+    await owner("UPDATE referrals SET status = 'partial_failure' WHERE id = $1", [proc]);
+    for (const [st, tag] of [['not_applicable', 'na'], ['unreadable', 'un'], ['uploaded', 'up']] as const) {
+      await owner(`INSERT INTO documents (facility_id, referral_id, type, status, not_applicable_reason, sha256, storage_key) VALUES ($1::uuid, $2::uuid, 'other', $3::document_status, $4,
+        sha256(convert_to($5::text, 'UTF8')), 'documents/' || $1::uuid::text || '/' || $2::uuid::text || '/' || encode(sha256(convert_to($5::text, 'UTF8')), 'hex'))`,
+        [QF, proc, st, st === 'not_applicable' ? 'SYNTHETIC' : null, `zzq-${tag}`]);
+    }
+    await owner("UPDATE referrals SET status = 'amended' WHERE id = $1", [done]);
+    const open2 = (await list()).json().referrals;
+    expect([row(proc, open2)['documents'], row(proc, open2)['failed_documents']]).toEqual([3, 2]);
+    expect((await list('?filter=processing')).json().referrals).toEqual([]);
+    expect((await list('?filter=closed')).json().referrals.map((r: { id: string }) => r.id)).toEqual([done]);
+    // the co-sign flag clears once the filed decision is carried out, or once a newer recommendation replaces it
+    const req = (await get(`${base}/${filed}`, U.admin)).json().pending_request.id as string;
+    await post(`${base}/${filed}/decision-requests/${req}/cosign`, U.admin);
+    expect(row(filed, (await list('?filter=closed')).json().referrals)['cosign_waiting']).toBe(false);
+    const filed2 = await mk();
+    for (const [k, v] of [['ventilator_use', 'yes'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']] as const) await factIn(filed2, k, v);
+    const ev2 = (await post(`${base}/${filed2}/transitions`, U.reviewer, { action: 'submit' })).json().evaluation.id;
+    await post(`${base}/${filed2}/decision-requests`, U.reviewer, { evaluation_id: ev2, decision: 'admit', override_reason: 'SYNTHETIC: queue' });
+    expect(row(filed2, (await list()).json().referrals)['cosign_waiting']).toBe(true);
+    await factIn(filed2, 'recent_aggression', 'no'); // a new evaluation
+    expect(row(filed2, (await list()).json().referrals)['cosign_waiting']).toBe(false);
+    // decided referrals page newest first, across distinct times and ties, every referral once
+    await owner(`INSERT INTO referrals (facility_id, status, updated_at) SELECT $1, 'finalized', now() - (n % 3) * interval '1 minute' FROM generate_series(1, 101) n`, [QF]);
+    const c1 = (await list('?filter=closed')).json();
+    const c2 = (await list(`?filter=closed&after=${encodeURIComponent(c1.next)}`)).json();
+    const closedRows = [...c1.referrals, ...c2.referrals] as { id: string; updated_at: string }[];
+    expect([c1.referrals.length, c2.next, closedRows.length, new Set(closedRows.map((r) => r.id)).size]).toEqual([100, null, 103, 103]);
+    expect(closedRows.every((r, i) => i === 0 || Date.parse(closedRows[i - 1]!.updated_at) >= Date.parse(r.updated_at))).toBe(true);
+
     // 101 more drafts written in one transaction share one updated_at: two pages, every referral exactly once
     await c.query("SELECT set_config('app.facility_id', $1, true)", [QF]);
     await c.query('INSERT INTO referrals (facility_id) SELECT $1 FROM generate_series(1, 101)', [QF]);
@@ -769,12 +815,12 @@ describe.skipIf(!url)('manual fact entry API', () => {
     const p1 = (await list()).json();
     expect([p1.referrals.length, typeof p1.next]).toEqual([100, 'string']);
     const p2 = (await list(`?after=${encodeURIComponent(p1.next)}`)).json();
-    expect([p2.referrals.length, p2.next]).toEqual([4, null]);
+    expect([p2.referrals.length, p2.next]).toEqual([5, null]);
     const seen = [...p1.referrals, ...p2.referrals].map((r: { id: string }) => r.id);
-    expect([seen.length, new Set(seen).size]).toEqual([104, 104]);
+    expect([seen.length, new Set(seen).size]).toEqual([105, 105]); // draft, ready, proc, filed2 and the 101
 
     await asOwner(QF);
-    expect(await count("SELECT count(*) AS n FROM audit_log WHERE facility_id = $1 AND action = 'referrals.listed' AND actor = $2", [QF, `user:${U.reviewer}`])).toBe(5); // the five successful reads; refused queries read nothing
+    expect(await count("SELECT count(*) AS n FROM audit_log WHERE facility_id = $1 AND action = 'referrals.listed' AND actor = $2", [QF, `user:${U.reviewer}`])).toBe(reads); // every successful read; refused queries read nothing
   });
 
   it('review: hold, request information, escalate and resume move only from the states §5.1 allows, each with its fields', async () => {

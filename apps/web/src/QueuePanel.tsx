@@ -1,6 +1,6 @@
 // The referral queue (M3 slice 6): a facility's referrals by status, longest waiting first. Codes and counts only;
 // opening a referral is a separate, audited read. Text only, no HTML.
-import { useState } from 'react';
+import { useRef, useState } from 'react';
 import { ApiError, listReferrals, type QueueFilter, type QueueRow } from './api.ts';
 
 const FILTER_LABEL: Record<QueueFilter, string> = { open: 'Needs staff', processing: 'Processing', closed: 'Decided' };
@@ -15,14 +15,20 @@ export function QueuePanel({ facility, user, onOpen }: { facility: string; user:
   const [rows, setRows] = useState<QueueRow[] | null>(null);
   const [next, setNext] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  // only the latest request may update the list: a slow earlier answer never mixes into a newer one
+  const latest = useRef(0);
   const load = async (f: QueueFilter, after?: string) => {
     setMsg(null);
+    const mine = (latest.current += 1);
     try {
       const page = await listReferrals(facility, user, f, after);
+      if (mine !== latest.current) return;
       setFilter(f);
       setRows(after ? [...(rows ?? []), ...page.referrals] : page.referrals);
       setNext(page.next);
     } catch (err) {
+      if (mine !== latest.current) return;
+      setRows(null);
       setMsg(err instanceof ApiError && err.code === 'forbidden' ? 'The queue is for Reviewers and Admins.' : err instanceof ApiError && err.code === 'not_found' ? 'Not a facility this user belongs to.' : 'Could not load the queue.');
     }
   };
