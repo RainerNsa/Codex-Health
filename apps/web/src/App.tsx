@@ -43,6 +43,7 @@ const ERROR_TEXT: Record<string, string> = {
   cosign_admin_only: 'Only an Admin can co-sign.',
   amend_admin_only: 'Only an Admin can amend a decision.',
   storage_unavailable: 'Document storage is not configured on this server.',
+  queue_unavailable: 'The referral is saved, but its documents could not be queued for reading. Tell your administrator.',
   document_duplicate: 'That file is already on this referral.',
   document_limit: 'A referral holds at most 20 documents.',
   document_rejected: 'That file was refused: only PDF, PNG, JPEG or TIFF files up to 25 MB, uploaded unchanged.',

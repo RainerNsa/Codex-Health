@@ -96,6 +96,22 @@ data "aws_iam_policy_document" "server" {
     resources = ["${module.storage.bucket_arn}/*"]
   }
   statement {
+    sid       = "PipelineQueues"
+    actions   = ["sqs:SendMessage", "sqs:ReceiveMessage", "sqs:DeleteMessage", "sqs:ChangeMessageVisibility", "sqs:GetQueueAttributes"]
+    resources = [module.queue.processing_queue_arn, module.queue.dlq_arn]
+  }
+  statement {
+    sid       = "PipelineModel"
+    actions   = ["bedrock:InvokeModel"]
+    resources = ["arn:aws:bedrock:${var.region}::foundation-model/${var.bedrock_model_id}"]
+  }
+  statement {
+    sid = "PipelineOcr"
+    # Textract has no resource-level permissions
+    actions   = ["textract:StartDocumentTextDetection", "textract:GetDocumentTextDetection"]
+    resources = ["*"]
+  }
+  statement {
     sid       = "WebAppPublish"
     actions   = ["s3:PutObject", "s3:DeleteObject", "s3:ListBucket"]
     resources = [aws_s3_bucket.web.arn, "${aws_s3_bucket.web.arn}/*"]
@@ -116,6 +132,16 @@ resource "aws_iam_role_policy" "server" {
 resource "aws_iam_instance_profile" "server" {
   name = "codex-health-demo-server"
   role = aws_iam_role.server.name
+}
+
+# --- the pipeline's queue and dead-letter queue: ids only, sent and read by the server's role alone -----------
+module "queue" {
+  source = "../../modules/queue"
+
+  environment        = "demo"
+  kms_key_arn        = module.kms.key_arn
+  sender_role_arns   = [aws_iam_role.server.arn]
+  consumer_role_arns = [aws_iam_role.server.arn]
 }
 
 # --- documents: the hardened storage module (KMS, versioning, quarantine expiry, CORS for this origin) -----------

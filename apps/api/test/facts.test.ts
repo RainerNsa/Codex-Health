@@ -617,6 +617,33 @@ describe.skipIf(!url)('manual fact entry API', () => {
       });
     });
 
+    it('a job is queued only after the move to processing commits, with ids alone; a queue failure is reported', async () => {
+      const sent: [string, string][] = [];
+      let down = false;
+      docApp = buildServer({ tx, auth: 'local-stub', env: 'test', storage: s3Storage(BUCKET), enqueue: async (f, r) => {
+        if (down) throw new Error('SYNTHETIC-CANARY');
+        sent.push([f, r]);
+      } });
+      const process = (rid: string) => docApp.inject({ method: 'POST', url: `${refUrl(rid)}/transitions`, headers: as(U.reviewer), payload: { action: 'process' } });
+      const rid = await newReferral();
+      await upload(rid, PDF(41));
+      expect(sent).toEqual([]); // a draft waits for an explicit process (T1)
+      expect((await process(rid)).statusCode).toBe(201);
+      expect(sent).toEqual([[FAC.a, rid]]);
+      const later = await newReferral();
+      await upload(later, PDF(42));
+      await asOwner(FAC.a);
+      await c.query("UPDATE referrals SET status = 'ready_for_review' WHERE id = $1", [later]);
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      await upload(later, PDF(43)); // T6: a new document on a referral under review goes straight to the pipeline
+      expect(sent).toEqual([[FAC.a, rid], [FAC.a, later]]);
+      const third = await newReferral();
+      await upload(third, PDF(44));
+      down = true;
+      const refused = await process(third);
+      expect([refused.statusCode, refused.body.includes('CANARY'), refused.json().error]).toEqual([503, false, 'queue_unavailable']);
+    });
+
     it('upload: a checked document is recorded, offered for processing, and submitted (T1)', async () => {
       const rid = await newReferral();
       expect((await post(`${refUrl(rid)}/documents/uploads`, U.reviewer, { sha256: sha(PDF(1)), bytes: 10 })).json()).toEqual({ error: 'storage_unavailable' });

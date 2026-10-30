@@ -7,7 +7,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { ENGINE_VERSION } from '@codex-health/rules-engine';
-import { processReferral, type Extracted, type Page, type Ports, type Query, type Tx } from '../src/pipeline.ts';
+import { failReferral, processReferral, type Extracted, type Page, type Ports, type Query, type Tx } from '../src/pipeline.ts';
 
 const url = process.env['DATABASE_URL'];
 if (!url && process.env['REQUIRE_DATABASE']) throw new Error('DATABASE_URL must be set here: the pipeline suite may not be skipped in the db-checks job');
@@ -464,9 +464,39 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
     assert.equal(p.ocrCalls, 0);
   });
 
-  test('a job naming the wrong facility sees no referral and changes nothing', async () => {
+  test('a job pairing a referral with the wrong facility is refused, spends nothing and changes nothing (XF-13)', async () => {
     const { rid } = await referral('k');
-    assert.equal(await processReferral(tx, ports(() => [], () => []), job(rid, OTHER)), 'skipped');
+    const p = ports(() => [{ page: 1, text: PAGE }], clean);
+    await assert.rejects(processReferral(tx, p, job(rid, OTHER)), /no referral at this facility/);
+    assert.equal(p.ocrCalls, 0);
+    await assert.rejects(failReferral(tx, VERSIONS, job(rid, OTHER)), /no referral at this facility/);
     assert.equal((await state(rid)).status, 'processing');
+  });
+
+  test('a dead-lettered job sends the referral to a person, and never touches finished work', async () => {
+    const { rid } = await referral('v1', 'v2');
+    await failReferral(tx, VERSIONS, job(rid));
+    const s = await state(rid);
+    assert.deepEqual([s.status, s.docs.map((d) => d.status), s.evals.length], ['partial_failure', ['failed', 'failed'], 1]);
+    assert.deepEqual([s.evals[0].outcome, s.evals[0].sub_reasons], ['needs_review', ['processing_incomplete']]);
+    await failReferral(tx, VERSIONS, job(rid)); // redelivery of the dead letter changes nothing
+    assert.equal((await state(rid)).evals.length, 1);
+    const done = await referral('v3');
+    await processReferral(tx, ports(() => [{ page: 1, text: PAGE }], clean), job(done.rid));
+    await failReferral(tx, VERSIONS, job(done.rid));
+    assert.equal((await state(done.rid)).status, 'ready_for_review');
+  });
+
+  test('a dead-lettered job with no usable settings still reaches a person, without an evaluation', async () => {
+    const { rid } = await referral('v4');
+    await asOwner();
+    await c.query('SAVEPOINT sets');
+    await c.query('ALTER TABLE rule_sets DISABLE TRIGGER USER');
+    await c.query('DELETE FROM rule_sets WHERE organization_id = $1', [ORG]);
+    await c.query('ALTER TABLE rule_sets ENABLE TRIGGER USER');
+    await failReferral(tx, VERSIONS, job(rid));
+    const s = await state(rid);
+    assert.deepEqual([s.status, s.docs.map((d) => d.status), s.evals.length], ['partial_failure', ['failed'], 0]);
+    await c.query('ROLLBACK TO SAVEPOINT sets');
   });
 });

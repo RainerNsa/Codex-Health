@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { timingSafeEqual } from 'node:crypto';
 import { assertAuthAllowed, type AuthMode } from './auth.ts';
 import { poolTx, type Tx } from './db.ts';
+import { sqsEnqueue, type Enqueue } from './queue.ts';
 import { registerRoutes } from './routes.ts';
 import { s3Storage, type Storage } from './storage.ts';
 
@@ -26,6 +27,8 @@ export interface ServerOptions {
   env?: string;
   /** Document storage; without it the upload routes answer 503 storage_unavailable. */
   storage?: Storage | null;
+  /** Sends a referral's job to the pipeline; without it a referral waits in processing (the local stack has no worker). */
+  enqueue?: Enqueue | null;
   /** Demo only: the secret CloudFront adds to every request it forwards. Requests without it are refused, so the
    *  password gate in front of the demo cannot be bypassed by calling the server directly. */
   originSecret?: string;
@@ -61,7 +64,7 @@ export function buildServer(opts: ServerOptions = {}): FastifyInstance {
 
   if (opts.tx) {
     assertAuthAllowed(opts.auth ?? 'local-stub', opts.env, opts.originSecret);
-    registerRoutes(app, { tx: opts.tx, storage: opts.storage ?? null });
+    registerRoutes(app, { tx: opts.tx, storage: opts.storage ?? null, enqueue: opts.enqueue ?? null });
   }
   return app;
 }
@@ -74,8 +77,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const db = poolTx(url);
   const bucket = process.env['S3_DOCUMENTS_BUCKET'];
   const env = process.env['CODEX_ENV'];
+  const queueUrl = process.env['SQS_PROCESSING_QUEUE_URL'];
   // the demo listens for CloudFront on the network; everything else stays on the loopback interface
   const host = env === 'demo' ? '0.0.0.0' : '127.0.0.1';
-  await buildServer({ tx: db.tx, auth: 'local-stub', env, storage: bucket ? s3Storage(bucket, process.env['S3_DOCUMENTS_KMS_KEY_ID']) : null, originSecret: env === 'demo' ? process.env['DEMO_ORIGIN_SECRET'] : undefined }).listen({ host, port });
+  await buildServer({ tx: db.tx, auth: 'local-stub', env, storage: bucket ? s3Storage(bucket, process.env['S3_DOCUMENTS_KMS_KEY_ID']) : null, originSecret: env === 'demo' ? process.env['DEMO_ORIGIN_SECRET'] : undefined, enqueue: queueUrl ? sqsEnqueue(queueUrl) : null }).listen({ host, port });
   console.log(`api listening on ${host}:${port}`);
 }

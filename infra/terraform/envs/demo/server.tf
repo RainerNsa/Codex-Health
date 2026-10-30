@@ -35,6 +35,9 @@ resource "aws_instance" "server" {
     docs_key_arn  = module.kms.key_arn
     web_bucket    = local.web_bucket
     origin_secret = local.origin_value
+    queue_url     = module.queue.processing_queue_url
+    dlq_url       = module.queue.dlq_url
+    model_id      = var.bedrock_model_id
   })
 
   tags = { Name = "codex-health-demo" }

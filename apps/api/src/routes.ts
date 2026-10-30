@@ -7,6 +7,7 @@ import { evaluate, ENGINE_VERSION, isRealDate, parseFactValue, type Fact, type F
 import { bindFacility, bindOrganization, type Query, type Tx } from './db.ts';
 import { userFromHeaders } from './auth.ts';
 import { loadSettings as loadStored, NOT_SWITCHABLE, PROFILE_KEYS, RuleSetRefused, type RuleSet } from './ruleset.ts';
+import type { Enqueue } from './queue.ts';
 import { MAX_DOCUMENT_BYTES, sniff, UPLOAD_TTL_SECONDS, type Storage } from './storage.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -250,8 +251,12 @@ async function referralView(q: Query, facilityId: string, referralId: string, ru
   };
 }
 
-export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: Storage | null }): void {
+export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: Storage | null; enqueue?: Enqueue | null }): void {
   const { tx, storage } = deps;
+  // shortcut: a referral stays in processing if this send fails after the commit; the watchdog in slice 6 (4.3) re-sends
+  const enqueue = async (fid: string, rid: string) => {
+    try { await deps.enqueue?.(fid, rid); } catch { throw new HttpError(503, 'queue_unavailable'); }
+  };
   const fail = (reply: FastifyReply, err: unknown) => {
     if (err instanceof HttpError) return reply.code(err.status).send({ error: err.code });
     // A database refusal (RLS, CHECK, trigger) is a rejected write; its message is never echoed (it can carry ids).
@@ -489,6 +494,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
           action === 'request_info' ? { items_requested: items.length } : action === 'escalate' ? { department } : spec.event === 'review.started' ? { screen: 'review' } : {});
         return referralView(q, fid, rid, ruleSet, who);
       });
+      if (action === 'process') await enqueue(fid, rid);
       return reply.code(201).send(body);
     } catch (err) { return fail(reply, err); }
   });
@@ -801,6 +807,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
         }
         return referralView(q, fid, rid, ruleSet, who);
       });
+      if (body.referral.status === 'processing') await enqueue(fid, rid);
       return reply.code(201).send(body);
     } catch (err) { return fail(reply, err); }
   });
