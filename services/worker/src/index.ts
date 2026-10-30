@@ -17,7 +17,7 @@ const { region, modelId } = bedrockClientConfig({ region: requireEnv('AWS_REGION
 
 const sqs = new SQSClient({ region });
 const textract = new TextractClient({ region });
-const bedrock = new BedrockRuntimeClient({ region });
+const bedrock = new BedrockRuntimeClient({ region, requestHandler: { requestTimeout: 300_000 } });
 const clientSend = (c: { send: (x: never) => Promise<unknown> }): Send => (cmd) => c.send(cmd as never) as Promise<Record<string, unknown>>;
 
 const versions = { ...VERSIONS, model_id: modelId };
@@ -33,5 +33,8 @@ const forever = async (url: string, label: string, handle: Parameters<typeof dra
 console.log('worker listening');
 await Promise.all([
   forever(queue, 'processing', (job) => processReferral(tx, ports, job)),
-  forever(deadLetters, 'dead-letter', (job) => failReferral(tx, versions, job)),
-]);
+  forever(deadLetters, 'dead-letter', (job, sentAt) => failReferral(tx, versions, job, sentAt)),
+]).catch((err: { name?: string }) => {
+  console.error(JSON.stringify({ event: 'worker.stopped', error: err.name ?? 'Error' })); // never the message: a provider's text
+  process.exit(1);
+});

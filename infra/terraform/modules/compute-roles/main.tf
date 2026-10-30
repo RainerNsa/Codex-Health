@@ -106,7 +106,7 @@ data "aws_iam_policy_document" "worker" {
       "sqs:GetQueueUrl",
       "sqs:GetQueueAttributes",
     ]
-    resources = [var.processing_queue_arn]
+    resources = [var.processing_queue_arn, var.dlq_arn]
   }
 
   statement {

@@ -17,6 +17,11 @@ variable "audit_anchor_key_arn" {
   type        = string
 }
 
+variable "dlq_arn" {
+  description = "The dead-letter queue the worker reads, so a job that used up its deliveries reaches a person."
+  type        = string
+}
+
 variable "processing_queue_arn" {
   description = "ARN of the processing queue (modules/queue)."
   type        = string

@@ -110,6 +110,7 @@ module "compute_roles" {
   audit_anchor_bucket_arn = module.audit_anchor[0].bucket_arn
   audit_anchor_key_arn    = module.audit_anchor[0].key_arn
   processing_queue_arn    = module.queue[0].processing_queue_arn
+  dlq_arn                 = module.queue[0].dlq_arn
   bedrock_model_arns      = var.bedrock_model_arns
   log_group_arns          = module.logs[0].log_group_arns
 }

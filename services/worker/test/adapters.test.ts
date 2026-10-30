@@ -31,10 +31,16 @@ const pages = [{ document_id: 'd1', pages: [{ page: 1, text: 'SYNTHETIC page' }]
 const types = new Map([['ventilator_use', 'tri_state' as const]]);
 const entry = { key: 'ventilator_use', value: { type: 'tri_state', value: 'no' }, document_id: 'd1', page: 1, quote: 'not on a ventilator', confidence_band: 'high' };
 
+test('a document over the page limit fails before it reaches the model', async () => {
+  const Blocks = Array.from({ length: 301 }, (_, i) => line(i + 1, 'words'));
+  const send: Send = async (c) => (c instanceof StartDocumentTextDetectionCommand ? { JobId: 'j' } : { JobStatus: 'SUCCEEDED', Blocks });
+  await assert.rejects(textractOcr(send, 'b', 0)(doc), /too many pages/);
+});
+
 test('the request is pinned, temperature 0, cached, schema-bound, with no tools and nothing of the rules', async () => {
   let cmd: { input: { modelId: string; body: string } } | undefined;
   const usage: unknown[] = [];
-  const send: Send = async (c) => { cmd = c as typeof cmd; return reply({ stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify({ facts: [entry] }) }], usage: { cache_read_input_tokens: 5 } }); };
+  const send: Send = async (c) => { cmd = c as typeof cmd; return reply({ stop_reason: 'end_turn', content: [{ type: 'text', text: JSON.stringify({ facts: [entry] }) }], usage: { cache_read_input_tokens: 5, note: 'SYNTHETIC-CANARY' } }); };
   assert.deepEqual(await bedrockExtract(send, 'pinned-id', (u) => usage.push(u))(pages, ['ventilator_use'], types), [entry]);
   const body = JSON.parse(cmd!.input.body);
   assert.equal(cmd!.input.modelId, 'pinned-id');
@@ -77,4 +83,6 @@ test('a message is deleted only after its work finished; a failure stays for red
   assert.equal(failed.deleted, 0);
   assert.ok(failed.logged[0]!.includes('TypeError') && !failed.logged[0]!.includes('CANARY'));
   assert.equal((await run('not a job', async () => 'done')).deleted, 0);
+  const coded = await run(JSON.stringify(job), async () => { throw Object.assign(new Error('x'), { code: 'SYNTHETIC-CANARY page' }); });
+  assert.ok(coded.logged[0]!.includes('"code":null'));
 });

@@ -220,6 +220,8 @@ function Recommendation({ view }: { view: ReferralView }) {
               {ev.sub_reasons.length > 0 && <Text fontSize="sm" fontWeight="500">{ev.sub_reasons.map((r) => REASON_LABEL[r] ?? r).join(' · ')}</Text>}
               <Text fontSize="xs" color="muted">Clinical: {ev.clinical_outcome.replaceAll('_', ' ')} · Financial: {ev.financial_status}. Staff make the final decision.</Text>
             </Box>
+            {ev.raw && <Box mb="2"><Callout tone="review" role="status">Preliminary: read by the AI from the documents. No person has confirmed these facts.</Callout></Box>}
+            {list('Documents disagree, state again', ev.trace.disagreements ?? [])}
             {list('Missing critical information', ev.trace.missing)}
             {list('Confirm first', ev.trace.blocking)}
             {list('Conflicting', ev.trace.conflicts)}

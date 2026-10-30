@@ -11,6 +11,7 @@ export const PROMPT_VERSION = 'extract-1';
 export const VERSIONS = { prompt_version: PROMPT_VERSION, extractor_version: 'bedrock-invoke-1', ocr_engine_version: 'textract-text-detection-1' };
 
 const OCR_TIMEOUT_MS = 240_000;
+const MAX_PAGES = 300; // per document; a longer one fails before any model spend, and a person sees why it held the referral
 
 /** Page text by Textract's asynchronous detection, the one path that takes PDFs, TIFFs and images alike. PARTIAL_SUCCESS
  *  counts as failure: a document with missing pages is never read as if it were whole. */
@@ -36,6 +37,7 @@ export function textractOcr(send: Send, bucket: string, pollMs = 2000): Ports['o
     for (const b of blocks) {
       if (b.BlockType === 'LINE' && b.Text) pages.set(b.Page ?? 1, [...(pages.get(b.Page ?? 1) ?? []), b.Text]);
     }
+    if (pages.size > MAX_PAGES) throw new Error('document has too many pages');
     return [...pages].sort(([a], [b]) => a - b).map(([page, lines]) => ({ page, text: lines.join('\n') }));
   };
 }
@@ -105,8 +107,9 @@ export function bedrockExtract(send: Send, modelId: string, log: (usage: unknown
         output_config: { format: { type: 'json_schema', schema: SCHEMA } },
       }),
     }));
-    const answer = JSON.parse(new TextDecoder().decode(r['body'] as Uint8Array)) as { stop_reason?: string; content?: { type: string; text?: string }[]; usage?: unknown };
-    log(answer.usage); // token counts only: the metering slice 6 reads for cost per packet and cache reads
+    const answer = JSON.parse(new TextDecoder().decode(r['body'] as Uint8Array)) as { stop_reason?: string; content?: { type: string; text?: string }[]; usage?: Record<string, unknown> };
+    // numbers only, for the metering in slice 6: cost per packet and cache reads
+    log(Object.fromEntries(Object.entries(answer.usage ?? {}).filter(([, n]) => typeof n === 'number')));
     if (answer.stop_reason !== 'end_turn') throw new Error('extraction did not finish');
     let parsed: unknown;
     try { parsed = JSON.parse(answer.content?.find((b) => b.type === 'text')?.text ?? ''); } catch { throw new Error('extraction answer is not JSON'); } // never the parse error: it quotes the text

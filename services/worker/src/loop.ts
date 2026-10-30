@@ -5,15 +5,15 @@ import { DeleteMessageCommand, ReceiveMessageCommand } from '@aws-sdk/client-sqs
 import { parseJob, type Job } from './pipeline.ts';
 import type { Send } from './adapters.ts';
 
-export async function drain(send: Send, queueUrl: string, label: string, handle: (job: Job) => Promise<unknown>): Promise<void> {
-  const { Messages } = await send(new ReceiveMessageCommand({ QueueUrl: queueUrl, MaxNumberOfMessages: 1, WaitTimeSeconds: 20 }));
-  for (const m of (Messages ?? []) as { Body?: string; ReceiptHandle?: string }[]) {
+export async function drain(send: Send, queueUrl: string, label: string, handle: (job: Job, sentAt: number) => Promise<unknown>): Promise<void> {
+  const { Messages } = await send(new ReceiveMessageCommand({ QueueUrl: queueUrl, MaxNumberOfMessages: 1, WaitTimeSeconds: 20, MessageSystemAttributeNames: ['SentTimestamp'] }));
+  for (const m of (Messages ?? []) as { Body?: string; ReceiptHandle?: string; Attributes?: { SentTimestamp?: string } }[]) {
     try {
-      await handle(parseJob(m.Body));
+      await handle(parseJob(m.Body), Number(m.Attributes?.SentTimestamp ?? Date.now()));
       await send(new DeleteMessageCommand({ QueueUrl: queueUrl, ReceiptHandle: m.ReceiptHandle }));
     } catch (err) {
       const e = err as { name?: string; code?: string };
-      console.error(JSON.stringify({ event: 'job.failed', queue: label, error: e.name ?? 'Error', code: e.code ?? null }));
+      console.error(JSON.stringify({ event: 'job.failed', queue: label, error: e.name ?? 'Error', code: /^[A-Z0-9_]{1,32}$/.test(e.code ?? '') ? e.code : null }));
     }
   }
 }

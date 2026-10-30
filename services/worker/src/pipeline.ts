@@ -26,6 +26,7 @@ const isKnown = (v: FactValue) => v.value !== null && v.value !== 'unknown';
 const JOB_ID = /^[a-z0-9-]{1,64}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const QUOTE_MAX = 1000;
+const CLOCK_MARGIN_MS = 60_000; // SQS and the database keep separate clocks
 
 /** The queue message: ids only, exactly these three, or the job is refused and dead-letters. */
 export function parseJob(body: string | undefined): Job {
@@ -216,7 +217,13 @@ export async function processReferral(tx: Tx, ports: Ports, job: Job): Promise<'
 
 /** The way out for a job that used up its deliveries: the referral goes to a person as a partial failure (T3) instead of
  *  sitting in processing. Evaluated when it can be; with no usable settings there is nothing to evaluate against. */
-export async function failReferral(tx: Tx, versions: Ports['versions'], job: Job): Promise<void> {
+export async function failReferral(tx: Tx, versions: Ports['versions'], job: Job, sentAt: number): Promise<void> {
+  // a dead letter ends only its own round: a document that arrived after the job was sent has a job of its own coming
+  const newest = await tx(async (q) => {
+    await bind(q, job.facilityId);
+    return (await q<{ newest: Date | null }>("SELECT max(created_at) AS newest FROM documents WHERE facility_id = $1 AND referral_id = $2 AND status = 'uploaded'", [job.facilityId, job.referralId])).rows[0]?.newest;
+  });
+  if (newest && newest.getTime() > sentAt + CLOCK_MARGIN_MS) return;
   const nothingRead: Ports = { versions, ocr: async () => { throw new Error('job dead-lettered'); }, extract: async () => [] };
   try {
     await processReferral(tx, nothingRead, job);

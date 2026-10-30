@@ -469,22 +469,31 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
     const p = ports(() => [{ page: 1, text: PAGE }], clean);
     await assert.rejects(processReferral(tx, p, job(rid, OTHER)), /no referral at this facility/);
     assert.equal(p.ocrCalls, 0);
-    await assert.rejects(failReferral(tx, VERSIONS, job(rid, OTHER)), /no referral at this facility/);
+    await assert.rejects(failReferral(tx, VERSIONS, job(rid, OTHER), Date.now()), /no referral at this facility/);
     assert.equal((await state(rid)).status, 'processing');
   });
 
   test('a dead-lettered job sends the referral to a person, and never touches finished work', async () => {
     const { rid } = await referral('v1', 'v2');
-    await failReferral(tx, VERSIONS, job(rid));
+    await failReferral(tx, VERSIONS, job(rid), Date.now());
     const s = await state(rid);
     assert.deepEqual([s.status, s.docs.map((d) => d.status), s.evals.length], ['partial_failure', ['failed', 'failed'], 1]);
     assert.deepEqual([s.evals[0].outcome, s.evals[0].sub_reasons], ['needs_review', ['processing_incomplete']]);
-    await failReferral(tx, VERSIONS, job(rid)); // redelivery of the dead letter changes nothing
+    await failReferral(tx, VERSIONS, job(rid), Date.now()); // redelivery of the dead letter changes nothing
     assert.equal((await state(rid)).evals.length, 1);
     const done = await referral('v3');
     await processReferral(tx, ports(() => [{ page: 1, text: PAGE }], clean), job(done.rid));
-    await failReferral(tx, VERSIONS, job(done.rid));
+    await failReferral(tx, VERSIONS, job(done.rid), Date.now());
     assert.equal((await state(done.rid)).status, 'ready_for_review');
+  });
+
+  test('an old dead letter never fails a newer round of work on the same referral', async () => {
+    const { rid } = await referral('v5');
+    await processReferral(tx, ports(() => [{ page: 1, text: PAGE }], clean), job(rid));
+    await addDocument(rid, 'v6');
+    await failReferral(tx, VERSIONS, job(rid), Date.now() - 3_600_000);
+    const s = await state(rid);
+    assert.deepEqual([s.status, s.docs.some((d) => d.status === 'failed'), s.evals.length], ['processing', false, 1]);
   });
 
   test('a dead-lettered job with no usable settings still reaches a person, without an evaluation', async () => {
@@ -494,7 +503,7 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
     await c.query('ALTER TABLE rule_sets DISABLE TRIGGER USER');
     await c.query('DELETE FROM rule_sets WHERE organization_id = $1', [ORG]);
     await c.query('ALTER TABLE rule_sets ENABLE TRIGGER USER');
-    await failReferral(tx, VERSIONS, job(rid));
+    await failReferral(tx, VERSIONS, job(rid), Date.now());
     const s = await state(rid);
     assert.deepEqual([s.status, s.docs.map((d) => d.status), s.evals.length], ['partial_failure', ['failed'], 0]);
     await c.query('ROLLBACK TO SAVEPOINT sets');

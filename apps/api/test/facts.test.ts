@@ -462,6 +462,23 @@ describe.skipIf(!url)('manual fact entry API', () => {
     expect((await cosign(again.rid, filed, U.admin)).json()).toEqual({ error: 'evaluation_stale' });
   });
 
+  it('a document against a person holds Admit until that key is stated again; other entries do not clear it', async () => {
+    const rid = await newReferral();
+    expect((await post(factsUrl(rid), U.reviewer, fact('ventilator_use', 'no'))).statusCode).toBe(201);
+    await post(factsUrl(rid), U.reviewer, fact('recent_aggression', 'no'));
+    await asOwner(FAC.a);
+    await c.query(`INSERT INTO evaluations (facility_id, referral_id, previous_evaluation_id, raw, outcome, clinical_outcome, financial_status, sub_reasons, trace, criteria_document_ref, rule_set_version, facility_profile_version, model_id, prompt_version, extractor_version, ocr_engine_version, engine_version, evaluated_at)
+      SELECT facility_id, referral_id, id, raw, outcome, clinical_outcome, financial_status, sub_reasons, trace || '{"disagreements": ["ventilator_use"]}', criteria_document_ref, rule_set_version, facility_profile_version, model_id, prompt_version, extractor_version, ocr_engine_version, engine_version, now() + interval '1 second'
+      FROM evaluations WHERE facility_id = $1 AND referral_id = $2 ORDER BY evaluated_at DESC LIMIT 1`, [FAC.a, rid]);
+    await c.query("SELECT set_config('app.facility_id', '', true)");
+    const view = async () => (await get(refUrl(rid), U.reviewer)).json();
+    let v = await view();
+    expect(v.admit_requires).toContain('ventilator_use');
+    await post(`${refUrl(rid)}/transitions`, U.reviewer, { action: 'submit' });
+    v = await view();
+    expect((await post(`${refUrl(rid)}/decision`, U.reviewer, { evaluation_id: v.evaluation.id, decision: 'admit' })).json().error).toBe('confirmation_incomplete');
+  });
+
   it('co-sign: after a flipped hard-stop input every decision is filed for co-sign; unknown -> known and other corrections are not flips', async () => {
     const flip = await withFacts(['ventilator_use', 'yes'], ['ventilator_use', 'no'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
     expect(flip.ev.outcome).toBe('admit');
