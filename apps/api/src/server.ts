@@ -3,6 +3,7 @@ import { fileURLToPath } from 'node:url';
 import { assertAuthAllowed, type AuthMode } from './auth.ts';
 import { poolTx, type Tx } from './db.ts';
 import { registerRoutes } from './routes.ts';
+import { s3Storage, type Storage } from './storage.ts';
 
 // Security headers set by hand (helmet-equivalent, no extra dependency). The API serves JSON only,
 // so the CSP is the strictest possible. Cache-Control: no-store on every response: PHI must never
@@ -22,6 +23,8 @@ export interface ServerOptions {
   tx?: Tx;
   auth?: AuthMode;
   env?: string;
+  /** Document storage; without it the upload routes answer 503 storage_unavailable. */
+  storage?: Storage | null;
 }
 
 export function buildServer(opts: ServerOptions = {}): FastifyInstance {
@@ -42,7 +45,7 @@ export function buildServer(opts: ServerOptions = {}): FastifyInstance {
 
   if (opts.tx) {
     assertAuthAllowed(opts.auth ?? 'local-stub', opts.env);
-    registerRoutes(app, { tx: opts.tx });
+    registerRoutes(app, { tx: opts.tx, storage: opts.storage ?? null });
   }
   return app;
 }
@@ -53,6 +56,7 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const url = process.env['DATABASE_URL_APP'];
   if (!url) throw new Error('missing required environment variable DATABASE_URL_APP');
   const db = poolTx(url);
-  await buildServer({ tx: db.tx, auth: 'local-stub', env: process.env['CODEX_ENV'] }).listen({ host: '127.0.0.1', port });
+  const bucket = process.env['S3_DOCUMENTS_BUCKET'];
+  await buildServer({ tx: db.tx, auth: 'local-stub', env: process.env['CODEX_ENV'], storage: bucket ? s3Storage(bucket) : null }).listen({ host: '127.0.0.1', port });
   console.log(`api listening on 127.0.0.1:${port}`);
 }

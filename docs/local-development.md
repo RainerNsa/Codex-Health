@@ -56,7 +56,7 @@ npm run dev:down                      # stop containers, keep data
 | Role | Used by | Can |
 |---|---|---|
 | `codex_migrator` | migrations, seed, db tests (`DATABASE_URL`) | own the schema; `SET ROLE` to the two roles below for tests |
-| `codex_app` | the API (`DATABASE_URL_APP`) | read org/facility/user tables; read/insert/update referrals; read/insert documents (status to not_applicable only), user facts, verified evaluations, decisions, product events; insert audit rows. Every write is bound per transaction with `SET LOCAL app.facility_id` and `app.organization_id` |
+| `codex_app` | the API (`DATABASE_URL_APP`) | read org/facility/user tables; read/insert referrals (drafts only; status moves through referral_transitions); read/insert documents (as uploaded, on an open referral; status to not_applicable only), user facts, verified evaluations, decisions, product events; insert audit rows. Every write is bound per transaction with `SET LOCAL app.facility_id` and `app.organization_id` |
 | `codex_worker` | the pipeline (`DATABASE_URL_WORKER`) | read facilities, referrals, documents, facts, evaluations; move an in-flight referral to processing / partial_failure / ready_for_review; report document results; insert ai facts and evaluations; emit product events (no read); insert audit rows |
 
 No role has `BYPASSRLS` or `SUPERUSER`. Every table with a `facility_id` column has
@@ -132,9 +132,14 @@ when a sandbox exists.
 ```sh
 scripts/dev/up.sh                       # Postgres + LocalStack, migrations, synthetic seed
 CODEX_ENV=development DATABASE_URL_APP=postgres://codex_app:app-local-only@127.0.0.1:5432/codex_health \
-  npm run dev -w @codex-health/api      # API on 127.0.0.1:3000, as codex_app under RLS
+S3_DOCUMENTS_BUCKET=codex-health-documents-local AWS_ENDPOINT_URL=http://127.0.0.1:4566 \
+AWS_REGION=us-east-1 AWS_ACCESS_KEY_ID=test AWS_SECRET_ACCESS_KEY=test \
+  npm run dev -w @codex-health/api      # API on 127.0.0.1:3000, as codex_app under RLS; uploads go to LocalStack
 npm run dev -w @codex-health/web        # form on http://127.0.0.1:5173, proxies /api to the API
 ```
 
 Pick "ZZTEST Reviewer", press **New referral**, enter facts with a note, and the recommendation re-evaluates
-after each one. The Viewer can open a referral but not change it. Every write and every read is audited.
+after each one. Or add synthetic PDF or image files under **Documents**: the browser uploads them straight to the
+LocalStack bucket on a five-minute signed URL, and the API checks each file's hash, size and type before it counts.
+**Submit for processing** then hands the referral to the pipeline, which arrives at M4: until then a processing
+referral stays there. The LocalStack credentials are its fixed local placeholders, not secrets. The Viewer can open a referral but not change it. Every write and every read is audited.

@@ -12,7 +12,8 @@ export interface Evaluation {
   sub_reasons: string[];
   trace: { resolution_step: string; trace: TraceEntry[]; missing: string[]; conflicts: string[]; blocking: string[]; empty_profile_keys: string[]; confirmation_set?: string[] };
 }
-export type Action = 'submit' | 'hold' | 'request_info' | 'escalate' | 'resume' | 'finalize' | 'reevaluate' | 'cosign' | 'amend';
+export type Action = 'submit' | 'process' | 'hold' | 'request_info' | 'escalate' | 'resume' | 'finalize' | 'reevaluate' | 'cosign' | 'amend' | 'upload' | 'resolve_failures';
+export interface DocumentRow { id: string; type: string; status: 'uploaded' | 'processed' | 'failed' | 'unreadable' | 'not_applicable'; pages: number | null; not_applicable_reason: string | null; created_at: string }
 export interface TransitionRow { transition: string; from_status: string; to_status: string; note: string | null; department: string | null; requested_items: string[]; created_by: string; created_at: string }
 export interface DecisionRow { id: string; evaluation_id: string; recommended_outcome: string; decision: 'admit' | 'do_not_admit'; override_reason: string | null; decided_by: string; cosigned_by: string | null; amends_decision_id: string | null; amendment_reason: string | null; decided_at: string }
 export interface ReferralView {
@@ -29,6 +30,8 @@ export interface ReferralView {
   transitions: TransitionRow[];
   decision: DecisionRow | null;
   decisions: DecisionRow[];
+  documents: DocumentRow[];
+  document_types: string[];
   actions: Action[];
 }
 
@@ -61,7 +64,7 @@ export const requestCosign = (facility: string, referral: string, user: string, 
   call<ReferralView>(`/api/facilities/${facility}/referrals/${referral}/decision-requests`, user, { method: 'POST', body: JSON.stringify(body) });
 export const cosignRequest = (facility: string, referral: string, request: string, user: string) =>
   call<ReferralView>(`/api/facilities/${facility}/referrals/${referral}/decision-requests/${request}/cosign`, user, { method: 'POST', body: '{}' });
-export const moveReferral = (facility: string, referral: string, user: string, body: { action: Exclude<Action, 'finalize' | 'reevaluate' | 'cosign'>; note?: string; department?: string; items?: string[] }) =>
+export const moveReferral = (facility: string, referral: string, user: string, body: { action: 'submit' | 'process' | 'hold' | 'request_info' | 'escalate' | 'resume'; note?: string; department?: string; items?: string[] }) =>
   call<ReferralView>(`/api/facilities/${facility}/referrals/${referral}/transitions`, user, { method: 'POST', body: JSON.stringify(body) });
 export const finalizeReferral = (facility: string, referral: string, user: string, body: { evaluation_id: string; decision: 'admit' | 'do_not_admit'; override_reason?: string }) =>
   call<ReferralView>(`/api/facilities/${facility}/referrals/${referral}/decision`, user, { method: 'POST', body: JSON.stringify(body) });
@@ -76,3 +79,16 @@ export interface Settings {
 export const getSettings = (facility: string, user: string) => call<Settings>(`/api/facilities/${facility}/settings`, user);
 export const saveSettings = (facility: string, user: string, body: { capabilities: Record<string, boolean | number>; disabled_rules: string[]; based_on_version: number }) =>
   call<Settings>(`/api/facilities/${facility}/settings`, user, { method: 'PUT', body: JSON.stringify(body) });
+
+// Upload as the API expects: hash the bytes here, get a signed URL, PUT the bytes, then ask the API to check them.
+export async function uploadDocument(facility: string, referral: string, user: string, file: File, type: string, replaces?: string): Promise<ReferralView> {
+  const bytes = await file.arrayBuffer();
+  const sha256 = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map((b) => b.toString(16).padStart(2, '0')).join('');
+  const base = `/api/facilities/${facility}/referrals/${referral}/documents`;
+  const link = await call<{ url: string }>(`${base}/uploads`, user, { method: 'POST', body: JSON.stringify({ sha256, bytes: bytes.byteLength }) });
+  const put = await fetch(link.url, { method: 'PUT', body: bytes });
+  if (!put.ok) throw new ApiError(put.status, 'upload_failed');
+  return call<ReferralView>(base, user, { method: 'POST', body: JSON.stringify({ sha256, type, ...(replaces ? { replaces } : {}) }) });
+}
+export const resolveFailures = (facility: string, referral: string, user: string, documents: { id: string; reason: string }[]) =>
+  call<ReferralView>(`/api/facilities/${facility}/referrals/${referral}/documents/resolve`, user, { method: 'POST', body: JSON.stringify({ documents }) });

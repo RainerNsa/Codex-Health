@@ -2,8 +2,9 @@
 // returns is rendered as text (no HTML injection anywhere, CONSTRAINTS Floor). Defaults are the synthetic seed
 // (scripts/dev/seed-synthetic.mjs): ZZTEST Alpha Facility 1 and its Reviewer.
 import { useState, type FormEvent } from 'react';
-import { amendReferral, ApiError, cosignRequest, createReferral, enterFact, finalizeReferral, getReferral, moveReferral, reevaluateReferral, requestCosign, type ReferralView, type Tri } from './api.ts';
+import { amendReferral, ApiError, resolveFailures, uploadDocument, cosignRequest, createReferral, enterFact, finalizeReferral, getReferral, moveReferral, reevaluateReferral, requestCosign, type ReferralView, type Tri } from './api.ts';
 import { ReviewPanel } from './ReviewPanel.tsx';
+import { DocumentsPanel } from './DocumentsPanel.tsx';
 import { SettingsPanel } from './SettingsPanel.tsx';
 
 const SEED_FACILITY = '00000000-0000-4000-8000-00000000f0a1';
@@ -34,6 +35,16 @@ const ERROR_TEXT: Record<string, string> = {
   cosign_not_needed: 'This decision needs no co-sign: record it directly.',
   cosign_admin_only: 'Only an Admin can co-sign.',
   amend_admin_only: 'Only an Admin can amend a decision.',
+  storage_unavailable: 'Document storage is not configured on this server.',
+  document_duplicate: 'That file is already on this referral.',
+  document_limit: 'A referral holds at most 20 documents.',
+  document_rejected: 'That file was refused: only PDF, PNG, JPEG or TIFF files up to 25 MB, uploaded unchanged.',
+  upload_missing: 'The upload did not arrive. Try again.',
+  upload_failed: 'The upload to storage failed. Try again.',
+  invalid_document: 'Check the document: a type from the list, and a reason for each document marked not applicable.',
+  replace_required: 'A failed document must be replaced or marked not applicable first.',
+  replace_not_failed: 'Only a failed document can be replaced.',
+  resolve_all_failed: 'Give a reason for every failed document.',
   amendment_reason_required: 'Say why the decision is being amended.',
   cosign_own_request: 'You filed this decision, so a different Admin must co-sign it.',
   request_not_current: 'A newer decision was filed since this one. Reload.',
@@ -93,6 +104,18 @@ export function App() {
       <SettingsPanel facility={facility} user={user} />
 
       {error && <p role="alert" className="mb-4 rounded border border-red-700 bg-red-50 p-3 text-sm">{error}</p>}
+
+      {view && (
+        <DocumentsPanel view={view} busy={busy} on={{
+          upload: async (files, type, replaces) => {
+            let ok = true;
+            for (const f of files) ok = (await run(() => uploadDocument(facility, view.referral.id, user, f, type, replaces))) && ok;
+            return ok;
+          },
+          process: () => run(() => moveReferral(facility, view.referral.id, user, { action: 'process' })),
+          resolve: (documents) => run(() => resolveFailures(facility, view.referral.id, user, documents)),
+        }} />
+      )}
 
       {view && (
         <div className="grid gap-6 lg:grid-cols-2">

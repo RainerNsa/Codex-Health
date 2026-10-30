@@ -673,6 +673,52 @@ test('row-level security, organisation isolation, audit immutability, the hash c
       ]);
     });
 
+    await sub('document intake (0012): app inserts are uploads on an open referral, at most 20; T1, T4, T5, T6 need the right documents', async () => {
+      await asFacility(c, FAC.a1);
+      await asOrg(c, ORG[0]);
+      await c.query("SELECT set_config('app.user_id', $1, true)", [USER.a]);
+      await c.query('SET LOCAL ROLE codex_app');
+      const DOC = `INSERT INTO documents (facility_id, referral_id, type, status, sha256, storage_key)
+        VALUES ($1::uuid, $2::uuid, 'face_sheet', $4::document_status, sha256(convert_to($3::text, 'UTF8')),
+                'documents/' || $1::uuid::text || '/' || $2::uuid::text || '/' || encode(sha256(convert_to($3::text, 'UTF8')), 'hex')) RETURNING id`;
+      const T = 'INSERT INTO referral_transitions (facility_id, referral_id, transition, from_status, to_status, created_by) VALUES ($1, $2, $3, $4, $5, $6)';
+      const me = `user:${USER.a}`;
+      const ref = (await c.query('INSERT INTO referrals (facility_id) VALUES ($1) RETURNING id', [FAC.a1])).rows[0].id;
+      assert.equal((await c.query('SELECT referral_type FROM referrals WHERE id = $1', [ref])).rows[0].referral_type, 'skilled');
+      // T1 needs a document waiting to be processed
+      await expectFailure(c, T, /needs a document waiting/, [FAC.a1, ref, 'T1', 'draft', 'processing', me]);
+      await expectFailure(c, DOC, /inserts a document as uploaded/, [FAC.a1, ref, 'zz-processed', 'processed']);
+      const doc = (await c.query(DOC, [FAC.a1, ref, 'zz-1', 'uploaded'])).rows[0].id;
+      await c.query(T, [FAC.a1, ref, 'T1', 'draft', 'processing', me]);
+      // the pipeline owns a processing referral: no uploads
+      await expectFailure(c, DOC, /cannot be added to a processing referral/, [FAC.a1, ref, 'zz-2', 'uploaded']);
+      // the worker reports a failure (done as the owner here)
+      await c.query('RESET ROLE');
+      await c.query("UPDATE documents SET status = 'failed' WHERE id = $1", [doc]);
+      await c.query("UPDATE referrals SET status = 'partial_failure' WHERE id = $1", [ref]);
+      await c.query('SET LOCAL ROLE codex_app');
+      // T5 needs every failed document marked not applicable; T4 needs a new document waiting
+      await expectFailure(c, T, /T5 needs every failed document marked not applicable/, [FAC.a1, ref, 'T5', 'partial_failure', 'ready_for_review', me]);
+      await expectFailure(c, T, /needs a document waiting/, [FAC.a1, ref, 'T4', 'partial_failure', 'processing', me]);
+      await c.query('SAVEPOINT t5');
+      await c.query("UPDATE documents SET status = 'not_applicable', not_applicable_reason = 'SYNTHETIC' WHERE id = $1", [doc]);
+      await c.query(T, [FAC.a1, ref, 'T5', 'partial_failure', 'ready_for_review', me]);
+      // T6: a document added in review sends the referral back to processing
+      await c.query(DOC, [FAC.a1, ref, 'zz-3', 'uploaded']);
+      await c.query(T, [FAC.a1, ref, 'T6', 'ready_for_review', 'processing', me]);
+      await c.query('ROLLBACK TO SAVEPOINT t5');
+      await c.query('SET LOCAL ROLE codex_app');
+      await c.query(DOC, [FAC.a1, ref, 'zz-4', 'uploaded']);
+      await c.query(T, [FAC.a1, ref, 'T4', 'partial_failure', 'processing', me]);
+      // at most 20 documents per referral
+      const ref2 = (await c.query('INSERT INTO referrals (facility_id) VALUES ($1) RETURNING id', [FAC.a1])).rows[0].id;
+      for (let i = 0; i < 20; i += 1) await c.query(DOC, [FAC.a1, ref2, `zz-cap-${i}`, 'uploaded']);
+      await expectFailure(c, DOC, /at most 20 documents per referral/, [FAC.a1, ref2, 'zz-cap-20', 'uploaded']);
+      // referral_type is one of the five
+      await c.query('RESET ROLE');
+      await expectFailure(c, "UPDATE referrals SET referral_type = 'zz' WHERE id = $1", /referral_type_check/, [ref2]);
+    });
+
     await sub('CONSTRAINTS check queries return zero rows', async () => {
       assert.deepEqual(await runChecks(c), {});
     });

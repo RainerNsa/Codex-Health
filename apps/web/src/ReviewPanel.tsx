@@ -8,6 +8,7 @@ const keyLabel = (k: string) => k.replaceAll('_', ' ');
 const ACTION_LABEL: Record<Action, string> = {
   submit: 'Submit for review', hold: 'Hold', request_info: 'Request information', escalate: 'Escalate', resume: 'Resume review', finalize: 'Record decision',
   reevaluate: 'Re-evaluate with current settings', cosign: 'Co-sign the filed decision', amend: 'Amend the decision',
+  process: 'Submit for processing', upload: 'Add documents', resolve_failures: 'Resolve failed documents',
 };
 const STATUS_LABEL: Record<string, string> = {
   draft: 'Draft', ready_for_review: 'Ready for review', on_hold: 'On hold', info_requested: 'Information requested', escalated: 'Escalated', finalized: 'Finalized', amended: 'Amended',
@@ -16,7 +17,7 @@ const OUTCOME_TEXT: Record<string, string> = { admit: 'Admit', do_not_admit: 'Do
 
 // Each handler resolves true when the API accepted the request; a refused request keeps what was typed.
 export interface ReviewHandlers {
-  move: (body: { action: Exclude<Action, 'finalize' | 'reevaluate' | 'cosign' | 'amend'>; note?: string; department?: string; items?: string[] }) => Promise<boolean>;
+  move: (body: { action: 'submit' | 'hold' | 'request_info' | 'escalate' | 'resume'; note?: string; department?: string; items?: string[] }) => Promise<boolean>;
   finalize: (body: DecisionBody) => Promise<boolean>;
   amend: (body: DecisionBody) => Promise<boolean>;
   requestCosign: (body: DecisionBody) => Promise<boolean>;
@@ -92,7 +93,7 @@ export function ReviewPanel({ view, busy, on }: { view: ReferralView; busy: bool
 
       {view.actions.length > 0 && (
         <div className="mt-3 flex flex-wrap gap-2">
-          {view.actions.map((a) => (
+          {view.actions.filter((a) => a !== 'upload' && a !== 'resolve_failures' && a !== 'process').map((a) => (
             <button key={a} type="button" disabled={busy} aria-pressed={open === a}
               className={`rounded px-3 py-1 text-sm disabled:opacity-50 ${a === 'finalize' ? 'bg-gray-900 text-white' : 'border border-gray-900'}`}
               onClick={() => (a === 'submit' ? void on.move({ action: 'submit' }) : a === 'reevaluate' ? void on.reevaluate()
@@ -101,8 +102,8 @@ export function ReviewPanel({ view, busy, on }: { view: ReferralView; busy: bool
         </div>
       )}
 
-      {open && open !== 'finalize' && open !== 'reevaluate' && open !== 'cosign' && open !== 'amend' && (
-        <form className="mt-3 rounded border border-gray-300 p-3 text-sm" onSubmit={(e) => { e.preventDefault(); void on.move({ action: open as Exclude<Action, 'finalize' | 'submit' | 'reevaluate' | 'cosign' | 'amend'>, ...(note.trim() ? { note } : {}), ...(open === 'escalate' ? { department } : {}), ...(open === 'request_info' ? { items } : {}) }).then((ok) => ok && reset()); }}>
+      {open && (open === 'hold' || open === 'request_info' || open === 'escalate' || open === 'resume') && (
+        <form className="mt-3 rounded border border-gray-300 p-3 text-sm" onSubmit={(e) => { e.preventDefault(); void on.move({ action: open as 'hold' | 'request_info' | 'escalate' | 'resume', ...(note.trim() ? { note } : {}), ...(open === 'escalate' ? { department } : {}), ...(open === 'request_info' ? { items } : {}) }).then((ok) => ok && reset()); }}>
           {open === 'request_info' && (
             <fieldset>
               <legend className="font-medium">What is needed (pick at least one)</legend>

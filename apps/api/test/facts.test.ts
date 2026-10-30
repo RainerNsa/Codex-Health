@@ -7,6 +7,9 @@ import pg from 'pg';
 import { buildServer } from '../src/server.ts';
 import { DEV_USER_HEADER } from '../src/auth.ts';
 import { poolTx, type Tx } from '../src/db.ts';
+import { s3Storage } from '../src/storage.ts';
+import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3';
+import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
@@ -328,11 +331,11 @@ describe.skipIf(!url)('manual fact entry API', () => {
     const { rid, ev } = await withFacts(['ventilator_use', 'no'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
     expect(ev.outcome).toBe('admit');
     let view = (await get(refUrl(rid), U.reviewer)).json();
-    expect([view.referral.status, view.actions]).toEqual(['draft', ['submit']]);
+    expect([view.referral.status, view.actions]).toEqual(['draft', ['submit', 'upload']]);
     expect(view.confirmation.every((x: { confirmed: boolean }) => x.confirmed)).toBe(true);
     expect((await finalize(rid, U.reviewer, { evaluation_id: ev.id, decision: 'admit' })).json()).toEqual({ error: 'transition_not_allowed' });
     view = (await move(rid, U.reviewer, { action: 'submit', note: 'ignored: submit carries no note' })).json();
-    expect([view.referral.status, view.actions, view.transitions[0].note]).toEqual(['ready_for_review', ['hold', 'request_info', 'escalate', 'finalize'], null]);
+    expect([view.referral.status, view.actions, view.transitions[0].note]).toEqual(['ready_for_review', ['hold', 'request_info', 'escalate', 'upload', 'finalize'], null]);
     // another referral's evaluation, or a reason on an agreeing decision, is refused
     const other = (await withFacts(['daily_skilled_need', 'yes'])).ev.id;
     expect((await finalize(rid, U.reviewer, { evaluation_id: other, decision: 'admit' })).json()).toEqual({ error: 'evaluation_stale' });
@@ -570,6 +573,106 @@ describe.skipIf(!url)('manual fact entry API', () => {
     await put(cur.profile.disabled_rules, cur.profile.version + 1);
   });
 
+  // --- documents (M3 slice 5): signed upload into quarantine, checked bytes, T1/T4/T5/T6 ------------------
+  const BUCKET = process.env['S3_DOCUMENTS_BUCKET'] ?? 'codex-health-documents-local';
+  const withS3 = !!process.env['AWS_ENDPOINT_URL']; // localstack only
+  if (!withS3 && process.env['REQUIRE_DATABASE']) throw new Error('AWS_ENDPOINT_URL (localstack) must be set here: the document tests may not be skipped in the db-checks job');
+  const docApp = buildServer({ tx, auth: 'local-stub', env: 'test', storage: withS3 ? s3Storage(BUCKET) : null });
+  const PDF = (n: number) => Buffer.from(`%PDF-1.4\nZZTEST synthetic document ${n}\n`);
+  const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
+  /** Upload like the browser: ask for a URL, PUT the bytes, then ask the API to check and record them. */
+  const upload = async (rid: string, body: Buffer, extra: Record<string, unknown> = {}, user = U.reviewer) => {
+    const link = await post(`${refUrl(rid)}/documents/uploads`, user, { sha256: sha(body), bytes: body.length }, docApp);
+    if (link.statusCode !== 201) return link;
+    expect((await fetch(link.json().url, { method: 'PUT', body })).status).toBe(200);
+    return post(`${refUrl(rid)}/documents`, user, { sha256: sha(body), type: 'face_sheet', ...extra }, docApp);
+  };
+  const asPipeline = async (rid: string, docStatus: 'failed' | 'processed', refStatus: 'partial_failure' | 'ready_for_review') => {
+    // the worker's part (M4), done here as the owner: report the document and move the referral
+    await asOwner(FAC.a);
+    await c.query("UPDATE documents SET status = $2, updated_at = now() WHERE referral_id = $1 AND status = 'uploaded'", [rid, docStatus]);
+    await c.query('UPDATE referrals SET status = $2 WHERE id = $1', [rid, refStatus]);
+    await c.query("SELECT set_config('app.facility_id', '', true)");
+  };
+
+  describe.skipIf(!withS3)('documents', () => {
+    beforeAll(async () => {
+      const s3 = new S3Client({ endpoint: process.env['AWS_ENDPOINT_URL'], forcePathStyle: true }); // localstack only
+      await s3.send(new CreateBucketCommand({ Bucket: BUCKET })).catch((err: { name?: string }) => {
+        if (err.name !== 'BucketAlreadyOwnedByYou' && err.name !== 'BucketAlreadyExists') throw err;
+      });
+    });
+
+    it('upload: a checked document is recorded, offered for processing, and submitted (T1)', async () => {
+      const rid = await newReferral();
+      expect((await post(`${refUrl(rid)}/documents/uploads`, U.reviewer, { sha256: sha(PDF(1)), bytes: 10 })).json()).toEqual({ error: 'storage_unavailable' });
+      const res = await upload(rid, PDF(1));
+      expect(res.statusCode).toBe(201);
+      let view = res.json();
+      expect([view.referral.status, view.documents.map((d: { type: string; status: string }) => [d.type, d.status]), view.actions])
+        .toEqual(['draft', [['face_sheet', 'uploaded']], ['process', 'upload']]);
+      expect(JSON.stringify(view)).not.toContain('documents/'); // no storage key in a response
+      expect((await post(`${refUrl(rid)}/documents/uploads`, U.reviewer, { sha256: sha(PDF(1)), bytes: PDF(1).length }, docApp)).json()).toEqual({ error: 'document_duplicate' });
+      view = (await move(rid, U.reviewer, { action: 'process' })).json();
+      expect([view.referral.status, view.actions]).toEqual(['processing', []]);
+      expect((await upload(rid, PDF(2))).json()).toEqual({ error: 'referral_not_open' }); // the pipeline owns it now
+      await asOwner(FAC.a);
+      const doc = view.documents[0].id as string;
+      expect((await c.query("SELECT action FROM audit_log WHERE entity_id = $1 OR (entity_id = $2 AND action LIKE 'referral.sub%') ORDER BY seq", [doc, rid])).rows.map((r) => r.action))
+        .toEqual(['document.uploaded', 'referral.submitted_for_processing']);
+      expect((await c.query("SELECT attrs FROM product_events WHERE referral_id = $1 AND event = 'referral.uploaded'", [rid])).rows[0].attrs)
+        .toEqual({ document_id: doc, bytes: PDF(1).length });
+    });
+
+    it('upload: refused when the bytes are not a PDF or image, do not match the declared hash, are missing, or too large; Viewers cannot upload', async () => {
+      const rid = await newReferral();
+      const html = Buffer.from('<html>ZZTEST</html>');
+      expect((await upload(rid, html)).json()).toEqual({ error: 'document_rejected' });
+      // the rejected object was removed from quarantine
+      expect((await post(`${refUrl(rid)}/documents`, U.reviewer, { sha256: sha(html), type: 'face_sheet' }, docApp)).json()).toEqual({ error: 'upload_missing' });
+      // declared one hash, uploaded other bytes under it
+      const link = (await post(`${refUrl(rid)}/documents/uploads`, U.reviewer, { sha256: sha(PDF(3)), bytes: PDF(3).length }, docApp)).json();
+      await fetch(link.url, { method: 'PUT', body: PDF(4) });
+      expect((await post(`${refUrl(rid)}/documents`, U.reviewer, { sha256: sha(PDF(3)), type: 'face_sheet' }, docApp)).json()).toEqual({ error: 'document_rejected' });
+      for (const bad of [{ sha256: 'x', bytes: 10 }, { sha256: sha(PDF(5)), bytes: 0 }, { sha256: sha(PDF(5)), bytes: 25 * 1024 * 1024 + 1 }]) {
+        expect((await post(`${refUrl(rid)}/documents/uploads`, U.reviewer, bad, docApp)).json(), JSON.stringify(bad)).toEqual({ error: 'invalid_document' });
+      }
+      expect((await post(`${refUrl(rid)}/documents`, U.reviewer, { sha256: sha(PDF(5)), type: 'not_a_type' }, docApp)).json()).toEqual({ error: 'invalid_document' });
+      expect((await upload(rid, PDF(5), {}, U.viewer)).statusCode).toBe(403);
+      expect((await get(refUrl(rid), U.reviewer)).json().documents).toEqual([]);
+    });
+
+    it('upload: a failed document is replaced (T4) or marked not applicable with a reason (T5, re-evaluated)', async () => {
+      const rid = await newReferral();
+      await upload(rid, PDF(6));
+      await move(rid, U.reviewer, { action: 'process' });
+      await asPipeline(rid, 'failed', 'partial_failure');
+      let view = (await get(refUrl(rid), U.reviewer)).json();
+      expect(view.actions).toEqual(['upload', 'resolve_failures']);
+      const failed = view.documents[0].id as string;
+      expect((await upload(rid, PDF(7))).json()).toEqual({ error: 'replace_required' });
+      view = (await upload(rid, PDF(8), { replaces: failed })).json();
+      expect([view.referral.status, view.documents.map((d: { status: string; not_applicable_reason: string | null }) => [d.status, d.not_applicable_reason])])
+        .toEqual(['processing', [['not_applicable', 'Replaced by a new upload'], ['uploaded', null]]]);
+      // the replacement fails too: this time staff mark it not applicable
+      await asPipeline(rid, 'failed', 'partial_failure');
+      const second = view.documents[1].id as string;
+      const resolve = (body: unknown) => post(`${refUrl(rid)}/documents/resolve`, U.reviewer, body);
+      expect((await resolve({ documents: [{ id: second, reason: ' ' }] })).json()).toEqual({ error: 'invalid_document' });
+      expect((await resolve({ documents: [] })).json()).toEqual({ error: 'resolve_all_failed' });
+      view = (await resolve({ documents: [{ id: second, reason: 'SYNTHETIC: duplicate fax page' }] })).json();
+      expect([view.referral.status, view.documents[1].status, view.evaluation !== null]).toEqual(['ready_for_review', 'not_applicable', true]);
+      expect(view.transitions.map((t: { transition: string }) => t.transition)).toEqual(['T1', 'T4', 'T5']);
+    });
+
+    it('upload: adding a document to a referral in review sends it back to processing (T6)', async () => {
+      const { rid } = await withFacts(['daily_skilled_need', 'yes']);
+      await move(rid, U.reviewer, { action: 'submit' });
+      const view = (await upload(rid, PDF(9))).json();
+      expect([view.referral.status, view.transitions.map((t: { transition: string }) => t.transition)]).toEqual(['processing', ['T14', 'T6']]);
+    });
+  });
+
   it('review: hold, request information, escalate and resume move only from the states §5.1 allows, each with its fields', async () => {
     const { rid } = await withFacts(['daily_skilled_need', 'yes']);
     await move(rid, U.reviewer, { action: 'submit' });
@@ -579,7 +682,7 @@ describe.skipIf(!url)('manual fact entry API', () => {
     }
     expect((await move(rid, U.viewer, { action: 'hold', note: NOTE })).statusCode).toBe(403);
     let view = (await move(rid, U.reviewer, { action: 'hold', note: NOTE })).json();
-    expect([view.referral.status, view.actions]).toEqual(['on_hold', ['resume']]);
+    expect([view.referral.status, view.actions]).toEqual(['on_hold', ['resume', 'upload']]);
     expect((await move(rid, U.reviewer, { action: 'escalate', note: NOTE, department: 'therapy' })).json()).toEqual({ error: 'transition_not_allowed' });
     // facts may still be entered while held (T7), and the status does not move
     expect((await post(factsUrl(rid), U.reviewer, fact('ventilator_use', 'no'))).json().referral.status).toBe('on_hold');
@@ -608,7 +711,7 @@ describe.skipIf(!url)('manual fact entry API', () => {
     const cur = (await get(path, U.admin)).json();
     await app.inject({ method: 'PUT', url: path, headers: as(U.admin), payload: { capabilities: cur.profile.capabilities, disabled_rules: cur.profile.disabled_rules, based_on_version: cur.profile.version } });
     let view = (await get(refUrl(rid), U.reviewer)).json();
-    expect([view.evaluation_outdated, view.actions]).toEqual([true, ['hold', 'request_info', 'escalate', 'reevaluate']]);
+    expect([view.evaluation_outdated, view.actions]).toEqual([true, ['hold', 'request_info', 'escalate', 'upload', 'reevaluate']]);
     expect((await finalize(rid, U.reviewer, { evaluation_id: newer, decision: 'admit' })).json()).toEqual({ error: 'evaluation_stale' });
     expect((await post(`${refUrl(rid)}/evaluate`, U.viewer)).statusCode).toBe(403);
     view = (await post(`${refUrl(rid)}/evaluate`, U.reviewer)).json();
