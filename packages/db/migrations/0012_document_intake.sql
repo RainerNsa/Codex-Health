@@ -18,6 +18,11 @@ BEGIN
   IF current_user <> 'codex_app' THEN
     RETURN NEW;
   END IF;
+  -- the acting user (0010) adds documents only as a Reviewer or Admin of this facility
+  IF NOT EXISTS (SELECT 1 FROM user_facility_roles WHERE user_id = app_user() AND facility_id = NEW.facility_id
+                 AND role IN ('facility_admin', 'admissions_reviewer')) THEN
+    RAISE EXCEPTION 'documents: the acting user may not add documents here' USING ERRCODE = 'insufficient_privilege';
+  END IF;
   SELECT status INTO st FROM referrals WHERE facility_id = NEW.facility_id AND id = NEW.referral_id FOR UPDATE;
   IF st NOT IN ('draft', 'ready_for_review', 'on_hold', 'info_requested', 'escalated', 'partial_failure') THEN
     RAISE EXCEPTION 'documents: a document cannot be added to a % referral', st USING ERRCODE = 'check_violation';

@@ -7,14 +7,21 @@ import { createHash } from 'node:crypto';
 
 export const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 export const UPLOAD_TTL_SECONDS = 300;
+const S3_TIMEOUT_MS = 30_000;
+
+/** What was checked: the bytes are identified by ETag (and VersionId on a versioned bucket), so only they move. */
+export interface Inspected { bytes: number; sha256: string; head: Buffer; etag: string; versionId: string | undefined }
+const CONTENT_TYPE = { pdf: 'application/pdf', png: 'image/png', jpeg: 'image/jpeg', tiff: 'image/tiff' } as const;
 
 export interface Storage {
   /** A URL the browser PUTs exactly these bytes to, within the TTL. */
   presignPut(key: string, bytes: number): Promise<string>;
-  /** The object's size, SHA-256 (hex) and first bytes, or null when it is not there or too large. */
-  inspect(key: string): Promise<{ bytes: number; sha256: string; head: Buffer } | null>;
-  move(from: string, to: string): Promise<void>;
-  remove(key: string): Promise<void>;
+  /** The object's size, SHA-256 (hex), first bytes and version, or null when it is not there or too large. */
+  inspect(key: string): Promise<Inspected | null>;
+  /** Copy exactly the inspected version (refused if the object changed since), with its content type set from the
+   *  checked file type and served as an attachment; then delete that quarantine version. */
+  move(from: string, to: string, checked: Inspected, kind: keyof typeof CONTENT_TYPE): Promise<void>;
+  remove(key: string, versionId?: string): Promise<void>;
 }
 
 /** PDF, PNG, JPEG or TIFF, by their first bytes: the declared type and the file name are never trusted. */
@@ -37,12 +44,12 @@ export function s3Storage(bucket: string): Storage {
     async inspect(key) {
       let res;
       try {
-        res = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }));
+        res = await s3.send(new GetObjectCommand({ Bucket: bucket, Key: key }), { abortSignal: AbortSignal.timeout(S3_TIMEOUT_MS) });
       } catch (err) {
         if ((err as { name?: string }).name === 'NoSuchKey') return null;
         throw err;
       }
-      if (!res.Body || (res.ContentLength ?? 0) > MAX_DOCUMENT_BYTES) return null;
+      if (!res.Body || !res.ETag || (res.ContentLength ?? 0) > MAX_DOCUMENT_BYTES) return null;
       const hash = createHash('sha256');
       const chunks: Buffer[] = [];
       let bytes = 0;
@@ -52,14 +59,19 @@ export function s3Storage(bucket: string): Storage {
         hash.update(chunk);
         if (chunks.length === 0) chunks.push(Buffer.from(chunk.subarray(0, 16)));
       }
-      return { bytes, sha256: hash.digest('hex'), head: chunks[0] ?? Buffer.alloc(0) };
+      return { bytes, sha256: hash.digest('hex'), head: chunks[0] ?? Buffer.alloc(0), etag: res.ETag, versionId: res.VersionId };
     },
-    async move(from, to) {
-      await s3.send(new CopyObjectCommand({ Bucket: bucket, Key: to, CopySource: `${bucket}/${from}` }));
-      await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: from }));
+    async move(from, to, checked, kind) {
+      // the PUT URL stays valid after the check: copying "whatever is there now" would promote swapped bytes
+      const source = `${bucket}/${from}${checked.versionId ? `?versionId=${encodeURIComponent(checked.versionId)}` : ''}`;
+      await s3.send(new CopyObjectCommand({
+        Bucket: bucket, Key: to, CopySource: source, CopySourceIfMatch: checked.etag,
+        MetadataDirective: 'REPLACE', ContentType: CONTENT_TYPE[kind], ContentDisposition: 'attachment',
+      }), { abortSignal: AbortSignal.timeout(S3_TIMEOUT_MS) });
+      await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: from, ...(checked.versionId ? { VersionId: checked.versionId } : {}) }));
     },
-    async remove(key) {
-      await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: key }));
+    async remove(key, versionId) {
+      await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: key, ...(versionId ? { VersionId: versionId } : {}) }));
     },
   };
 }

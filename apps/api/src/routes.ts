@@ -590,6 +590,16 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
   const quarantineKey = (fid: string, rid: string, sha: string) => `quarantine/${fid}/${rid}/${sha}`;
   const documentKey = (fid: string, rid: string, sha: string) => `documents/${fid}/${rid}/${sha}`;
   const needStorage = () => { if (!storage) throw new HttpError(503, 'storage_unavailable'); return storage; };
+  // shortcut: an in-process limit (30 upload calls a minute per user); a shared limit (WAF or a store) when the API
+  // runs as more than one process
+  const recent = new Map<string, number[]>();
+  const limit = (user: string) => {
+    const now = Date.now();
+    const hits = (recent.get(user) ?? []).filter((t) => now - t < 60_000);
+    if (hits.length >= 30) throw new HttpError(429, 'rate_limited');
+    hits.push(now);
+    recent.set(user, hits);
+  };
   /** Lock the referral and check staff may still add a document to it; returns its status. */
   const lockForUpload = async (q: Query, fid: string, rid: string) => {
     const ref = await q<{ status: string }>('SELECT status FROM referrals WHERE facility_id = $1 AND id = $2 FOR UPDATE', [fid, rid]);
@@ -608,6 +618,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
         throw new HttpError(400, 'invalid_document');
       }
       const s3 = needStorage();
+      limit(user);
       const body = await tx(async (q) => {
         const who = await enter(q, fid, user);
         if (!WRITE_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
@@ -622,7 +633,9 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
     } catch (err) { return fail(reply, err); }
   });
 
-  // step 2: the uploaded bytes are read back and checked; only then is there a document, and the referral moves
+  // step 2: the uploaded bytes are read back and checked; only then is there a document, and the referral moves.
+  // Storage I/O runs outside any transaction (a slow read never holds a connection or the referral lock); the
+  // transaction then re-checks everything it relies on.
   app.post<{ Params: { fid: string; rid: string }; Body: unknown }>('/api/facilities/:fid/referrals/:rid/documents', async (req, reply) => {
     try {
       const user = caller(req.headers);
@@ -634,28 +647,48 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
         throw new HttpError(400, 'invalid_document');
       }
       const sha = b.sha256;
+      const replaces = b.replaces as string | undefined;
       const s3 = needStorage();
-      const body = await tx(async (q) => {
+      limit(user);
+      // 1. may this user add a document here at all (short transaction, no storage I/O)
+      const precheck = async (q: Query) => {
         const who = await enter(q, fid, user);
         if (!WRITE_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
-        const ruleSet = await loadSettings(q, fid, who.organizationId);
         const status = await lockForUpload(q, fid, rid);
         // T4: on a partial failure, a new document replaces one that failed (and only then)
-        if ((status === 'partial_failure') !== (b.replaces !== undefined)) throw new HttpError(409, status === 'partial_failure' ? 'replace_required' : 'invalid_document');
-        const dup = await q('SELECT 1 FROM documents WHERE facility_id = $1 AND referral_id = $2 AND sha256 = decode($3, \'hex\')', [fid, rid, sha]);
-        if (dup.rowCount) throw new HttpError(409, 'document_duplicate');
-        // the declared hash, the size cap and the file signature are checked on the stored bytes themselves
-        const found = await s3.inspect(quarantineKey(fid, rid, sha));
-        if (!found) throw new HttpError(409, 'upload_missing');
-        if (found.sha256 !== sha || found.bytes < 1 || !sniff(found.head)) {
-          await s3.remove(quarantineKey(fid, rid, sha));
-          throw new HttpError(422, 'document_rejected');
-        }
-        if (b.replaces !== undefined) {
-          const old = await q<{ status: string }>('SELECT status FROM documents WHERE facility_id = $1 AND referral_id = $2 AND id = $3', [fid, rid, b.replaces]);
+        if ((status === 'partial_failure') !== (replaces !== undefined)) throw new HttpError(409, status === 'partial_failure' ? 'replace_required' : 'invalid_document');
+        if (replaces !== undefined) {
+          const old = await q<{ status: string }>('SELECT status FROM documents WHERE facility_id = $1 AND referral_id = $2 AND id = $3', [fid, rid, replaces]);
           if (!old.rows[0] || (old.rows[0].status !== 'failed' && old.rows[0].status !== 'unreadable')) throw new HttpError(409, 'replace_not_failed');
-          await q("UPDATE documents SET status = 'not_applicable', not_applicable_reason = 'Replaced by a new upload', updated_at = now() WHERE facility_id = $1 AND id = $2", [fid, b.replaces]);
-          await audit(q, fid, user, 'document.replaced', 'document', b.replaces as string);
+        }
+        const dup = await q("SELECT 1 FROM documents WHERE facility_id = $1 AND referral_id = $2 AND sha256 = decode($3, 'hex')", [fid, rid, sha]);
+        if (dup.rowCount) throw new HttpError(409, 'document_duplicate');
+        return { who, status };
+      };
+      await tx(precheck);
+      // 2. the declared hash, the size cap and the file signature, checked on the stored bytes themselves
+      const found = await s3.inspect(quarantineKey(fid, rid, sha));
+      if (!found) throw new HttpError(409, 'upload_missing');
+      const kind = found.sha256 === sha && found.bytes >= 1 ? sniff(found.head) : null;
+      if (!kind) {
+        await s3.remove(quarantineKey(fid, rid, sha), found.versionId);
+        throw new HttpError(422, 'document_rejected');
+      }
+      // 3. promote exactly the checked version (refused if it was replaced since); content-addressed, so a later
+      //    refusal below leaves at most an unreferenced copy of these same checked bytes
+      try {
+        await s3.move(quarantineKey(fid, rid, sha), documentKey(fid, rid, sha), found, kind);
+      } catch (err) {
+        if ((err as { name?: string }).name === 'PreconditionFailed') throw new HttpError(409, 'upload_changed');
+        throw err;
+      }
+      // 4. record it, re-checking state under the lock
+      const body = await tx(async (q) => {
+        const { who, status } = await precheck(q);
+        const ruleSet = await loadSettings(q, fid, who.organizationId);
+        if (replaces !== undefined) {
+          await q("UPDATE documents SET status = 'not_applicable', not_applicable_reason = 'Replaced by a new upload', updated_at = now() WHERE facility_id = $1 AND id = $2", [fid, replaces]);
+          await audit(q, fid, user, 'document.replaced', 'document', replaces);
         }
         const doc = await q<{ id: string }>(
           `INSERT INTO documents (facility_id, referral_id, type, sha256, storage_key) VALUES ($1, $2, $3, decode($4, 'hex'), $5) RETURNING id`,
@@ -669,8 +702,6 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
           await q('INSERT INTO referral_transitions (facility_id, referral_id, transition, from_status, to_status, created_by) VALUES ($1, $2, $3, $4, $5, $6)',
             [fid, rid, t, status, 'processing', `user:${user}`]);
         }
-        // the object leaves quarantine last: a refused transaction leaves at most a content-addressed copy behind
-        await s3.move(quarantineKey(fid, rid, sha), documentKey(fid, rid, sha));
         return referralView(q, fid, rid, ruleSet, who);
       });
       return reply.code(201).send(body);

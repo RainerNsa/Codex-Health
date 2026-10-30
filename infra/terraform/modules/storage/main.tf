@@ -89,6 +89,38 @@ resource "aws_s3_bucket_lifecycle_configuration" "documents" {
       days_after_initiation = 7
     }
   }
+
+  # Uploads wait in quarantine/ only until the API checks and promotes them (or rejects them); anything left there
+  # (abandoned, rejected, re-PUT after promotion) expires within a day, every version of it.
+  rule {
+    id     = "expire-quarantine"
+    status = "Enabled"
+
+    filter {
+      prefix = "quarantine/"
+    }
+
+    expiration {
+      days = 1
+    }
+
+    noncurrent_version_expiration {
+      noncurrent_days = 1
+    }
+  }
+}
+
+# The browser PUTs uploads straight to quarantine/ on a signed URL: only the app's own origins, PUT only, and no
+# extra request headers, so a browser cannot set object metadata. Empty until the app has a domain.
+resource "aws_s3_bucket_cors_configuration" "documents" {
+  count  = length(var.upload_origins) > 0 ? 1 : 0
+  bucket = aws_s3_bucket.documents.id
+
+  cors_rule {
+    allowed_methods = ["PUT"]
+    allowed_origins = var.upload_origins
+    max_age_seconds = 300
+  }
 }
 
 data "aws_caller_identity" "current" {}

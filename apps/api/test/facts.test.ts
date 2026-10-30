@@ -8,7 +8,7 @@ import { buildServer } from '../src/server.ts';
 import { DEV_USER_HEADER } from '../src/auth.ts';
 import { poolTx, type Tx } from '../src/db.ts';
 import { s3Storage } from '../src/storage.ts';
-import { CreateBucketCommand, S3Client } from '@aws-sdk/client-s3';
+import { CreateBucketCommand, HeadObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
@@ -596,8 +596,8 @@ describe.skipIf(!url)('manual fact entry API', () => {
   };
 
   describe.skipIf(!withS3)('documents', () => {
-    beforeAll(async () => {
-      const s3 = new S3Client({ endpoint: process.env['AWS_ENDPOINT_URL'], forcePathStyle: true }); // localstack only
+    const s3 = new S3Client({ endpoint: process.env['AWS_ENDPOINT_URL'], forcePathStyle: true }); // localstack only
+    beforeAll(async () => { // localstack only
       await s3.send(new CreateBucketCommand({ Bucket: BUCKET })).catch((err: { name?: string }) => {
         if (err.name !== 'BucketAlreadyOwnedByYou' && err.name !== 'BucketAlreadyExists') throw err;
       });
@@ -613,6 +613,10 @@ describe.skipIf(!url)('manual fact entry API', () => {
         .toEqual(['draft', [['face_sheet', 'uploaded']], ['process', 'upload']]);
       expect(JSON.stringify(view)).not.toContain('documents/'); // no storage key in a response
       expect((await post(`${refUrl(rid)}/documents/uploads`, U.reviewer, { sha256: sha(PDF(1)), bytes: PDF(1).length }, docApp)).json()).toEqual({ error: 'document_duplicate' });
+      // the checked bytes left quarantine and sit at their content address, typed from the check, as an attachment
+      const head = await s3.send(new HeadObjectCommand({ Bucket: BUCKET, Key: `documents/${FAC.a}/${rid}/${sha(PDF(1))}` }));
+      expect([head.ContentType, head.ContentDisposition]).toEqual(['application/pdf', 'attachment']);
+      await expect(s3.send(new HeadObjectCommand({ Bucket: BUCKET, Key: `quarantine/${FAC.a}/${rid}/${sha(PDF(1))}` }))).rejects.toMatchObject({ name: 'NotFound' });
       view = (await move(rid, U.reviewer, { action: 'process' })).json();
       expect([view.referral.status, view.actions]).toEqual(['processing', []]);
       expect((await upload(rid, PDF(2))).json()).toEqual({ error: 'referral_not_open' }); // the pipeline owns it now
@@ -639,6 +643,10 @@ describe.skipIf(!url)('manual fact entry API', () => {
       }
       expect((await post(`${refUrl(rid)}/documents`, U.reviewer, { sha256: sha(PDF(5)), type: 'not_a_type' }, docApp)).json()).toEqual({ error: 'invalid_document' });
       expect((await upload(rid, PDF(5), {}, U.viewer)).statusCode).toBe(403);
+      // a Viewer cannot complete a Reviewer's upload either
+      const link10 = (await post(`${refUrl(rid)}/documents/uploads`, U.reviewer, { sha256: sha(PDF(10)), bytes: PDF(10).length }, docApp)).json();
+      await fetch(link10.url, { method: 'PUT', body: PDF(10) });
+      expect((await post(`${refUrl(rid)}/documents`, U.viewer, { sha256: sha(PDF(10)) }, docApp)).statusCode).toBe(403);
       expect((await get(refUrl(rid), U.reviewer)).json().documents).toEqual([]);
     });
 
@@ -663,6 +671,35 @@ describe.skipIf(!url)('manual fact entry API', () => {
       view = (await resolve({ documents: [{ id: second, reason: 'SYNTHETIC: duplicate fax page' }] })).json();
       expect([view.referral.status, view.documents[1].status, view.evaluation !== null]).toEqual(['ready_for_review', 'not_applicable', true]);
       expect(view.transitions.map((t: { transition: string }) => t.transition)).toEqual(['T1', 'T4', 'T5']);
+    });
+
+    it('upload: a replace must name a failed document; at most 20 documents; upload calls are rate limited', async () => {
+      const rid = await newReferral();
+      await upload(rid, PDF(13));
+      await upload(rid, PDF(14));
+      await move(rid, U.reviewer, { action: 'process' });
+      // one document fails, the other is processed
+      await asOwner(FAC.a);
+      const ids2 = (await c.query('SELECT id FROM documents WHERE referral_id = $1 ORDER BY created_at', [rid])).rows.map((r) => r.id as string);
+      await c.query("UPDATE documents SET status = 'failed' WHERE id = $1", [ids2[0]]);
+      await c.query("UPDATE documents SET status = 'processed' WHERE id = $1", [ids2[1]]);
+      await c.query("UPDATE referrals SET status = 'partial_failure' WHERE id = $1", [rid]);
+      expect((await upload(rid, PDF(15), { replaces: ids2[1] })).json()).toEqual({ error: 'replace_not_failed' });
+      expect((await get(refUrl(rid), U.reviewer)).json().documents[1].status).toBe('processed');
+      // the 21st document is refused before any upload link is issued
+      const full = await newReferral();
+      await asOwner(FAC.a);
+      for (let i = 0; i < 20; i += 1) {
+        await c.query(`INSERT INTO documents (facility_id, referral_id, type, sha256, storage_key) VALUES ($1::uuid, $2::uuid, 'other', sha256(convert_to($3::text, 'UTF8')),
+          'documents/' || $1::uuid::text || '/' || $2::uuid::text || '/' || encode(sha256(convert_to($3::text, 'UTF8')), 'hex'))`, [FAC.a, full, `zz-${i}`]);
+      }
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      expect((await post(`${refUrl(full)}/documents/uploads`, U.reviewer, { sha256: sha(PDF(16)), bytes: PDF(16).length }, docApp)).json()).toEqual({ error: 'document_limit' });
+      // 30 upload calls a minute per user, on a fresh server so earlier tests do not count
+      const limited = buildServer({ tx, auth: 'local-stub', env: 'test', storage: s3Storage(BUCKET) });
+      const ask = () => post(`${refUrl(rid)}/documents/uploads`, U.admin, { sha256: sha(PDF(17)), bytes: PDF(17).length }, limited);
+      for (let i = 0; i < 30; i += 1) expect((await ask()).statusCode).not.toBe(429);
+      expect((await ask()).json()).toEqual({ error: 'rate_limited' });
     });
 
     it('upload: adding a document to a referral in review sends it back to processing (T6)', async () => {
