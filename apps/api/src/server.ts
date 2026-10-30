@@ -1,5 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { fileURLToPath } from 'node:url';
+import { timingSafeEqual } from 'node:crypto';
 import { assertAuthAllowed, type AuthMode } from './auth.ts';
 import { poolTx, type Tx } from './db.ts';
 import { registerRoutes } from './routes.ts';
@@ -25,10 +26,25 @@ export interface ServerOptions {
   env?: string;
   /** Document storage; without it the upload routes answer 503 storage_unavailable. */
   storage?: Storage | null;
+  /** Demo only: the secret CloudFront adds to every request it forwards. Requests without it are refused, so the
+   *  password gate in front of the demo cannot be bypassed by calling the server directly. */
+  originSecret?: string;
 }
+
+export const ORIGIN_HEADER = 'x-codex-origin';
+const sameSecret = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
 
 export function buildServer(opts: ServerOptions = {}): FastifyInstance {
   const app = Fastify({ logger: false, bodyLimit: 16 * 1024 });
+
+  if (opts.originSecret) {
+    const secret = opts.originSecret;
+    app.addHook('onRequest', async (req, reply) => {
+      const got = req.headers[ORIGIN_HEADER];
+      if (typeof got !== 'string' || !sameSecret(got, secret)) return reply.code(404).send({ error: 'not_found' });
+      return undefined;
+    });
+  }
 
   app.addHook('onSend', async (_request, reply) => {
     for (const [name, value] of Object.entries(HEADERS)) reply.header(name, value);
@@ -44,7 +60,7 @@ export function buildServer(opts: ServerOptions = {}): FastifyInstance {
   app.get('/health', async () => ({ status: 'ok' }));
 
   if (opts.tx) {
-    assertAuthAllowed(opts.auth ?? 'local-stub', opts.env);
+    assertAuthAllowed(opts.auth ?? 'local-stub', opts.env, opts.originSecret);
     registerRoutes(app, { tx: opts.tx, storage: opts.storage ?? null });
   }
   return app;
@@ -57,6 +73,9 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   if (!url) throw new Error('missing required environment variable DATABASE_URL_APP');
   const db = poolTx(url);
   const bucket = process.env['S3_DOCUMENTS_BUCKET'];
-  await buildServer({ tx: db.tx, auth: 'local-stub', env: process.env['CODEX_ENV'], storage: bucket ? s3Storage(bucket) : null }).listen({ host: '127.0.0.1', port });
-  console.log(`api listening on 127.0.0.1:${port}`);
+  const env = process.env['CODEX_ENV'];
+  // the demo listens for CloudFront on the network; everything else stays on the loopback interface
+  const host = env === 'demo' ? '0.0.0.0' : '127.0.0.1';
+  await buildServer({ tx: db.tx, auth: 'local-stub', env, storage: bucket ? s3Storage(bucket, process.env['S3_DOCUMENTS_KMS_KEY_ID']) : null, originSecret: env === 'demo' ? process.env['DEMO_ORIGIN_SECRET'] : undefined }).listen({ host, port });
+  console.log(`api listening on ${host}:${port}`);
 }

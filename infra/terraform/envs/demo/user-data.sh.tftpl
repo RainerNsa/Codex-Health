@@ -1,0 +1,89 @@
+#!/bin/bash
+# Codex Health demo server bootstrap (synthetic data only). Runs once at first boot as root; log in
+# /var/log/cloud-init-output.log. Reach the server with Session Manager, never SSH (no key, no port 22).
+set -euo pipefail
+
+APP=/srv/codex/app
+export HOME=/root
+AS_CODEX="runuser -u codex -- env HOME=/srv/codex PATH=/usr/local/bin:/usr/bin:/bin"
+
+# 2 GiB of swap: npm ci and the web build run beside Postgres on a 2 GiB server
+fallocate -l 2G /swapfile && chmod 600 /swapfile && mkswap /swapfile && swapon /swapfile
+echo '/swapfile none swap defaults 0 0' >> /etc/fstab
+
+# --- packages: Docker for Postgres, git, and Node.js 24 from nodejs.org, checked against its SHA-256 -------------
+dnf install -y docker git tar xz
+systemctl enable --now docker
+
+cd /tmp
+NODE="node-v${node_version}-linux-arm64"
+curl -fsSLO "https://nodejs.org/dist/v${node_version}/$NODE.tar.xz"
+curl -fsSLO "https://nodejs.org/dist/v${node_version}/SHASUMS256.txt"
+grep " $NODE.tar.xz\$" SHASUMS256.txt | sha256sum -c -
+tar -xJf "$NODE.tar.xz" -C /usr/local --strip-components=1
+
+# --- the code, at the pinned commit; dependencies install and build as the unprivileged codex user ----------------
+useradd --system --home /srv/codex --shell /sbin/nologin codex || true
+mkdir -p /srv/codex
+git clone https://github.com/RainerNsa/Codex-Health.git "$APP"
+git -C "$APP" checkout --detach "${repo_ref}"
+chown -R codex:codex /srv/codex
+cd "$APP"
+$AS_CODEX npm ci
+
+# --- Postgres 16 on this server only (bound to 127.0.0.1); same roles, migrations and checks as local development -
+docker run -d --name codex-postgres --restart always \
+  -e POSTGRES_USER=postgres -e POSTGRES_PASSWORD="$(openssl rand -hex 24)" -e POSTGRES_DB=postgres \
+  -p 127.0.0.1:5432:5432 \
+  -v codex-pgdata:/var/lib/postgresql/data \
+  -v "$APP/packages/db/sql/init:/docker-entrypoint-initdb.d:ro" \
+  postgres:16.9
+# over TCP, not the socket: during its init scripts the image runs a socket-only server that then restarts
+for i in $(seq 1 90); do docker exec codex-postgres pg_isready -h 127.0.0.1 -p 5432 -U postgres -d codex_health >/dev/null 2>&1 && break; sleep 2; done
+
+export DATABASE_URL=postgres://codex_migrator:migrator-local-only@127.0.0.1:5432/codex_health
+$AS_CODEX DATABASE_URL="$DATABASE_URL" node packages/db/migrate.mjs
+$AS_CODEX DATABASE_URL="$DATABASE_URL" node packages/db/check.mjs
+$AS_CODEX DATABASE_URL="$DATABASE_URL" node scripts/dev/seed-synthetic.mjs
+
+# --- the web app, built and published to its private bucket (CloudFront serves it) --------------------------------
+$AS_CODEX npm run build -w @codex-health/web
+aws s3 sync apps/web/dist "s3://${web_bucket}" --delete --region "${region}"
+
+# --- the API as a service, as an unprivileged user that cannot change its own code ------------------------------
+chown -R root:root "$APP"
+chmod -R a+rX "$APP"
+cat > /etc/codex-api.env <<ENV
+CODEX_ENV=demo
+PORT=3000
+DEMO_ORIGIN_SECRET=${origin_secret}
+DATABASE_URL_APP=postgres://codex_app:app-local-only@127.0.0.1:5432/codex_health
+S3_DOCUMENTS_BUCKET=${docs_bucket}
+S3_DOCUMENTS_KMS_KEY_ID=${docs_key_arn}
+AWS_REGION=${region}
+ENV
+chmod 600 /etc/codex-api.env
+
+cat > /etc/systemd/system/codex-api.service <<'UNIT'
+[Unit]
+Description=Codex Health API (demo)
+After=network-online.target docker.service
+Wants=network-online.target
+
+[Service]
+User=codex
+WorkingDirectory=/srv/codex/app/apps/api
+EnvironmentFile=/etc/codex-api.env
+ExecStart=/usr/local/bin/node src/server.ts
+Restart=always
+NoNewPrivileges=true
+ProtectSystem=strict
+ProtectHome=true
+PrivateTmp=true
+
+[Install]
+WantedBy=multi-user.target
+UNIT
+systemctl daemon-reload
+systemctl enable --now codex-api
+echo "codex-health demo: ready"

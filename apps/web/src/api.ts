@@ -85,8 +85,9 @@ export async function uploadDocument(facility: string, referral: string, user: s
   const bytes = await file.arrayBuffer();
   const sha256 = [...new Uint8Array(await crypto.subtle.digest('SHA-256', bytes))].map((b) => b.toString(16).padStart(2, '0')).join('');
   const base = `/api/facilities/${facility}/referrals/${referral}/documents`;
-  const link = await call<{ url: string }>(`${base}/uploads`, user, { method: 'POST', body: JSON.stringify({ sha256, bytes: bytes.byteLength }) });
-  const put = await fetch(link.url, { method: 'PUT', body: bytes });
+  const link = await call<{ url: string; headers: Record<string, string> }>(`${base}/uploads`, user, { method: 'POST', body: JSON.stringify({ sha256, bytes: bytes.byteLength }) });
+  // the signed headers (the bucket's encryption) must be sent exactly as given
+  const put = await fetch(link.url, { method: 'PUT', body: bytes, headers: link.headers });
   if (!put.ok) throw new ApiError(put.status, 'upload_failed');
   return call<ReferralView>(base, user, { method: 'POST', body: JSON.stringify({ sha256, type, ...(replaces ? { replaces } : {}) }) });
 }

@@ -10,6 +10,12 @@ resource "aws_budgets_budget" "monthly" {
   limit_unit   = "USD"
   time_unit    = "MONTHLY"
 
+  # Credits count as payment by default, so an account living on credits shows about $0 and the alerts never fire;
+  # include_credits = false measures usage before credits (the demo's case).
+  cost_types {
+    include_credit = var.include_credits
+  }
+
   notification {
     comparison_operator        = "GREATER_THAN"
     threshold                  = 80

@@ -110,8 +110,8 @@ resource "aws_s3_bucket_lifecycle_configuration" "documents" {
   }
 }
 
-# The browser PUTs uploads straight to quarantine/ on a signed URL: only the app's own origins, PUT only, and no
-# extra request headers, so a browser cannot set object metadata. Empty until the app has a domain.
+# The browser PUTs uploads straight to quarantine/ on a signed URL: only the app's own origins, PUT only, and only
+# the two signed encryption headers the bucket policy requires (no metadata headers). Empty until there is an origin.
 resource "aws_s3_bucket_cors_configuration" "documents" {
   count  = length(var.upload_origins) > 0 ? 1 : 0
   bucket = aws_s3_bucket.documents.id
@@ -119,6 +119,7 @@ resource "aws_s3_bucket_cors_configuration" "documents" {
   cors_rule {
     allowed_methods = ["PUT"]
     allowed_origins = var.upload_origins
+    allowed_headers = ["x-amz-server-side-encryption", "x-amz-server-side-encryption-aws-kms-key-id"]
     max_age_seconds = 300
   }
 }
