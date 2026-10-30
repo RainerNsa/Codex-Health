@@ -80,12 +80,15 @@ function build(input: Parameters<typeof buildRuleSet>[0]): RuleSet {
   };
 }
 
-/** The facility's settings under the caller's bindings; null when the organisation has no rule set or the facility no profile. */
-export async function loadSettings(q: Query, facilityId: string, organizationId: string): Promise<RuleSet | null> {
+/** The facility's settings under the caller's bindings: the latest versions, or the versions an evaluation pinned.
+ *  Null when the organisation has no rule set or the facility no profile (at those versions). */
+export async function loadSettings(q: Query, facilityId: string, organizationId: string, at?: { ruleSetVersion: number; profileVersion: number }): Promise<RuleSet | null> {
   const rs = await q<{ version: number; criteria_document_ref: string; rules: Rule[] }>(
-    'SELECT version, criteria_document_ref, rules FROM rule_sets WHERE organization_id = $1 ORDER BY version DESC LIMIT 1', [organizationId]);
+    'SELECT version, criteria_document_ref, rules FROM rule_sets WHERE organization_id = $1 AND ($2::int IS NULL OR version = $2) ORDER BY version DESC LIMIT 1',
+    [organizationId, at?.ruleSetVersion ?? null]);
   const fp = await q<{ version: number; capabilities: Profile; disabled_rules: string[] }>(
-    'SELECT version, capabilities, disabled_rules FROM facility_profiles WHERE facility_id = $1 ORDER BY version DESC LIMIT 1', [facilityId]);
+    'SELECT version, capabilities, disabled_rules FROM facility_profiles WHERE facility_id = $1 AND ($2::int IS NULL OR version = $2) ORDER BY version DESC LIMIT 1',
+    [facilityId, at?.profileVersion ?? null]);
   if (!rs.rows[0] || !fp.rows[0]) return null;
   return buildRuleSet({
     rules: rs.rows[0].rules, ruleSetVersion: rs.rows[0].version, criteriaRef: rs.rows[0].criteria_document_ref,

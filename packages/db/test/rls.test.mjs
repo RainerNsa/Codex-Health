@@ -465,13 +465,19 @@ test('row-level security, organisation isolation, audit immutability, the hash c
       await c.query("INSERT INTO user_facility_roles (user_id, facility_id, role) VALUES ($1, $2, 'facility_admin')", [USER.a, FAC.a1]);
       const evId = (await c.query('SELECT evaluation_id FROM decisions WHERE id = $1', [dec])).rows[0].evaluation_id;
       const amend = (await c.query("INSERT INTO decisions (facility_id, referral_id, evaluation_id, recommended_outcome, decision, override_reason, decided_by, amends_decision_id, amendment_reason) VALUES ($1, $2, $3, 'admit', 'do_not_admit', 'SYNTHETIC', $4, $5, 'SYNTHETIC') RETURNING id", [FAC.a1, ref, evId, USER.a, dec])).rows[0].id;
-      await expectFailure(c, T, /must name the original decision/, [FAC.a1, ref, 'T12', 'ready_for_review', 'finalized', null, null, '{}', amend, me]);
+      await expectFailure(c, T, /must name the referral's latest decision/, [FAC.a1, ref, 'T12', 'ready_for_review', 'finalized', null, null, '{}', amend, me]);
+      // as the app, an amendment or an amendment request needs a finalized referral (0011)
+      await c.query('SET LOCAL ROLE codex_app');
+      await expectFailure(c, "INSERT INTO decisions (facility_id, referral_id, evaluation_id, recommended_outcome, decision, override_reason, decided_by, amends_decision_id, amendment_reason) VALUES ($1, $2, $3, 'admit', 'do_not_admit', 'SYNTHETIC', $4, $5, 'SYNTHETIC')",
+        /an amendment needs a finalized referral/, [FAC.a1, ref, evId, USER.a, amend]);
+      await expectFailure(c, "INSERT INTO decision_requests (facility_id, referral_id, evaluation_id, decision, override_reason, requested_by, amends_decision_id, amendment_reason) VALUES ($1, $2, $3, 'do_not_admit', 'SYNTHETIC', $4, $5, 'SYNTHETIC')",
+        /names the latest decision of a finalized referral/, [FAC.a1, ref, evId, USER.a, amend]);
       await c.query('ROLLBACK TO SAVEPOINT t12');
       await c.query('SET LOCAL ROLE codex_app');
       // T12 names the original decision, made by the same user who finalizes
       // (as the owner, so the actor check does not answer first: USER.b did not make this decision)
       await c.query('RESET ROLE');
-      await expectFailure(c, T, /must name the original decision/, [FAC.a1, ref, 'T12', 'ready_for_review', 'finalized', null, null, '{}', dec, `user:${USER.b}`]);
+      await expectFailure(c, T, /must name the referral's latest decision/, [FAC.a1, ref, 'T12', 'ready_for_review', 'finalized', null, null, '{}', dec, `user:${USER.b}`]);
       await c.query('SET LOCAL ROLE codex_app');
       await c.query(T, [FAC.a1, ref, 'T12', 'ready_for_review', 'finalized', null, null, '{}', dec, me]);
       assert.equal(await status(), 'finalized');
@@ -545,7 +551,7 @@ test('row-level security, organisation isolation, audit immutability, the hash c
       await expectFailure(c, REQ, /not ready_for_review/, [FAC.a1, ref, ev, 'admit', 'SYNTHETIC', USER.a]);
       await c.query('ROLLBACK TO SAVEPOINT reqg');
       await actAs(VIEWER);
-      await expectFailure(c, REQ, /holds no Reviewer or Admin role/, [FAC.a1, ref, ev, 'admit', 'SYNTHETIC', VIEWER]);
+      await expectFailure(c, REQ, /may not decide this here/, [FAC.a1, ref, ev, 'admit', 'SYNTHETIC', VIEWER]);
       // the T12 actor must hold a Reviewer or Admin role, even when it is the acting user
       await actAs(USER.b);
       await expectFailure(c, "INSERT INTO referral_transitions (facility_id, referral_id, transition, from_status, to_status, note, created_by) VALUES ($1, $2, 'T8', 'ready_for_review', 'on_hold', 'n', $3)", /may not move referrals/, [FAC.a1, ref, `user:${USER.b}`]);
@@ -586,10 +592,11 @@ test('row-level security, organisation isolation, audit immutability, the hash c
       const dec = (await c.query(DEC, args())).rows[0].id;
       // only the decider or the co-signer finalizes it, not another Admin
       await actAs(ADMIN2);
-      await expectFailure(c, "INSERT INTO referral_transitions (facility_id, referral_id, transition, from_status, to_status, decision_id, created_by) VALUES ($1, $2, 'T12', 'ready_for_review', 'finalized', $3, $4)", /must name the original decision/, [FAC.a1, ref, dec, `user:${ADMIN2}`]);
+      await expectFailure(c, "INSERT INTO referral_transitions (facility_id, referral_id, transition, from_status, to_status, decision_id, created_by) VALUES ($1, $2, 'T12', 'ready_for_review', 'finalized', $3, $4)", /must name the referral's latest decision/, [FAC.a1, ref, dec, `user:${ADMIN2}`]);
       await actAs(ADMIN);
       await c.query("INSERT INTO referral_transitions (facility_id, referral_id, transition, from_status, to_status, decision_id, created_by) VALUES ($1, $2, 'T12', 'ready_for_review', 'finalized', $3, $4)", [FAC.a1, ref, dec, `user:${ADMIN}`]);
       await c.query('SET CONSTRAINTS decisions_finalized_check IMMEDIATE');
+      await c.query('SET CONSTRAINTS decisions_finalized_check DEFERRED'); // the mode lasts the transaction
       const row = (await c.query('SELECT decided_by, cosigned_by, cosigned_role, hard_stop_override FROM decisions WHERE id = $1', [dec])).rows[0];
       assert.deepEqual(row, { decided_by: USER.a, cosigned_by: ADMIN, cosigned_role: 'facility_admin', hard_stop_override: true });
       await c.query('RESET ROLE');
@@ -601,10 +608,69 @@ test('row-level security, organisation isolation, audit immutability, the hash c
         { actor: `user:${ADMIN}`, action: 'decision.cosigned' },
         { actor: `user:${ADMIN}`, action: 'referral.finalized' },
       ]);
-      // amendments by the app role wait for T13
       await actAs(ADMIN);
-      await expectFailure(c, "INSERT INTO decisions (facility_id, referral_id, evaluation_id, recommended_outcome, decision, override_reason, decided_by, amends_decision_id, amendment_reason) VALUES ($1, $2, $3, 'do_not_admit', 'do_not_admit', null, $4, $5, 'SYNTHETIC')", /amendments arrive with T13/, [FAC.a1, ref, ev, ADMIN, dec]);
       await expectFailure(c, 'UPDATE decision_requests SET override_reason = $1', /immutable|permission denied/, ['x']);
+
+      // --- amendments (0011, T13) on the finalized referral above ----------------------------------------------
+      const AMEND = `INSERT INTO decisions (facility_id, referral_id, evaluation_id, recommended_outcome, decision, override_reason, decided_by, cosigned_by, decision_request_id, amends_decision_id, amendment_reason)
+        VALUES ($1, $2, $3, 'do_not_admit', $4, $5, $6, $7, $8, $9, $10) RETURNING id`;
+      const T13 = "INSERT INTO referral_transitions (facility_id, referral_id, transition, from_status, to_status, decision_id, created_by) VALUES ($1, $2, 'T13', $3, 'amended', $4, $5)";
+      // a Reviewer never amends (0003); the original is never updated
+      await actAs(USER.a);
+      await expectFailure(c, AMEND, /only an Admin may amend/, [FAC.a1, ref, ev, 'do_not_admit', null, USER.a, null, null, dec, 'SYNTHETIC: amend']);
+      await expectFailure(c, 'UPDATE decisions SET decision = $1', /immutable|permission denied/, ['do_not_admit']);
+      // an Admin's amendment back to the recommendation needs no co-sign, and carries its T13 by commit
+      await actAs(ADMIN2);
+      await c.query('SAVEPOINT not13');
+      await c.query(AMEND, [FAC.a1, ref, ev, 'do_not_admit', null, ADMIN2, null, null, dec, 'SYNTHETIC: amend']);
+      await assert.rejects(c.query('SET CONSTRAINTS decisions_finalized_check IMMEDIATE'), /never finalized or amended/);
+      await c.query('ROLLBACK TO SAVEPOINT not13');
+      await actAs(ADMIN2);
+      // an Admit over the hard stop, amended without a co-sign, is refused by 0003's CHECK
+      await expectFailure(c, AMEND, /decisions_hard_stop_cosign/, [FAC.a1, ref, ev, 'admit', 'SYNTHETIC', ADMIN2, null, null, dec, 'SYNTHETIC: amend']);
+      // T13 never names an original decision, even the latest one, by its own co-signer
+      await actAs(ADMIN);
+      await expectFailure(c, T13, /must name the referral's latest decision/, [FAC.a1, ref, 'finalized', dec, `user:${ADMIN}`]);
+      await actAs(ADMIN2);
+      const am1 = (await c.query(AMEND, [FAC.a1, ref, ev, 'do_not_admit', null, ADMIN2, null, null, dec, 'SYNTHETIC: reversed on review'])).rows[0].id;
+      // T13 names the latest decision (the amendment), not the original
+      await expectFailure(c, T13, /must name the referral's latest decision/, [FAC.a1, ref, 'finalized', dec, `user:${ADMIN2}`]);
+      await c.query(T13, [FAC.a1, ref, 'finalized', am1, `user:${ADMIN2}`]);
+      // one T12/T13 per decision: replaying T13 on the same amendment is refused
+      await expectFailure(c, T13, /referral_transitions_one_per_decision/, [FAC.a1, ref, 'amended', am1, `user:${ADMIN2}`]);
+      await c.query('SET CONSTRAINTS decisions_finalized_check IMMEDIATE');
+      await c.query('SET CONSTRAINTS decisions_finalized_check DEFERRED'); // the mode lasts the transaction
+      // a second amendment to Admit over the hard stop goes through a request and a different Admin
+      const AREQ = 'INSERT INTO decision_requests (facility_id, referral_id, evaluation_id, decision, override_reason, requested_by, amends_decision_id, amendment_reason) VALUES ($1, $2, $3, $4, $5, $6, $7, $8) RETURNING id';
+      await actAs(USER.a);
+      await expectFailure(c, AREQ, /may not decide this here/, [FAC.a1, ref, ev, 'admit', 'SYNTHETIC', USER.a, am1, 'SYNTHETIC: re-amend']);
+      await actAs(ADMIN2);
+      await expectFailure(c, AREQ, /names the latest decision of a finalized referral/, [FAC.a1, ref, ev, 'admit', 'SYNTHETIC', ADMIN2, dec, 'SYNTHETIC: re-amend']);
+      const areq = (await c.query(AREQ, [FAC.a1, ref, ev, 'admit', 'SYNTHETIC', ADMIN2, am1, 'SYNTHETIC: re-amend'])).rows[0].id;
+      // overtaken: another Admin amends directly; the request cannot be carried out on top of the newer amendment
+      await c.query('SAVEPOINT overtaken');
+      await actAs(ADMIN);
+      const am1b = (await c.query(AMEND, [FAC.a1, ref, ev, 'do_not_admit', null, ADMIN, null, null, am1, 'SYNTHETIC: direct'])).rows[0].id;
+      await c.query(T13, [FAC.a1, ref, 'amended', am1b, `user:${ADMIN}`]);
+      await expectFailure(c, AMEND, /carry out the latest request/, [FAC.a1, ref, ev, 'admit', 'SYNTHETIC', ADMIN2, ADMIN, areq, am1b, 'SYNTHETIC: re-amend']);
+      await c.query('ROLLBACK TO SAVEPOINT overtaken');
+      await actAs(ADMIN);
+      await expectFailure(c, AMEND, /carry out the latest request/, [FAC.a1, ref, ev, 'admit', 'SYNTHETIC', ADMIN2, ADMIN, areq, am1, 'SYNTHETIC: different reason']);
+      const am2 = (await c.query(AMEND, [FAC.a1, ref, ev, 'admit', 'SYNTHETIC', ADMIN2, ADMIN, areq, am1, 'SYNTHETIC: re-amend'])).rows[0].id;
+      await c.query(T13, [FAC.a1, ref, 'amended', am2, `user:${ADMIN}`]);
+      await c.query('SET CONSTRAINTS decisions_finalized_check IMMEDIATE');
+      await c.query('SET CONSTRAINTS decisions_finalized_check DEFERRED'); // the mode lasts the transaction
+      await c.query('RESET ROLE');
+      assert.equal((await c.query('SELECT status FROM referrals WHERE id = $1', [ref])).rows[0].status, 'amended');
+      const amendActs = (await c.query("SELECT actor, action FROM audit_log WHERE entity_id IN ($1, $2, $3, $4) AND action IN ('decision.amended', 'decision.cosigned', 'decision.cosign_requested', 'referral.amended') ORDER BY seq", [am1, am2, areq, ref])).rows;
+      assert.deepEqual(amendActs, [
+        { actor: `user:${ADMIN2}`, action: 'decision.amended' },
+        { actor: `user:${ADMIN2}`, action: 'referral.amended' },
+        { actor: `user:${ADMIN2}`, action: 'decision.cosign_requested' },
+        { actor: `user:${ADMIN2}`, action: 'decision.amended' },
+        { actor: `user:${ADMIN}`, action: 'decision.cosigned' },
+        { actor: `user:${ADMIN}`, action: 'referral.amended' },
+      ]);
     });
 
     await sub('CONSTRAINTS check queries return zero rows', async () => {

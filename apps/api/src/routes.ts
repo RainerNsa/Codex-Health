@@ -72,9 +72,9 @@ async function currentFacts(q: Query, facilityId: string, referralId: string): P
 }
 
 /** The facility's settings; a stored rule set the engine refuses is 409 rule_set_refused, never a 500. */
-async function loadSettings(q: Query, facilityId: string, organizationId: string): Promise<RuleSet | null> {
+async function loadSettings(q: Query, facilityId: string, organizationId: string, at?: { ruleSetVersion: number; profileVersion: number }): Promise<RuleSet | null> {
   try {
-    return await loadStored(q, facilityId, organizationId);
+    return await loadStored(q, facilityId, organizationId, at);
   } catch (err) {
     if (err instanceof RuleSetRefused) throw new HttpError(409, 'rule_set_refused');
     throw err;
@@ -162,9 +162,11 @@ async function referralView(q: Query, facilityId: string, referralId: string, ru
   const history = await q<Record<string, unknown>>(
     `SELECT transition, from_status, to_status, note, department, requested_items, created_by, created_at
      FROM referral_transitions WHERE facility_id = $1 AND referral_id = $2 ORDER BY created_at`, [facilityId, referralId]);
-  const decision = await q<Record<string, unknown>>(
-    `SELECT id, evaluation_id, recommended_outcome, decision, override_reason, decided_by, decided_at
-     FROM decisions WHERE facility_id = $1 AND referral_id = $2 ORDER BY decided_at DESC LIMIT 1`, [facilityId, referralId]);
+  // every decision, newest first: the original and each amendment (T13), none ever changed
+  const decisions = await q<{ id: string } & Record<string, unknown>>(
+    `SELECT id, evaluation_id, recommended_outcome, decision, override_reason, decided_by, cosigned_by, amends_decision_id, amendment_reason, decided_at
+     FROM decisions WHERE facility_id = $1 AND referral_id = $2 ORDER BY decided_at DESC`, [facilityId, referralId]);
+  const closed = status === 'finalized' || status === 'amended';
   const canWrite = WRITE_ROLES.has(role);
   // the evaluation was made under settings that have since changed: decide only after re-evaluating
   const outdated = !!ev && !!ruleSet && (ev.rule_set_version !== ruleSet.ruleSetVersion || ev.facility_profile_version !== ruleSet.profileVersion);
@@ -172,15 +174,21 @@ async function referralView(q: Query, facilityId: string, referralId: string, ru
   // the latest co-sign request, while it can still be carried out: no decision yet, on the latest evaluation,
   // made under the current settings
   // shown with the requester's name (staff, not patient data), and only while the requester can still decide here
-  const pending = (await q<{ id: string; evaluation_id: string; decision: string; override_reason: string | null; requested_by: string; requested_by_name: string; created_at: string; active: boolean }>(
+  const pending = (await q<{ id: string; evaluation_id: string; decision: string; override_reason: string | null; requested_by: string; requested_by_name: string; created_at: string; active: boolean; amends_decision_id: string | null; amendment_reason: string | null }>(
     `SELECT d.id, d.evaluation_id, d.decision, d.override_reason, d.requested_by, u.display_name AS requested_by_name, d.created_at,
+            d.amends_decision_id, d.amendment_reason,
             EXISTS (SELECT 1 FROM user_facility_roles r WHERE r.user_id = d.requested_by AND r.facility_id = d.facility_id
-                    AND r.role IN ('facility_admin', 'admissions_reviewer')) AS active
+                    AND r.role IN ('facility_admin', 'admissions_reviewer')
+                    AND (d.amends_decision_id IS NULL OR r.role = 'facility_admin')) AS active
      FROM decision_requests d JOIN users u ON u.id = d.requested_by
      WHERE d.facility_id = $1 AND d.referral_id = $2 ORDER BY d.created_at DESC LIMIT 1`, [facilityId, referralId])).rows[0];
-  const pendingRequest = pending && pending.active && status === 'ready_for_review' && !outdated && ev?.id === pending.evaluation_id
+  // an original request stands while the referral is in review under current settings; an amendment request while
+  // it still amends the latest decision (the facts are frozen after finalize)
+  const pendingRequest = pending && pending.active && ev?.id === pending.evaluation_id
+    && (pending.amends_decision_id === null ? status === 'ready_for_review' && !outdated : closed && pending.amends_decision_id === decisions.rows[0]?.id)
     ? { id: pending.id, evaluation_id: pending.evaluation_id, decision: pending.decision, override_reason: pending.override_reason,
         requested_by: pending.requested_by, requested_by_name: pending.requested_by_name, created_at: pending.created_at,
+        amends_decision_id: pending.amends_decision_id, amendment_reason: pending.amendment_reason,
         can_cosign: role === 'facility_admin' && who?.userId !== pending.requested_by } : null;
   const explanations = Object.fromEntries((ruleSet?.rules ?? []).map((r) => [r.id, (r as { explanation?: string }).explanation ?? null]));
   return {
@@ -197,7 +205,8 @@ async function referralView(q: Query, facilityId: string, referralId: string, ru
     cosign: { admit: await hardStopEverFired(q, facilityId, referralId), any: flipped },
     pending_request: pendingRequest,
     transitions: history.rows,
-    decision: decision.rows[0] ?? null,
+    decision: decisions.rows[0] ?? null,
+    decisions: decisions.rows,
     // what this caller may do now; the API and the database check each again on the write
     actions: canWrite ? [
       ...(Object.keys(TRANSITIONS) as Action[]).filter((a) => (TRANSITIONS[a].from as readonly string[]).includes(status)),
@@ -205,6 +214,7 @@ async function referralView(q: Query, facilityId: string, referralId: string, ru
       // finalize covers both paths: a decision that needs a co-sign is filed as a request instead
       ...(status === 'ready_for_review' && ev && !outdated ? ['finalize'] : []),
       ...(pendingRequest?.can_cosign ? ['cosign'] : []),
+      ...(closed && ev && role === 'facility_admin' ? ['amend'] : []),
     ] : [],
   };
 }
@@ -385,44 +395,69 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx }): void {
   });
 
   /** Every check a decision passes before it is recorded or filed for co-sign (§5.1 T12; 2.7; I5). */
-  const checkDecision = async (q: Query, fid: string, rid: string, ruleSet: RuleSet, evaluationId: string, decision: 'admit' | 'do_not_admit', reason: string | null) => {
+  const checkDecision = async (q: Query, fid: string, org: string, rid: string, ruleSet: RuleSet, evaluationId: string, decision: 'admit' | 'do_not_admit', reason: string | null, amend = false) => {
     const ref = await q<{ status: string }>('SELECT status FROM referrals WHERE facility_id = $1 AND id = $2 FOR UPDATE', [fid, rid]);
     if (!ref.rows[0]) throw new HttpError(404, 'not_found');
-    if (ref.rows[0].status !== 'ready_for_review') throw new HttpError(409, 'transition_not_allowed');
+    const status = ref.rows[0].status;
+    if (amend ? status !== 'finalized' && status !== 'amended' : status !== 'ready_for_review') throw new HttpError(409, 'transition_not_allowed');
     const ev = await latestEvaluation(q, fid, rid);
+    // the decision an amendment corrects: the referral's latest
+    const latestDecision = amend ? (await q<{ id: string }>('SELECT id FROM decisions WHERE facility_id = $1 AND referral_id = $2 ORDER BY decided_at DESC LIMIT 1', [fid, rid])).rows[0]?.id ?? null : null;
+    // after finalize the facts are frozen and the referral cannot be re-evaluated, so an amendment decides on the
+    // recorded evaluation even if the settings changed since
+    // ...but the Admit and flip gates then hold under both the settings the evaluation was made under and the
+    // current ones: switching a rule off and back cannot let an Admit through (security review of PR #26)
+    if (amend && ev && ev.id === evaluationId) {
+      const pinned = await loadSettings(q, fid, org, { ruleSetVersion: ev.rule_set_version, profileVersion: ev.facility_profile_version });
+      if (!pinned) throw new HttpError(409, 'rule_set_refused');
+      return finishCheck(q, fid, rid, [ruleSet, pinned], ev, decision, reason, status, latestDecision);
+    }
     // decided on what the Reviewer saw, under the settings in force now: anything newer is refused
     // shortcut: settings are read before the referral lock and a settings save takes no referral lock, so a save
     // committing in that gap is not seen by this decision; close it (re-read versions under a shared lock) before pilot
     if (!ev || ev.id !== evaluationId || ev.rule_set_version !== ruleSet.ruleSetVersion || ev.facility_profile_version !== ruleSet.profileVersion) {
       throw new HttpError(409, 'evaluation_stale');
     }
+    return finishCheck(q, fid, rid, [ruleSet], ev, decision, reason, status, latestDecision);
+  };
+  const finishCheck = async (q: Query, fid: string, rid: string, ruleSets: RuleSet[], ev: EvaluationRow, decision: 'admit' | 'do_not_admit', reason: string | null, status: string, latestDecision: string | null) => {
     const facts = await currentFacts(q, fid, rid);
     if (!Array.isArray(ev.trace.confirmation_set) || confirmation(ev.trace.confirmation_set, facts).some((c) => !c.confirmed)) throw new HttpError(409, 'confirmation_incomplete');
-    if (decision === 'admit' && confirmation(admitKeys(ruleSet, ev), facts).some((c) => !c.known)) throw new HttpError(409, 'confirmation_incomplete');
+    if (decision === 'admit' && ruleSets.some((rs) => confirmation(admitKeys(rs, ev), facts).some((c) => !c.known))) throw new HttpError(409, 'confirmation_incomplete');
     const override = decision !== ev.outcome;
     if (override !== (reason !== null)) throw new HttpError(400, override ? 'override_reason_required' : 'invalid_decision');
     // a hard stop overridden to Admit, or any decision after a flipped hard-stop input, needs an Admin co-sign
-    const needsCosign = (decision === 'admit' && await hardStopEverFired(q, fid, rid)) || await hardStopFlipped(q, fid, rid, ruleSet);
-    return { ev, override, needsCosign };
+    let flipped = false;
+    for (const rs of ruleSets) flipped ||= await hardStopFlipped(q, fid, rid, rs);
+    const needsCosign = (decision === 'admit' && await hardStopEverFired(q, fid, rid)) || flipped;
+    return { ev, override, needsCosign, status, latestDecision };
   };
   const decisionBody = (body: unknown) => {
-    const b = (body ?? {}) as { evaluation_id?: unknown; decision?: unknown; override_reason?: unknown };
+    const b = (body ?? {}) as { evaluation_id?: unknown; decision?: unknown; override_reason?: unknown; amendment_reason?: unknown };
+    // present but blank is a missing reason, not an original decision
+    if (b.amendment_reason !== undefined && b.amendment_reason !== null && (typeof b.amendment_reason !== 'string' || !b.amendment_reason.trim())) throw new HttpError(400, 'amendment_reason_required');
+    const amendmentReason = typeof b.amendment_reason === 'string' ? b.amendment_reason.trim() : null;
+    if (amendmentReason && amendmentReason.length > NOTE_MAX) throw new HttpError(400, 'invalid_decision');
     const decision: 'admit' | 'do_not_admit' | null = b.decision === 'admit' || b.decision === 'do_not_admit' ? b.decision : null;
     const reason = typeof b.override_reason === 'string' && b.override_reason.trim() ? b.override_reason.trim() : null;
     if (!decision || typeof b.evaluation_id !== 'string' || !UUID.test(b.evaluation_id) || (reason && reason.length > NOTE_MAX)) throw new HttpError(400, 'invalid_decision');
-    return { evaluationId: b.evaluation_id, decision, reason };
+    return { evaluationId: b.evaluation_id, decision, reason, amendmentReason };
   };
   /** Record the decision and finalize (T12) as the acting user: the decider, or the co-signer of a request. */
-  const record = async (q: Query, fid: string, rid: string, user: string, ev: EvaluationRow, d: { decision: string; reason: string | null; override: boolean; decidedBy: string; request: string | null }) => {
+  /** Record the decision as the acting user (the decider, or the co-signer of a request) and move the referral:
+   *  T12 for an original decision, T13 for an amendment of the latest one. */
+  const record = async (q: Query, fid: string, rid: string, user: string, ev: EvaluationRow,
+    d: { decision: string; reason: string | null; override: boolean; decidedBy: string; request: string | null; amends: string | null; amendmentReason: string | null; from: string }) => {
     const row = await q<{ id: string }>(
-      `INSERT INTO decisions (facility_id, referral_id, evaluation_id, recommended_outcome, recommended_clinical_outcome, decision, override_reason, decided_by, decided_role, cosigned_by, decision_request_id)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'viewer', $9, $10) RETURNING id`,
-      [fid, rid, ev.id, ev.outcome, ev.clinical_outcome, d.decision, d.reason, d.decidedBy, d.request ? user : null, d.request]);
+      `INSERT INTO decisions (facility_id, referral_id, evaluation_id, recommended_outcome, recommended_clinical_outcome, decision, override_reason, decided_by, decided_role, cosigned_by, decision_request_id, amends_decision_id, amendment_reason)
+       VALUES ($1, $2, $3, $4, $5, $6, $7, $8, 'viewer', $9, $10, $11, $12) RETURNING id`,
+      [fid, rid, ev.id, ev.outcome, ev.clinical_outcome, d.decision, d.reason, d.decidedBy, d.request ? user : null, d.request, d.amends, d.amendmentReason]);
     const decisionId = row.rows[0]!.id;
     await q(
       `INSERT INTO referral_transitions (facility_id, referral_id, transition, from_status, to_status, decision_id, created_by)
-       VALUES ($1, $2, 'T12', 'ready_for_review', 'finalized', $3, $4)`, [fid, rid, decisionId, `user:${user}`]);
-    await emit(q, fid, rid, user, 'decision.finalized', {
+       VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+      [fid, rid, d.amends ? 'T13' : 'T12', d.from, d.amends ? 'amended' : 'finalized', decisionId, `user:${user}`]);
+    await emit(q, fid, rid, user, d.amends ? 'decision.amended' : 'decision.finalized', {
       decision_id: decisionId, evaluation_id: ev.id, outcome: d.decision, override: d.override, cosigner_present: d.request !== null,
       decisive_fact_count: (ev.trace.confirmation_set ?? []).length, decisive_viewed_count: 0, // no source documents to view in manual entry
     });
@@ -438,9 +473,30 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx }): void {
         const who = await enter(q, fid, user);
         if (!WRITE_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
         const ruleSet = await settingsOrRefuse(q, fid, who.organizationId);
-        const { ev, override, needsCosign } = await checkDecision(q, fid, rid, ruleSet, evaluationId, decision, reason);
+        const { ev, override, needsCosign } = await checkDecision(q, fid, who.organizationId, rid, ruleSet, evaluationId, decision, reason);
         if (needsCosign) throw new HttpError(409, 'cosign_required'); // file it with POST .../decision-requests
-        await record(q, fid, rid, user, ev, { decision, reason, override, decidedBy: user, request: null });
+        await record(q, fid, rid, user, ev, { decision, reason, override, decidedBy: user, request: null, amends: null, amendmentReason: null, from: 'ready_for_review' });
+        return referralView(q, fid, rid, ruleSet, who);
+      });
+      return reply.code(201).send(body);
+    } catch (err) { return fail(reply, err); }
+  });
+
+  // --- amend (T13): an Admin records a new decision on a finalized referral; the earlier ones stay untouched -----
+  app.post<{ Params: { fid: string; rid: string }; Body: unknown }>('/api/facilities/:fid/referrals/:rid/amendments', async (req, reply) => {
+    try {
+      const user = caller(req.headers);
+      const { fid, rid } = ids(req.params);
+      const { evaluationId, decision, reason, amendmentReason } = decisionBody(req.body);
+      if (!amendmentReason) throw new HttpError(400, 'amendment_reason_required');
+      const body = await tx(async (q) => {
+        const who = await enter(q, fid, user);
+        if (!WRITE_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
+        if (who.role !== 'facility_admin') throw new HttpError(403, 'amend_admin_only');
+        const ruleSet = await settingsOrRefuse(q, fid, who.organizationId);
+        const { ev, override, needsCosign, status, latestDecision } = await checkDecision(q, fid, who.organizationId, rid, ruleSet, evaluationId, decision, reason, true);
+        if (needsCosign) throw new HttpError(409, 'cosign_required'); // file it with POST .../decision-requests and an amendment_reason
+        await record(q, fid, rid, user, ev, { decision, reason, override, decidedBy: user, request: null, amends: latestDecision, amendmentReason, from: status });
         return referralView(q, fid, rid, ruleSet, who);
       });
       return reply.code(201).send(body);
@@ -452,15 +508,18 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx }): void {
     try {
       const user = caller(req.headers);
       const { fid, rid } = ids(req.params);
-      const { evaluationId, decision, reason } = decisionBody(req.body);
+      const { evaluationId, decision, reason, amendmentReason } = decisionBody(req.body);
       const body = await tx(async (q) => {
         const who = await enter(q, fid, user);
         if (!WRITE_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
+        // an amendment_reason makes it an amendment request (T13): Admins only
+        if (amendmentReason && who.role !== 'facility_admin') throw new HttpError(403, 'amend_admin_only');
         const ruleSet = await settingsOrRefuse(q, fid, who.organizationId);
-        const { needsCosign } = await checkDecision(q, fid, rid, ruleSet, evaluationId, decision, reason);
+        const { needsCosign, latestDecision } = await checkDecision(q, fid, who.organizationId, rid, ruleSet, evaluationId, decision, reason, amendmentReason !== null);
         if (!needsCosign) throw new HttpError(409, 'cosign_not_needed'); // record it directly
-        await q('INSERT INTO decision_requests (facility_id, referral_id, evaluation_id, decision, override_reason, requested_by) VALUES ($1, $2, $3, $4, $5, $6)',
-          [fid, rid, evaluationId, decision, reason, user]);
+        await q(
+          'INSERT INTO decision_requests (facility_id, referral_id, evaluation_id, decision, override_reason, requested_by, amends_decision_id, amendment_reason) VALUES ($1, $2, $3, $4, $5, $6, $7, $8)',
+          [fid, rid, evaluationId, decision, reason, user, latestDecision, amendmentReason]);
         return referralView(q, fid, rid, ruleSet, who);
       });
       return reply.code(201).send(body);
@@ -479,17 +538,24 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx }): void {
         const ruleSet = await settingsOrRefuse(q, fid, who.organizationId);
         // lock before reading the latest request, so a request filed meanwhile is seen here, not refused by the database
         await q('SELECT 1 FROM referrals WHERE facility_id = $1 AND id = $2 FOR UPDATE', [fid, rid]);
-        const r = (await q<{ id: string; evaluation_id: string; decision: 'admit' | 'do_not_admit'; override_reason: string | null; requested_by: string; active: boolean }>(
-          `SELECT d.id, d.evaluation_id, d.decision, d.override_reason, d.requested_by,
+        const r = (await q<{ id: string; evaluation_id: string; decision: 'admit' | 'do_not_admit'; override_reason: string | null; requested_by: string; active: boolean; amends_decision_id: string | null; amendment_reason: string | null }>(
+          `SELECT d.id, d.evaluation_id, d.decision, d.override_reason, d.requested_by, d.amends_decision_id, d.amendment_reason,
                   EXISTS (SELECT 1 FROM user_facility_roles r WHERE r.user_id = d.requested_by AND r.facility_id = d.facility_id
-                          AND r.role IN ('facility_admin', 'admissions_reviewer')) AS active
+                          AND r.role IN ('facility_admin', 'admissions_reviewer')
+                    AND (d.amends_decision_id IS NULL OR r.role = 'facility_admin')) AS active
            FROM decision_requests d WHERE d.facility_id = $1 AND d.referral_id = $2 ORDER BY d.created_at DESC LIMIT 1`, [fid, rid])).rows[0];
         // only the latest request, by someone who can still decide here; an older one was replaced
         if (!r || r.id !== qid || !r.active) throw new HttpError(409, 'request_not_current');
         if (r.requested_by === user) throw new HttpError(409, 'cosign_own_request');
         // the request is re-checked as it stands now: a new evaluation or a settings change makes it stale
-        const { ev, override } = await checkDecision(q, fid, rid, ruleSet, r.evaluation_id, r.decision, r.override_reason);
-        await record(q, fid, rid, user, ev, { decision: r.decision, reason: r.override_reason, override, decidedBy: r.requested_by, request: r.id });
+        const amend = r.amends_decision_id !== null;
+        const { ev, override, status, latestDecision } = await checkDecision(q, fid, who.organizationId, rid, ruleSet, r.evaluation_id, r.decision, r.override_reason, amend);
+        // an amendment request still amends the latest decision (a newer amendment replaced it otherwise)
+        if (amend && latestDecision !== r.amends_decision_id) throw new HttpError(409, 'request_not_current');
+        await record(q, fid, rid, user, ev, {
+          decision: r.decision, reason: r.override_reason, override, decidedBy: r.requested_by, request: r.id,
+          amends: r.amends_decision_id, amendmentReason: r.amendment_reason, from: status,
+        });
         return referralView(q, fid, rid, ruleSet, who);
       });
       return reply.code(201).send(body);
