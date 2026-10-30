@@ -1,11 +1,12 @@
 // Manual fact entry (SPEC §5 T7, dev-alignment 2.1): the first reviewer-facing screen. Every value the API
 // returns is rendered as text (no HTML injection anywhere, CONSTRAINTS Floor). Defaults are the synthetic seed
 // (scripts/dev/seed-synthetic.mjs): ZZTEST Alpha Facility 1 and its Reviewer.
-import { useState, type FormEvent } from 'react';
+import { useEffect, useState, type FormEvent } from 'react';
 import { amendReferral, ApiError, resolveFailures, uploadDocument, cosignRequest, createReferral, enterFact, finalizeReferral, getReferral, moveReferral, reevaluateReferral, requestCosign, type ReferralView, type Tri } from './api.ts';
 import { ReviewPanel } from './ReviewPanel.tsx';
 import { DocumentsPanel } from './DocumentsPanel.tsx';
 import { QueuePanel } from './QueuePanel.tsx';
+import { useReviewTimer } from './reviewTimer.ts';
 import { SettingsPanel } from './SettingsPanel.tsx';
 
 const SEED_FACILITY = '00000000-0000-4000-8000-00000000f0a1';
@@ -59,6 +60,9 @@ export function App() {
   const [view, setView] = useState<ReferralView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  useReviewTimer(facility, user, view?.referral.id ?? null);
+  // a different user or facility never keeps another's referral open (or its review time)
+  useEffect(() => { setView(null); }, [user, facility]);
 
   const run = async (fn: () => Promise<ReferralView>): Promise<boolean> => {
     setBusy(true);
