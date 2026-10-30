@@ -7,6 +7,7 @@ import { ReviewPanel } from './ReviewPanel.tsx';
 import { DocumentsPanel } from './DocumentsPanel.tsx';
 import { QueuePanel } from './QueuePanel.tsx';
 import { useReviewTimer } from './reviewTimer.ts';
+import { Nav, Placeholder, type Screen } from './Placeholders.tsx';
 import { SettingsPanel } from './SettingsPanel.tsx';
 
 const SEED_FACILITY = '00000000-0000-4000-8000-00000000f0a1';
@@ -60,7 +61,9 @@ export function App() {
   const [view, setView] = useState<ReferralView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
-  useReviewTimer(facility, user, view?.referral.id ?? null);
+  const [screen, setScreen] = useState<Screen>('referrals');
+  // review time counts only while the referral is on screen: another screen ends (and reports) the session
+  useReviewTimer(facility, user, screen === 'referrals' ? view?.referral.id ?? null : null);
   // a different user or facility never keeps another's referral open (or its review time)
   useEffect(() => { setView(null); }, [user, facility]);
 
@@ -71,6 +74,7 @@ export function App() {
       const v = await fn();
       setView(v);
       setReferralId(v.referral.id);
+      setScreen('referrals');
       return true;
     } catch (err) {
       setError(err instanceof ApiError ? (ERROR_TEXT[err.code] ?? `Request failed (${err.status}).`) : 'The API is not reachable.');
@@ -83,7 +87,7 @@ export function App() {
   return (
     <main className="mx-auto max-w-5xl p-6 font-sans text-gray-900">
       <header className="mb-6">
-        <h1 className="text-xl font-semibold">Codex Health — referral review</h1>
+        <h1 className="text-xl font-semibold">Codex Health</h1>
         <p className="text-sm text-gray-600">Internal build. Synthetic data only. Local sign-in stub: no real accounts.</p>
       </header>
 
@@ -106,14 +110,17 @@ export function App() {
         </div>
       </section>
 
-      {/* a new facility or user starts an empty list: one person's queue never shows under another's name */}
-      <QueuePanel key={`${facility}:${user}`} facility={facility} user={user} onOpen={(id) => void run(() => getReferral(facility, id, user))} />
-
-      <SettingsPanel facility={facility} user={user} />
+      <Nav screen={screen} onSelect={setScreen} />
 
       {error && <p role="alert" className="mb-4 rounded border border-red-700 bg-red-50 p-3 text-sm">{error}</p>}
 
-      {view && (
+      {screen === 'settings' && <SettingsPanel facility={facility} user={user} />}
+      <Placeholder screen={screen} />
+
+      {/* a new facility or user starts an empty list: one person's queue never shows under another's name */}
+      {screen === 'referrals' && <QueuePanel key={`${facility}:${user}`} facility={facility} user={user} onOpen={(id) => void run(() => getReferral(facility, id, user))} />}
+
+      {screen === 'referrals' && view && (
         <DocumentsPanel view={view} busy={busy} on={{
           upload: async (files, type, replaces) => {
             let ok = true;
@@ -125,7 +132,7 @@ export function App() {
         }} />
       )}
 
-      {view && (
+      {screen === 'referrals' && view && (
         <div className="grid gap-6 lg:grid-cols-2">
           <section aria-labelledby="enter">
             <h2 id="enter" className="mb-2 font-semibold">Enter or correct a fact</h2>
