@@ -838,6 +838,40 @@ describe.skipIf(!url)('manual fact entry API', () => {
       expect((await retry(rid)).json().error).toBe('transition_not_allowed');
     });
 
+    it('retry is offered and allowed only with a failed document on a partial failure; the database refuses anything else', async () => {
+      const retry = (rid: string) => docApp.inject({ method: 'POST', url: `${refUrl(rid)}/documents/retry`, headers: as(U.reviewer) });
+      const setUp = async (n: number, doc: string, ref: string) => {
+        const rid = await newReferral();
+        const id = (await upload(rid, PDF(n))).json().documents[0].id as string;
+        await asOwner(FAC.a);
+        await c.query('UPDATE documents SET status = $2 WHERE id = $1', [id, doc]);
+        await c.query('UPDATE referrals SET status = $2 WHERE id = $1', [rid, ref]);
+        await c.query("SELECT set_config('app.facility_id', '', true)");
+        return { rid, id };
+      };
+      const onlyUnreadable = await setUp(81, 'unreadable', 'partial_failure');
+      expect((await get(refUrl(onlyUnreadable.rid), U.reviewer)).json().actions).not.toContain('retry_failed');
+      const refused = await retry(onlyUnreadable.rid);
+      expect([refused.statusCode, refused.json().error]).toEqual([409, 'transition_not_allowed']);
+
+      const failedInReview = await setUp(82, 'failed', 'ready_for_review');
+      expect((await get(refUrl(failedInReview.rid), U.reviewer)).json().actions).not.toContain('retry_failed');
+      const wrongState = await retry(failedInReview.rid);
+      expect([wrongState.statusCode, wrongState.json().error]).toEqual([409, 'transition_not_allowed']);
+
+      // the guard itself, as the app role, on a partial failure: only failed moves back
+      const processed = await setUp(83, 'processed', 'partial_failure');
+      await asOwner(FAC.a);
+      for (const id of [onlyUnreadable.id, processed.id]) {
+        await c.query('SAVEPOINT guard');
+        await c.query('SET LOCAL ROLE codex_app');
+        await expect(c.query("UPDATE documents SET status = 'uploaded' WHERE id = $1", [id])).rejects.toThrow(/codex_app may not move document/);
+        await c.query('ROLLBACK TO SAVEPOINT guard');
+        await c.query('RESET ROLE');
+      }
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+    });
+
     it('what changed: the outcome and each fact that differs from the evaluation before', async () => {
       const rid = await newReferral();
       expect((await post(factsUrl(rid), U.reviewer, fact('ventilator_use', 'no'))).json().changes).toBeNull();

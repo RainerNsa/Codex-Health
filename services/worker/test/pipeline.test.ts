@@ -458,6 +458,23 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
     assert.ok(!JSON.stringify(events).includes('CANARY'));
   });
 
+  test('a retried document is read on its own: earlier facts stay, and the referral goes to review', async () => {
+    const { rid, docs } = await referral('w5', 'w6');
+    const bad = docs[0]!;
+    const onlyGood: Ports = { versions: VERSIONS, ocr: async () => [{ page: 1, text: PAGE }], extract: async (p) => { if (p[0]!.document_id === bad) throw new Error('x'); return p.flatMap((d) => clean(d.document_id)); } };
+    await processReferral(tx, onlyGood, job(rid));
+    assert.equal((await state(rid)).status, 'partial_failure');
+    await asOwner();
+    await c.query("UPDATE documents SET status = 'uploaded' WHERE id = $1", [bad]); // what the API's retry does under T4
+    await c.query("UPDATE referrals SET status = 'processing' WHERE id = $1", [rid]);
+    const p = ports(() => [{ page: 1, text: PAGE }], clean);
+    await processReferral(tx, p, job(rid));
+    assert.equal(p.ocrCalls, 1); // only the retried document
+    const s = await state(rid);
+    assert.deepEqual([s.status, s.docs.every((d) => d.status === 'processed'), s.facts.length], ['ready_for_review', true, 3]);
+    assert.equal(s.evals.at(-1).sub_reasons.includes('processing_incomplete'), false);
+  });
+
   test('an unreadable document with an extraction outage on the rest is still an outage', async () => {
     const { rid, docs } = await referral('w3', 'w4');
     const p: Ports = { versions: VERSIONS, ocr: async (d) => (d.id === docs[0] ? [] : [{ page: 1, text: PAGE }]), extract: async () => { throw new Error('down'); } };
