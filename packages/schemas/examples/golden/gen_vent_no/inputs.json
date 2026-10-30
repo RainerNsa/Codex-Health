@@ -1,0 +1,15 @@
+{
+  "generator_version": "packet-gen-1",
+  "seed": -712148683,
+  "spec": {
+    "id": "gen_vent_no",
+    "focus": "ventilator_use",
+    "value": "no"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": 0.78,
+    "gray": 0.33,
+    "speckle": 57
+  }
+}

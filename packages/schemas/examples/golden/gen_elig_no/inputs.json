@@ -1,0 +1,15 @@
+{
+  "generator_version": "packet-gen-1",
+  "seed": 1575557093,
+  "spec": {
+    "id": "gen_elig_no",
+    "focus": "payer_eligibility_verified",
+    "value": "no"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": -0.6,
+    "gray": 0.06,
+    "speckle": 68
+  }
+}

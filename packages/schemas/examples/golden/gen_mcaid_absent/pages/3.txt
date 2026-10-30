@@ -1,0 +1,9 @@
+Fax received 2001-01-10 09:47  SYNTHETIC
+DISCHARGE SUMMARY (synthetic fixture; not a real document)
+Patient: ZZTEST CANARY-ALPHA   MRN: MRN-ZZCANARY-0000001   DOB: 1899-02-30
+
+Respiratory: no longer ventilator dependent and stable on room air.
+Plan: requires daily skilled therapy for gait retraining.
+Allergies: none recorded in this synthetic chart
+Diet: regular, thin liquids
+Vitals: BP 128/76, HR 82, temp 36.8, SpO2 96 percent

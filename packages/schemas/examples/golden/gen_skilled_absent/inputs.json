@@ -1,0 +1,15 @@
+{
+  "generator_version": "packet-gen-1",
+  "seed": 1555592382,
+  "spec": {
+    "id": "gen_skilled_absent",
+    "focus": "daily_skilled_need",
+    "value": "unknown"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": -0.18,
+    "gray": 0.32,
+    "speckle": 49
+  }
+}

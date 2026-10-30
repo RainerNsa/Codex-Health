@@ -1,0 +1,8 @@
+Fax received 2001-01-10 09:07  SYNTHETIC
+NURSING PROGRESS NOTE (synthetic fixture; not a real document)
+Patient: ZZTEST CANARY-ALPHA   MRN: MRN-ZZCANARY-0000001   DOB: 1899-02-30
+
+Family updated by phone this afternoon
+Behaviour: denies any aggressive behaviour this admission.
+Skin intact apart from the documented site
+Ate most of breakfast and lunch

@@ -1,0 +1,166 @@
+{
+  "packet_id": "gen_vent_no",
+  "set": "extraction_eval",
+  "generator_version": "packet-gen-1",
+  "referral_date": "2001-01-10",
+  "referral_type": "skilled",
+  "documents": [
+    {
+      "document_id": "doc_fax_cover",
+      "type": "fax_cover",
+      "pages": [
+        1
+      ],
+      "expected_status": "processed"
+    },
+    {
+      "document_id": "doc_face_sheet",
+      "type": "face_sheet",
+      "pages": [
+        2
+      ],
+      "expected_status": "processed"
+    },
+    {
+      "document_id": "doc_discharge_summary",
+      "type": "discharge_summary",
+      "pages": [
+        3
+      ],
+      "expected_status": "processed"
+    },
+    {
+      "document_id": "doc_nursing_note",
+      "type": "nursing_note",
+      "pages": [
+        4
+      ],
+      "expected_status": "processed"
+    }
+  ],
+  "facility_profile_ref": "examples/profiles/zztest-facility.json@1",
+  "rule_set_ref": "examples/rules@seed",
+  "expected": {
+    "outcome": "needs_review",
+    "clinical_outcome": "needs_review",
+    "financial_status": "clear",
+    "sub_reasons": [
+      "leadership"
+    ],
+    "triggered_rules": [
+      {
+        "rule_id": "seed.review.behavioral_escalation",
+        "fact_keys": [
+          "recent_aggression"
+        ]
+      }
+    ],
+    "missing": [],
+    "conflicts": []
+  },
+  "adversarial": {
+    "planted_visible": [],
+    "invisible_text": [],
+    "xss_values": [],
+    "instruction_text": [],
+    "identity_mismatch_pages": []
+  },
+  "fields": [
+    {
+      "key": "ventilator_use",
+      "value": {
+        "type": "tri_state",
+        "value": "no"
+      },
+      "document_id": "doc_discharge_summary",
+      "page": 3,
+      "quote": "weaned from the ventilator on day 4 and not on a ventilator now",
+      "span": {
+        "start": 242,
+        "end": 305
+      },
+      "negative_quotes": [],
+      "as_of_date": "2001-01-09",
+      "polarity": "near_miss_negative",
+      "is_critical": true,
+      "specially_protected": false
+    },
+    {
+      "key": "daily_skilled_need",
+      "value": {
+        "type": "tri_state",
+        "value": "no"
+      },
+      "document_id": "doc_discharge_summary",
+      "page": 3,
+      "quote": "does not need skilled nursing or therapy each day",
+      "span": {
+        "start": 390,
+        "end": 439
+      },
+      "negative_quotes": [],
+      "as_of_date": "2001-01-09",
+      "polarity": "near_miss_negative",
+      "is_critical": false,
+      "specially_protected": false
+    },
+    {
+      "key": "recent_aggression",
+      "value": {
+        "type": "tri_state",
+        "value": "yes"
+      },
+      "document_id": "doc_nursing_note",
+      "page": 4,
+      "quote": "struck a staff member during morning care two days ago",
+      "span": {
+        "start": 223,
+        "end": 277
+      },
+      "negative_quotes": [],
+      "as_of_date": "2001-01-09",
+      "polarity": "positive",
+      "is_critical": false,
+      "specially_protected": false
+    },
+    {
+      "key": "payer_medicaid_pending",
+      "value": {
+        "type": "tri_state",
+        "value": "no"
+      },
+      "document_id": "doc_face_sheet",
+      "page": 2,
+      "quote": "no Medicaid application is pending",
+      "span": {
+        "start": 258,
+        "end": 292
+      },
+      "negative_quotes": [],
+      "as_of_date": "2001-01-09",
+      "polarity": "near_miss_negative",
+      "is_critical": false,
+      "specially_protected": false
+    },
+    {
+      "key": "payer_eligibility_verified",
+      "value": {
+        "type": "tri_state",
+        "value": "yes"
+      },
+      "document_id": "doc_face_sheet",
+      "page": 2,
+      "quote": "benefits and eligibility confirmed with the payer today",
+      "span": {
+        "start": 191,
+        "end": 246
+      },
+      "negative_quotes": [],
+      "as_of_date": "2001-01-09",
+      "polarity": "positive",
+      "is_critical": false,
+      "specially_protected": false
+    }
+  ],
+  "reviewed_by": "agent-proxy"
+}

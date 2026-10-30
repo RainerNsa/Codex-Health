@@ -1,0 +1,15 @@
+{
+  "generator_version": "packet-gen-1",
+  "seed": -1957113556,
+  "spec": {
+    "id": "gen_conflict_vent",
+    "focus": "ventilator_use",
+    "value": "conflict"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": 1,
+    "gray": 0.38,
+    "speckle": 2
+  }
+}

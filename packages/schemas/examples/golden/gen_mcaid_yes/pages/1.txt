@@ -1,0 +1,8 @@
+Fax received 2001-01-10 09:21  SYNTHETIC
+FAX COVER SHEET (synthetic fixture; not a real document)
+Patient: ZZTEST CANARY-ALPHA   MRN: MRN-ZZCANARY-0000001   DOB: 1899-02-30
+
+To: ZZTEST Facility Admissions
+From: ZZTEST General Hospital, Case Management
+Pages: 4
+Re: skilled nursing referral
