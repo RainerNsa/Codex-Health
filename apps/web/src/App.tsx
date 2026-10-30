@@ -43,6 +43,7 @@ const ERROR_TEXT: Record<string, string> = {
   cosign_admin_only: 'Only an Admin can co-sign.',
   amend_admin_only: 'Only an Admin can amend a decision.',
   storage_unavailable: 'Document storage is not configured on this server.',
+  queue_unavailable: 'The referral is saved, but its documents could not be queued for reading. Tell your administrator.',
   document_duplicate: 'That file is already on this referral.',
   document_limit: 'A referral holds at most 20 documents.',
   document_rejected: 'That file was refused: only PDF, PNG, JPEG or TIFF files up to 25 MB, uploaded unchanged.',
@@ -219,6 +220,8 @@ function Recommendation({ view }: { view: ReferralView }) {
               {ev.sub_reasons.length > 0 && <Text fontSize="sm" fontWeight="500">{ev.sub_reasons.map((r) => REASON_LABEL[r] ?? r).join(' · ')}</Text>}
               <Text fontSize="xs" color="muted">Clinical: {ev.clinical_outcome.replaceAll('_', ' ')} · Financial: {ev.financial_status}. Staff make the final decision.</Text>
             </Box>
+            {ev.raw && <Box mb="2"><Callout tone="review" role="status">Preliminary: read by the AI from the documents. No person has confirmed these facts.</Callout></Box>}
+            {list('Documents disagree, state again', ev.trace.disagreements ?? [])}
             {list('Missing critical information', ev.trace.missing)}
             {list('Confirm first', ev.trace.blocking)}
             {list('Conflicting', ev.trace.conflicts)}

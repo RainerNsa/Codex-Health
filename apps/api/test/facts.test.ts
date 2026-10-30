@@ -7,6 +7,7 @@ import pg from 'pg';
 import { buildServer } from '../src/server.ts';
 import { DEV_USER_HEADER } from '../src/auth.ts';
 import { poolTx, type Tx } from '../src/db.ts';
+import { sqsEnqueue } from '../src/queue.ts';
 import { s3Storage } from '../src/storage.ts';
 import { CreateBucketCommand, HeadObjectCommand, S3Client } from '@aws-sdk/client-s3';
 import { createHash } from 'node:crypto';
@@ -146,7 +147,8 @@ describe.skipIf(!url)('manual fact entry API', () => {
       .toEqual([['daily_skilled_need', 'yes', '2001-01-02'], ['recent_aggression', 'no', null], ['ventilator_use', 'no', null]]);
 
     await asOwner(FAC.a);
-    const vent = (await c.query("SELECT id, supersedes, is_critical FROM facts WHERE referral_id = $1 AND key = 'ventilator_use' ORDER BY created_at", [rid])).rows;
+    // by the supersede chain, not created_at: the suite's one transaction gives both rows one timestamp
+    const vent = (await c.query("SELECT id, supersedes, is_critical FROM facts WHERE referral_id = $1 AND key = 'ventilator_use' ORDER BY supersedes NULLS FIRST", [rid])).rows;
     expect(vent).toHaveLength(2);
     expect([vent[0].supersedes, vent[1].supersedes, vent[0].is_critical, vent[1].is_critical]).toEqual([null, vent[0].id, true, true]);
     expect(await count("SELECT count(*) AS n FROM facts WHERE referral_id = $1 AND key = 'recent_aggression' AND NOT is_critical", [rid])).toBe(1);
@@ -462,6 +464,23 @@ describe.skipIf(!url)('manual fact entry API', () => {
     expect((await cosign(again.rid, filed, U.admin)).json()).toEqual({ error: 'evaluation_stale' });
   });
 
+  it('a document against a person holds Admit until that key is stated again; other entries do not clear it', async () => {
+    const rid = await newReferral();
+    expect((await post(factsUrl(rid), U.reviewer, fact('ventilator_use', 'no'))).statusCode).toBe(201);
+    await post(factsUrl(rid), U.reviewer, fact('recent_aggression', 'no'));
+    await asOwner(FAC.a);
+    await c.query(`INSERT INTO evaluations (facility_id, referral_id, previous_evaluation_id, raw, outcome, clinical_outcome, financial_status, sub_reasons, trace, criteria_document_ref, rule_set_version, facility_profile_version, model_id, prompt_version, extractor_version, ocr_engine_version, engine_version, evaluated_at)
+      SELECT facility_id, referral_id, id, raw, outcome, clinical_outcome, financial_status, sub_reasons, trace || '{"disagreements": ["ventilator_use"]}', criteria_document_ref, rule_set_version, facility_profile_version, model_id, prompt_version, extractor_version, ocr_engine_version, engine_version, now() + interval '1 second'
+      FROM evaluations WHERE facility_id = $1 AND referral_id = $2 ORDER BY evaluated_at DESC LIMIT 1`, [FAC.a, rid]);
+    await c.query("SELECT set_config('app.facility_id', '', true)");
+    const view = async () => (await get(refUrl(rid), U.reviewer)).json();
+    let v = await view();
+    expect(v.admit_requires).toContain('ventilator_use');
+    await post(`${refUrl(rid)}/transitions`, U.reviewer, { action: 'submit' });
+    v = await view();
+    expect((await post(`${refUrl(rid)}/decision`, U.reviewer, { evaluation_id: v.evaluation.id, decision: 'admit' })).json().error).toBe('confirmation_incomplete');
+  });
+
   it('co-sign: after a flipped hard-stop input every decision is filed for co-sign; unknown -> known and other corrections are not flips', async () => {
     const flip = await withFacts(['ventilator_use', 'yes'], ['ventilator_use', 'no'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
     expect(flip.ev.outcome).toBe('admit');
@@ -615,6 +634,70 @@ describe.skipIf(!url)('manual fact entry API', () => {
       await s3.send(new CreateBucketCommand({ Bucket: BUCKET })).catch((err: { name?: string }) => {
         if (err.name !== 'BucketAlreadyOwnedByYou' && err.name !== 'BucketAlreadyExists') throw err;
       });
+    });
+
+    it('a job is queued only after the move to processing commits, with ids alone; a queue failure is reported', async () => {
+      const order: string[] = [];
+      const sent: [string, string][] = [];
+      let down = false;
+      const watched: typeof tx = async (fn) => { const r = await tx(fn); order.push('commit'); return r; };
+      docApp = buildServer({ tx: watched, auth: 'local-stub', env: 'test', storage: s3Storage(BUCKET), enqueue: async (f, r) => {
+        order.push('send');
+        if (down) throw new Error('SYNTHETIC-CANARY');
+        sent.push([f, r]);
+      } });
+      const act = (rid: string, action: string, extra = {}) => docApp.inject({ method: 'POST', url: `${refUrl(rid)}/transitions`, headers: as(U.reviewer), payload: { action, ...extra } });
+      const rid = await newReferral();
+      await upload(rid, PDF(41));
+      expect(sent).toEqual([]); // a draft waits for an explicit process (T1)
+      order.length = 0;
+      expect((await act(rid, 'process')).statusCode).toBe(201);
+      expect(sent).toEqual([[FAC.a, rid]]);
+      expect(order.slice(-2)).toEqual(['commit', 'send']); // the worker must find it processing
+
+      const setStatus = async (id: string, status: string) => {
+        await asOwner(FAC.a);
+        await c.query('UPDATE referrals SET status = $2 WHERE id = $1', [id, status]);
+        await c.query("SELECT set_config('app.facility_id', '', true)");
+      };
+      const later = await newReferral();
+      await upload(later, PDF(42));
+      await setStatus(later, 'ready_for_review');
+      await upload(later, PDF(43)); // T6: a new document on a referral under review goes straight to the pipeline
+      expect(sent.at(-1)).toEqual([FAC.a, later]);
+      const failedDoc = (await get(refUrl(later), U.reviewer)).json().documents[0].id as string;
+      await asOwner(FAC.a);
+      await c.query("UPDATE documents SET status = 'failed' WHERE id = $1", [failedDoc]);
+      await setStatus(later, 'partial_failure');
+      sent.length = 0;
+      expect((await upload(later, PDF(45), { replaces: failedDoc })).statusCode).toBe(201); // T4
+      expect(sent).toEqual([[FAC.a, later]]);
+
+      const held = await newReferral();
+      await post(factsUrl(held), U.reviewer, fact('ventilator_use', 'no'));
+      await setStatus(held, 'ready_for_review');
+      sent.length = 0;
+      expect((await act(held, 'hold', { note: 'SYNTHETIC' })).statusCode).toBe(201);
+      expect(sent).toEqual([]); // no other transition sends a job
+
+      const third = await newReferral();
+      await upload(third, PDF(44));
+      down = true;
+      const refused = await act(third, 'process');
+      expect([refused.statusCode, refused.body.includes('CANARY'), refused.json().error]).toEqual([503, false, 'queue_unavailable']);
+      expect((await get(refUrl(third), U.reviewer)).json().referral.status).toBe('processing'); // the known gap: the watchdog (slice 6) re-sends
+    });
+
+    it('the job message is exactly the three ids, with a fresh job id each time', async () => {
+      const bodies: Record<string, string>[] = [];
+      const queues: (string | undefined)[] = [];
+      const send = sqsEnqueue('q-url', async (cmd) => { bodies.push(JSON.parse(cmd.input.MessageBody ?? '')); queues.push(cmd.input.QueueUrl); });
+      await send(FAC.a, 'r-1');
+      await send(FAC.a, 'r-1');
+      expect(Object.keys(bodies[0]!).sort()).toEqual(['facilityId', 'jobId', 'referralId']);
+      expect([bodies[0]!['facilityId'], bodies[0]!['referralId'], queues[0]]).toEqual([FAC.a, 'r-1', 'q-url']);
+      expect(bodies[0]!['jobId']).toMatch(/^[a-z0-9-]{1,64}$/);
+      expect(bodies[0]!['jobId']).not.toBe(bodies[1]!['jobId']);
     });
 
     it('upload: a checked document is recorded, offered for processing, and submitted (T1)', async () => {

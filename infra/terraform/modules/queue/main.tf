@@ -8,6 +8,7 @@
 
 resource "aws_sqs_queue" "dlq" {
   name                              = "codex-health-${var.environment}-processing-dlq"
+  visibility_timeout_seconds        = 3600    # a dead letter the worker cannot act on waits for triage without churning
   message_retention_seconds         = 1209600 # 14 days, the maximum, so failures are not lost before triage
   kms_master_key_id                 = var.kms_key_arn
   kms_data_key_reuse_period_seconds = 300
@@ -119,4 +120,70 @@ data "aws_iam_policy_document" "processing" {
 resource "aws_sqs_queue_policy" "processing" {
   queue_url = aws_sqs_queue.processing.id
   policy    = data.aws_iam_policy_document.processing.json
+}
+
+# --- Dead-letter queue policy ---------------------------------------------------------------------------------
+#
+# The worker acts on dead letters, so this queue is an input too. Nobody sends to it: only SQS moves messages here
+# (redrive is not an IAM send; confirm on the first real run). Only the worker's role consumes it.
+data "aws_iam_policy_document" "dlq" {
+  statement {
+    sid       = "DenyInsecureTransport"
+    effect    = "Deny"
+    actions   = ["sqs:*"]
+    resources = [aws_sqs_queue.dlq.arn]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    condition {
+      test     = "Bool"
+      variable = "aws:SecureTransport"
+      values   = ["false"]
+    }
+  }
+
+  statement {
+    sid       = "DenyAllSends"
+    effect    = "Deny"
+    actions   = ["sqs:SendMessage"]
+    resources = [aws_sqs_queue.dlq.arn]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+  }
+
+  statement {
+    sid    = "DenyConsumeExceptConsumerRoles"
+    effect = "Deny"
+    actions = [
+      "sqs:ReceiveMessage",
+      "sqs:DeleteMessage",
+      "sqs:ChangeMessageVisibility",
+    ]
+    resources = [aws_sqs_queue.dlq.arn]
+
+    principals {
+      type        = "*"
+      identifiers = ["*"]
+    }
+
+    dynamic "condition" {
+      for_each = length(var.consumer_role_arns) > 0 ? [1] : []
+      content {
+        test     = "ArnNotEquals"
+        variable = "aws:PrincipalArn"
+        values   = var.consumer_role_arns
+      }
+    }
+  }
+}
+
+resource "aws_sqs_queue_policy" "dlq" {
+  queue_url = aws_sqs_queue.dlq.id
+  policy    = data.aws_iam_policy_document.dlq.json
 }

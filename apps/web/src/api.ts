@@ -10,7 +10,8 @@ export interface Evaluation {
   clinical_outcome: string;
   financial_status: string;
   sub_reasons: string[];
-  trace: { resolution_step: string; trace: TraceEntry[]; missing: string[]; conflicts: string[]; blocking: string[]; empty_profile_keys: string[]; confirmation_set?: string[] };
+  raw?: boolean;
+  trace: { disagreements?: string[]; resolution_step: string; trace: TraceEntry[]; missing: string[]; conflicts: string[]; blocking: string[]; empty_profile_keys: string[]; confirmation_set?: string[] };
 }
 export type Action = 'submit' | 'process' | 'hold' | 'request_info' | 'escalate' | 'resume' | 'finalize' | 'reevaluate' | 'cosign' | 'amend' | 'upload' | 'resolve_failures';
 export interface DocumentRow { id: string; type: string; status: 'uploaded' | 'processed' | 'failed' | 'unreadable' | 'not_applicable'; pages: number | null; not_applicable_reason: string | null; created_at: string }

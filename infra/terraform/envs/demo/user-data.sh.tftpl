@@ -42,13 +42,14 @@ docker run -d --name codex-postgres --restart always \
 for i in $(seq 1 90); do docker exec codex-postgres pg_isready -h 127.0.0.1 -p 5432 -U postgres -d codex_health >/dev/null 2>&1 && break; sleep 2; done
 
 # The init script creates the roles with the repository's local-only passwords; replace each with a random one at
-# once, so no known password exists on this server. Only the two the server uses are kept, in root-only places.
+# once, so no known password exists on this server. Only the three the server uses are kept, in root-only places.
 MIGRATOR_PW="$(openssl rand -hex 24)"
 APP_PW="$(openssl rand -hex 24)"
+WORKER_PW="$(openssl rand -hex 24)"
 docker exec -i codex-postgres psql -v ON_ERROR_STOP=1 -U postgres -d postgres <<SQL
 ALTER ROLE codex_migrator PASSWORD '$MIGRATOR_PW';
 ALTER ROLE codex_app PASSWORD '$APP_PW';
-ALTER ROLE codex_worker PASSWORD '$(openssl rand -hex 24)';
+ALTER ROLE codex_worker PASSWORD '$WORKER_PW';
 ALTER ROLE codex_anchor PASSWORD '$(openssl rand -hex 24)';
 SQL
 
@@ -71,9 +72,20 @@ DEMO_ORIGIN_SECRET=${origin_secret}
 DATABASE_URL_APP=postgres://codex_app:$${APP_PW}@127.0.0.1:5432/codex_health
 S3_DOCUMENTS_BUCKET=${docs_bucket}
 S3_DOCUMENTS_KMS_KEY_ID=${docs_key_arn}
+SQS_PROCESSING_QUEUE_URL=${queue_url}
 AWS_REGION=${region}
 ENV
 chmod 600 /etc/codex-api.env
+
+cat > /etc/codex-worker.env <<ENV
+DATABASE_URL_WORKER=postgres://codex_worker:$${WORKER_PW}@127.0.0.1:5432/codex_health
+SQS_PROCESSING_QUEUE_URL=${queue_url}
+SQS_PROCESSING_DLQ_URL=${dlq_url}
+S3_DOCUMENTS_BUCKET=${docs_bucket}
+BEDROCK_MODEL_ID=${model_id}
+AWS_REGION=${region}
+ENV
+chmod 600 /etc/codex-worker.env
 
 cat > /etc/systemd/system/codex-api.service <<'UNIT'
 [Unit]
@@ -95,6 +107,8 @@ PrivateTmp=true
 [Install]
 WantedBy=multi-user.target
 UNIT
+sed -e 's/Codex Health API/Codex Health worker/' -e 's#apps/api#services/worker#' -e 's/codex-api.env/codex-worker.env/' -e 's/server.ts/index.ts/' \
+  /etc/systemd/system/codex-api.service > /etc/systemd/system/codex-worker.service
 systemctl daemon-reload
-systemctl enable --now codex-api
+systemctl enable --now codex-api codex-worker
 echo "codex-health demo: ready"

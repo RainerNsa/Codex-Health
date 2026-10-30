@@ -15,7 +15,7 @@ export interface Ports {
   /** Page text of one document. Throws when it cannot be read; an empty result means nothing was legible. */
   ocr(doc: DocumentRef): Promise<Page[]>;
   /** Facts found in the pages, for these keys only. Silence on a key is simply no entry. */
-  extract(pages: { document_id: string; pages: Page[] }[], keys: string[]): Promise<Extracted[]>;
+  extract(pages: { document_id: string; pages: Page[] }[], keys: string[], types: Map<string, KeyType>): Promise<Extracted[]>;
   versions: { model_id: string; prompt_version: string; extractor_version: string; ocr_engine_version: string };
 }
 export interface Job { facilityId: string; referralId: string; jobId: string }
@@ -24,7 +24,19 @@ type Outcome = { doc: DocumentRef; status: 'processed'; pages: Page[]; ms: numbe
 
 const isKnown = (v: FactValue) => v.value !== null && v.value !== 'unknown';
 const JOB_ID = /^[a-z0-9-]{1,64}$/;
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const QUOTE_MAX = 1000;
+const CLOCK_MARGIN_MS = 60_000; // SQS and the database keep separate clocks
+
+/** The queue message: ids only, exactly these three, or the job is refused and dead-letters. */
+export function parseJob(body: string | undefined): Job {
+  let m: unknown;
+  try { m = JSON.parse(body ?? ''); } catch { throw new Error('job message is not JSON'); }
+  const j = (m ?? {}) as Partial<Job>;
+  if (typeof j.facilityId !== 'string' || !UUID.test(j.facilityId) || typeof j.referralId !== 'string' || !UUID.test(j.referralId)
+    || typeof j.jobId !== 'string' || !JOB_ID.test(j.jobId) || Object.keys(j).length !== 3) throw new Error('job message is malformed');
+  return { facilityId: j.facilityId, referralId: j.referralId, jobId: j.jobId };
+}
 
 /** Extractor output is hostile input (a packet can carry prompt injection). An entry that is not exactly valid is
  *  dropped, never stored, so one bad entry cannot stop the referral. */
@@ -60,7 +72,9 @@ const currentFacts = async (q: Query, fid: string, rid: string) => (await q<Fact
    FROM facts f WHERE f.facility_id = $1 AND f.referral_id = $2
      AND NOT EXISTS (SELECT 1 FROM facts n WHERE n.facility_id = f.facility_id AND n.supersedes = f.id) ORDER BY f.key`, [fid, rid])).rows;
 
-/** Process one referral. Safe to repeat: anything but a referral in processing is left alone. */
+/** Process one referral. Safe to repeat: anything but a referral in processing is left alone. The facility in the job is
+ *  only ever a claim: row-level security shows the referral under its own facility alone, so a job pairing a referral
+ *  with any other facility finds nothing and is refused, and it dead-letters (§12 queue sender, XF-13). */
 export async function processReferral(tx: Tx, ports: Ports, job: Job): Promise<'done' | 'skipped'> {
   const { facilityId: fid, referralId: rid } = job;
   if (!JOB_ID.test(job.jobId)) throw new Error('job id is malformed'); // before any OCR or model spend
@@ -69,7 +83,8 @@ export async function processReferral(tx: Tx, ports: Ports, job: Job): Promise<'
   const plan = await tx(async (q) => {
     const org = await bind(q, fid);
     const ref = (await q<{ status: string }>('SELECT status FROM referrals WHERE facility_id = $1 AND id = $2', [fid, rid])).rows[0];
-    if (ref?.status !== 'processing') return null;
+    if (!ref) throw new Error('job names no referral at this facility');
+    if (ref.status !== 'processing') return null;
     const set = await settings(q, fid, org);
     if (!set) throw new Error('facility has no rule set or profile');
     const docs = (await q<DocumentRef>("SELECT id, storage_key FROM documents WHERE facility_id = $1 AND referral_id = $2 AND status = 'uploaded' ORDER BY created_at", [fid, rid])).rows;
@@ -90,7 +105,7 @@ export async function processReferral(tx: Tx, ports: Ports, job: Job): Promise<'
     }
   }
   const read = results.filter((r) => r.status === 'processed');
-  const extracted = read.length ? await ports.extract(read.map((r) => ({ document_id: r.doc.id, pages: r.pages })), plan.keys) : [];
+  const extracted = read.length ? await ports.extract(read.map((r) => ({ document_id: r.doc.id, pages: r.pages })), plan.keys, plan.types) : [];
 
   return tx(async (q) => {
     const org = await bind(q, fid);
@@ -198,4 +213,32 @@ export async function processReferral(tx: Tx, ports: Ports, job: Job): Promise<'
     }
     return 'done';
   });
+}
+
+/** The way out for a job that used up its deliveries: the referral goes to a person as a partial failure (T3) instead of
+ *  sitting in processing. Evaluated when it can be; with no usable settings there is nothing to evaluate against. */
+export async function failReferral(tx: Tx, versions: Ports['versions'], job: Job, sentAt: number): Promise<void> {
+  // a dead letter ends only its own round: a document that arrived after the job was sent has a job of its own coming
+  const newest = await tx(async (q) => {
+    await bind(q, job.facilityId);
+    return (await q<{ newest: Date | null }>("SELECT max(created_at) AS newest FROM documents WHERE facility_id = $1 AND referral_id = $2 AND status = 'uploaded'", [job.facilityId, job.referralId])).rows[0]?.newest;
+  });
+  if (newest && newest.getTime() > sentAt + CLOCK_MARGIN_MS) return;
+  const nothingRead: Ports = { versions, ocr: async () => { throw new Error('job dead-lettered'); }, extract: async () => [] };
+  try {
+    await processReferral(tx, nothingRead, job);
+  } catch {
+    const { facilityId: fid, referralId: rid } = job;
+    const actor = `worker:${job.jobId}`;
+    await tx(async (q) => {
+      await bind(q, fid);
+      const ref = (await q<{ status: string }>('SELECT status FROM referrals WHERE facility_id = $1 AND id = $2 FOR UPDATE', [fid, rid])).rows[0];
+      if (!ref) throw new Error('job names no referral at this facility');
+      if (ref.status !== 'processing') return;
+      const docs = (await q<{ id: string }>("UPDATE documents SET status = 'failed', updated_at = now() WHERE facility_id = $1 AND referral_id = $2 AND status = 'uploaded' RETURNING id", [fid, rid])).rows;
+      for (const d of docs) await q('INSERT INTO audit_log (facility_id, actor, action, entity_type, entity_id) VALUES ($1, $2, $3, $4, $5)', [fid, actor, 'document.failed', 'document', d.id]);
+      await q("UPDATE referrals SET status = 'partial_failure', updated_at = now() WHERE facility_id = $1 AND id = $2", [fid, rid]);
+      await q('INSERT INTO audit_log (facility_id, actor, action, entity_type, entity_id) VALUES ($1, $2, $3, $4, $5)', [fid, actor, 'referral.partial_failure', 'referral', rid]);
+    });
+  }
 }

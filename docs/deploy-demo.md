@@ -36,7 +36,8 @@ real sign-in (Cognito) replaces both before any real data (decision log 2026-10-
 | S3, CloudFront, Budgets at demo volume | cents (CloudFront has a free monthly allowance; Budgets alerts are free) |
 | **Idle total** | **about $19–21 a month, plus the domain** |
 
-Bedrock and Textract are paid per use once M4 calls them; a demo run then costs cents. To save most of the cost
+Bedrock and Textract are paid per use: each packet read costs cents. The worker runs beside the API on the same
+server. Before deploying, turn on model access in the Bedrock console for the model named in `bedrock_model_id`. To save most of the cost
 between demos, stop the server (`aws ec2 stop-instances --instance-ids <id>`): while stopped only the disk bills
 (about $1.60 a month). **After starting it again, run `terraform apply -var-file=demo.tfvars` once**: a restarted
 server gets a new address, and the apply points CloudFront at it (until then the app shows an error).

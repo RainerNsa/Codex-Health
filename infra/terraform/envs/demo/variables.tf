@@ -74,3 +74,13 @@ variable "demo_subdomain" {
   type        = string
   default     = "demo"
 }
+
+variable "bedrock_model_id" {
+  description = "The pinned Bedrock model id the worker calls, with a date and version: anthropic.claude-<name>-<YYYYMMDD>-v<n>:<m>. Model access must be enabled for it in the region."
+  type        = string
+
+  validation {
+    condition     = can(regex("^anthropic\\.claude-[a-z0-9-]+-[0-9]{8}-v[0-9]+:[0-9]+$", var.bedrock_model_id))
+    error_message = "bedrock_model_id must be a pinned id with a date and version, never an alias."
+  }
+}

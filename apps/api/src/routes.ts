@@ -7,6 +7,7 @@ import { evaluate, ENGINE_VERSION, isRealDate, parseFactValue, type Fact, type F
 import { bindFacility, bindOrganization, type Query, type Tx } from './db.ts';
 import { userFromHeaders } from './auth.ts';
 import { loadSettings as loadStored, NOT_SWITCHABLE, PROFILE_KEYS, RuleSetRefused, type RuleSet } from './ruleset.ts';
+import type { Enqueue } from './queue.ts';
 import { MAX_DOCUMENT_BYTES, sniff, UPLOAD_TTL_SECONDS, type Storage } from './storage.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
@@ -96,10 +97,10 @@ async function settingsOrRefuse(q: Query, facilityId: string, organizationId: st
   return rs;
 }
 
-interface EvaluationRow { id: string; outcome: string; clinical_outcome: string; rule_set_version: number; facility_profile_version: number; trace: { confirmation_set?: string[] } }
+interface EvaluationRow { id: string; outcome: string; clinical_outcome: string; rule_set_version: number; facility_profile_version: number; trace: { confirmation_set?: string[]; disagreements?: string[] } }
 
 const latestEvaluation = async (q: Query, facilityId: string, referralId: string) => (await q<EvaluationRow & Record<string, unknown>>(
-  `SELECT id, outcome, clinical_outcome, financial_status, sub_reasons, trace, engine_version, rule_set_version, facility_profile_version
+  `SELECT id, raw, outcome, clinical_outcome, financial_status, sub_reasons, trace, engine_version, rule_set_version, facility_profile_version
    FROM evaluations WHERE facility_id = $1 AND referral_id = $2 ORDER BY evaluated_at DESC LIMIT 1`, [facilityId, referralId])).rows[0];
 
 const isKnown = (v: FactValue) => v.value !== null && v.value !== 'unknown';
@@ -132,17 +133,18 @@ async function hardStopFlipped(q: Query, facilityId: string, referralId: string,
 }
 
 /** Evaluate the current facts under the current settings and store the immutable snapshot (§14.2, I6). */
-async function reevaluate(q: Query, fid: string, rid: string, ruleSet: RuleSet, user: string, changedFactCount: number): Promise<void> {
+async function reevaluate(q: Query, fid: string, rid: string, ruleSet: RuleSet, user: string, changedFactCount: number, stated?: string): Promise<void> {
   const referralDate = todayIso();
   const facts = await currentFacts(q, fid, rid);
   const docs = await q<{ open: string }>(
     "SELECT count(*) AS open FROM documents WHERE facility_id = $1 AND referral_id = $2 AND status NOT IN ('processed', 'not_applicable')", [fid, rid]);
   const processingComplete = Number(docs.rows[0]!.open) === 0;
   const result = evaluate({ facts, profile: ruleSet.profile, rules: ruleSet.rules, referral_date: referralDate, processing_complete: processingComplete });
-  const prev = await q<{ id: string }>('SELECT id FROM evaluations WHERE facility_id = $1 AND referral_id = $2 ORDER BY evaluated_at DESC LIMIT 1', [fid, rid]);
+  const prev = await q<{ id: string; disagreements: string[] | null }>("SELECT id, trace->'disagreements' AS disagreements FROM evaluations WHERE facility_id = $1 AND referral_id = $2 ORDER BY evaluated_at DESC, id LIMIT 1", [fid, rid]);
   const { trace, missing, conflicts, blocking, empty_profile_keys, resolution_step, confirmation_set } = result;
-  // keys the pipeline left Unknown because documents disagree, carried on every evaluation until a person states them
-  const disagreements = facts.filter((f) => f.source === 'ai' && (f.value.value === null || f.value.value === 'unknown')).map((f) => f.key);
+  // keys the pipeline left Unknown because documents disagree, and keys where a document contradicts a person, carried
+  // on every evaluation until a person states that key again
+  const disagreements = [...new Set([...facts.filter((f) => f.source === 'ai' && (f.value.value === null || f.value.value === 'unknown')).map((f) => f.key), ...(prev.rows[0]?.disagreements ?? [])])].filter((k) => k !== stated).sort();
   const ev = await q<{ id: string }>(
     `INSERT INTO evaluations (facility_id, referral_id, previous_evaluation_id, raw, outcome, clinical_outcome, financial_status, sub_reasons, trace,
        criteria_document_ref, rule_set_version, facility_profile_version, model_id, prompt_version, extractor_version, ocr_engine_version, engine_version)
@@ -224,7 +226,7 @@ async function referralView(q: Query, facilityId: string, referralId: string, ru
     rule_explanations: explanations,
     confirmation: confirmation(ev?.trace.confirmation_set ?? [], facts),
     // keys an Admit decision would also need stated as known values (shown when the recommendation is not Admit)
-    admit_requires: ev && ruleSet ? confirmation(admitKeys(ruleSet, ev), facts).filter((c) => !c.known).map((c) => c.key) : [],
+    admit_requires: ev && ruleSet ? [...new Set([...confirmation(admitKeys(ruleSet, ev), facts).filter((c) => !c.known).map((c) => c.key), ...(ev.trace.disagreements ?? [])])] : [],
     evaluation_outdated: outdated,
     // decisions that need an Admin co-sign: a hard stop overridden to Admit; any decision after a flipped hard-stop input
     cosign: { admit: await hardStopEverFired(q, facilityId, referralId), any: flipped },
@@ -250,8 +252,15 @@ async function referralView(q: Query, facilityId: string, referralId: string, ru
   };
 }
 
-export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: Storage | null }): void {
+export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: Storage | null; enqueue?: Enqueue | null }): void {
   const { tx, storage } = deps;
+  // shortcut: a referral stays in processing if this send fails after the commit; the watchdog in slice 6 (4.3) re-sends
+  const enqueue = async (fid: string, rid: string) => {
+    try { await deps.enqueue?.(fid, rid); } catch {
+      console.error(JSON.stringify({ event: 'enqueue.failed', facility_id: fid, referral_id: rid }));
+      throw new HttpError(503, 'queue_unavailable');
+    }
+  };
   const fail = (reply: FastifyReply, err: unknown) => {
     if (err instanceof HttpError) return reply.code(err.status).send({ error: err.code });
     // A database refusal (RLS, CHECK, trigger) is a rejected write; its message is never echoed (it can carry ids).
@@ -438,7 +447,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
         await emit(q, fid, rid, user, previous ? 'fact.corrected' : 'fact.entered', { ...(protectedKey ? {} : { fact_key: spec.key }), decisive: spec.critical });
 
         // Re-evaluate on the current fact set (§14.2: every fact change produces a new immutable snapshot).
-        await reevaluate(q, fid, rid, ruleSet, user, 1);
+        await reevaluate(q, fid, rid, ruleSet, user, 1, spec.key);
         return referralView(q, fid, rid, ruleSet, who);
       });
       return reply.code(201).send(body);
@@ -489,6 +498,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
           action === 'request_info' ? { items_requested: items.length } : action === 'escalate' ? { department } : spec.event === 'review.started' ? { screen: 'review' } : {});
         return referralView(q, fid, rid, ruleSet, who);
       });
+      if (action === 'process') await enqueue(fid, rid);
       return reply.code(201).send(body);
     } catch (err) { return fail(reply, err); }
   });
@@ -543,7 +553,8 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
   const finishCheck = async (q: Query, fid: string, rid: string, ruleSets: RuleSet[], ev: EvaluationRow, decision: 'admit' | 'do_not_admit', reason: string | null, status: string, latestDecision: string | null) => {
     const facts = await currentFacts(q, fid, rid);
     if (!Array.isArray(ev.trace.confirmation_set) || confirmation(ev.trace.confirmation_set, facts).some((c) => !c.confirmed)) throw new HttpError(409, 'confirmation_incomplete');
-    if (decision === 'admit' && ruleSets.some((rs) => confirmation(admitKeys(rs, ev), facts).some((c) => !c.known))) throw new HttpError(409, 'confirmation_incomplete');
+    // a dispute between documents, or a document against a person, needs that fact stated again before an Admit (§3, I9)
+    if (decision === 'admit' && ((ev.trace.disagreements ?? []).length > 0 || ruleSets.some((rs) => confirmation(admitKeys(rs, ev), facts).some((c) => !c.known)))) throw new HttpError(409, 'confirmation_incomplete');
     const override = decision !== ev.outcome;
     if (override !== (reason !== null)) throw new HttpError(400, override ? 'override_reason_required' : 'invalid_decision');
     // a hard stop overridden to Admit, or any decision after a flipped hard-stop input, needs an Admin co-sign
@@ -801,6 +812,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
         }
         return referralView(q, fid, rid, ruleSet, who);
       });
+      if (body.referral.status === 'processing') await enqueue(fid, rid);
       return reply.code(201).send(body);
     } catch (err) { return fail(reply, err); }
   });
