@@ -129,7 +129,13 @@ async function hardStopFlipped(q: Query, facilityId: string, referralId: string,
        SELECT key FROM facts
        WHERE facility_id = $1 AND referral_id = $2 AND key = ANY($3) AND value->'value' <> 'null'::jsonb AND value->>'value' <> 'unknown'
        GROUP BY key HAVING count(DISTINCT value->'value') > 1 AND bool_or(source = 'user')) flipped`, [facilityId, referralId, keys]);
-  return Number(rows[0]!.n) > 0;
+  if (Number(rows[0]!.n) > 0) return true;
+  // a dispute over a hard-stop input that a person settled counts too (founder ruling 2026-10-30): the worker keeps only the
+  // Unknown, so the two values never appear in the fact history
+  const settled = await q<{ n: string }>(
+    `SELECT count(*) AS n FROM facts f WHERE f.facility_id = $1 AND f.referral_id = $2 AND f.source = 'user' AND f.key = ANY($3)
+       AND EXISTS (SELECT 1 FROM evaluations e WHERE e.facility_id = f.facility_id AND e.referral_id = f.referral_id AND e.trace->'disagreements' ? f.key)`, [facilityId, referralId, keys]);
+  return Number(settled.rows[0]!.n) > 0;
 }
 
 /** Evaluate the current facts under the current settings and store the immutable snapshot (§14.2, I6). */

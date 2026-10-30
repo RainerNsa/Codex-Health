@@ -83,7 +83,7 @@ export function ReviewPanel({ view, busy, on }: { view: ReferralView; busy: bool
 
       <Grid gap="2" mt="2">
         {view.evaluation_outdated && <Callout tone="review" role="status">The facility's settings changed after this recommendation. Re-evaluate before deciding.</Callout>}
-        {view.cosign.any && <Callout tone="review" role="status">A hard-stop fact was changed from one known value to another, so any decision is filed for a second Admin to co-sign.</Callout>}
+        {view.cosign.any && <Callout tone="review" role="status">A hard-stop fact was changed, or a dispute over one was settled, so any decision is filed for a second Admin to co-sign.</Callout>}
         {!view.cosign.any && view.cosign.admit && view.evaluation?.outcome !== 'do_not_admit' && <Callout tone="review" role="status">A hard stop decided this referral earlier, so an Admit is filed for a second Admin to co-sign.</Callout>}
         {view.pending_request && (
           <Callout tone="review">

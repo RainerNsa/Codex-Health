@@ -481,6 +481,27 @@ describe.skipIf(!url)('manual fact entry API', () => {
     expect((await post(`${refUrl(rid)}/decision`, U.reviewer, { evaluation_id: v.evaluation.id, decision: 'admit' })).json().error).toBe('confirmation_incomplete');
   });
 
+  it('co-sign: a person settling a dispute over a hard-stop input needs the co-sign, like a flip; a review input does not', async () => {
+    const disputed = async (key: string) => {
+      const rid = await newReferral();
+      await post(factsUrl(rid), U.reviewer, fact('daily_skilled_need', 'yes'));
+      await asOwner(FAC.a);
+      await c.query(`INSERT INTO evaluations (facility_id, referral_id, previous_evaluation_id, raw, outcome, clinical_outcome, financial_status, sub_reasons, trace, criteria_document_ref, rule_set_version, facility_profile_version, model_id, prompt_version, extractor_version, ocr_engine_version, engine_version, evaluated_at)
+        SELECT facility_id, referral_id, id, raw, outcome, clinical_outcome, financial_status, sub_reasons, trace || jsonb_build_object('disagreements', jsonb_build_array($3::text)), criteria_document_ref, rule_set_version, facility_profile_version, model_id, prompt_version, extractor_version, ocr_engine_version, engine_version, now() + interval '1 second'
+        FROM evaluations WHERE facility_id = $1 AND referral_id = $2 ORDER BY evaluated_at DESC LIMIT 1`, [FAC.a, rid, key]);
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      return rid;
+    };
+    const cosign = async (rid: string) => (await get(refUrl(rid), U.reviewer)).json().cosign.any;
+    const hard = await disputed('ventilator_use');
+    expect(await cosign(hard)).toBe(false); // nobody has settled it yet; Admit is held by the dispute itself
+    await post(factsUrl(hard), U.reviewer, fact('ventilator_use', 'no'));
+    expect(await cosign(hard)).toBe(true);
+    const review = await disputed('recent_aggression');
+    await post(factsUrl(review), U.reviewer, fact('recent_aggression', 'no'));
+    expect(await cosign(review)).toBe(false);
+  });
+
   it('co-sign: after a flipped hard-stop input every decision is filed for co-sign; unknown -> known and other corrections are not flips', async () => {
     const flip = await withFacts(['ventilator_use', 'yes'], ['ventilator_use', 'no'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
     expect(flip.ev.outcome).toBe('admit');
