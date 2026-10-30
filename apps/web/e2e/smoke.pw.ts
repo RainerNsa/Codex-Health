@@ -42,3 +42,24 @@ for (const colorScheme of ['light', 'dark'] as const) {
     });
   }
 }
+
+// AI facts need the pipeline, which needs AWS: this overlays synthetic ones on the real API's answer.
+const aiFact = (key: string, value: string, verified: boolean, band: string) => ({ id: key, key, value: { type: 'tri_state', value }, source: 'ai', note: null, as_of_date: null, confidence_band: band, single_source: true,
+  evidence: { document_id: 'zz', page: 3, quote: 'ZZTEST <img src=x onerror=alert(1)> not on a ventilator', verified } });
+
+test('evidence: quotes stay text, and what did not verify says so in words', async ({ browser }) => {
+  const page = await (await browser.newContext({ viewport: sizes[0] })).newPage();
+  await page.route('**/api/facilities/*/referrals', async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({ response: res, json: route.request().method() === 'POST' ? { ...body, facts: [aiFact('ventilator_use', 'no', true, 'high'), aiFact('recent_aggression', 'yes', false, 'high'), aiFact('daily_skilled_need', 'yes', true, 'low')] } : body });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'New referral' }).click();
+  await expect(page.getByRole('heading', { name: 'What the documents say' })).toBeVisible();
+  await expect(page.getByText('Quote not found on the page')).toBeVisible();
+  await expect(page.getByText('Low confidence')).toBeVisible();
+  await expect(page.getByText('<img src=x onerror=alert(1)>', { exact: false }).first()).toBeVisible();
+  expect(await page.locator('img[src="x"]').count()).toBe(0);
+  await check(page, 'light-desktop-evidence');
+});

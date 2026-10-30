@@ -8,7 +8,7 @@ import { bindFacility, bindOrganization, type Query, type Tx } from './db.ts';
 import { userFromHeaders } from './auth.ts';
 import { loadSettings as loadStored, NOT_SWITCHABLE, PROFILE_KEYS, RuleSetRefused, type RuleSet } from './ruleset.ts';
 import type { Enqueue } from './queue.ts';
-import { MAX_DOCUMENT_BYTES, sniff, UPLOAD_TTL_SECONDS, type Storage } from './storage.ts';
+import { MAX_DOCUMENT_BYTES, sniff, UPLOAD_TTL_SECONDS, VIEW_TTL_SECONDS, type Storage } from './storage.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const WRITE_ROLES = new Set(['facility_admin', 'admissions_reviewer']);
@@ -220,7 +220,10 @@ async function referralView(q: Query, facilityId: string, referralId: string, ru
   const explanations = Object.fromEntries((ruleSet?.rules ?? []).map((r) => [r.id, (r as { explanation?: string }).explanation ?? null]));
   return {
     referral: ref.rows[0],
-    facts: facts.map((f) => ({ id: f.id, key: f.key, value: f.value, source: f.source, note: f.source === 'user' ? f.note : null, as_of_date: f.as_of_date })),
+    // the quote and where it is; the review screen renders it as text and labels what was not verified
+    facts: facts.map((f) => ({ id: f.id, key: f.key, value: f.value, source: f.source, note: f.source === 'user' ? f.note : null, as_of_date: f.as_of_date,
+      evidence: f.source === 'ai' && f.evidence ? { document_id: f.evidence.document_id, page: f.evidence.page, quote: f.evidence.quote, verified: f.evidence.verified === true } : null,
+      confidence_band: f.confidence_band, single_source: f.single_source })),
     form: { fact_keys: ruleSet?.factKeys ?? [], note_max: NOTE_MAX, configured: ruleSet !== null, departments: DEPARTMENTS },
     evaluation: ev ?? null,
     rule_explanations: explanations,
@@ -365,7 +368,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
              ORDER BY r.updated_at ${order}, r.id ${order}
              LIMIT ${QUEUE_LIMIT + 1})
            SELECT r.id, r.status, r.referral_type, r.created_at, r.updated_at, r.updated_at::text AS cursor_at,
-                  e.outcome, e.sub_reasons,
+                  e.outcome, e.sub_reasons, e.raw,
                   (SELECT count(*)::int FROM documents d WHERE d.facility_id = r.facility_id AND d.referral_id = r.id AND d.status <> 'not_applicable') AS documents,
                   (SELECT count(*)::int FROM documents d WHERE d.facility_id = r.facility_id AND d.referral_id = r.id AND d.status IN ('failed', 'unreadable')) AS failed_documents,
                   -- a filed decision waits for a co-sign: the latest request, newer than any decision, on the latest evaluation
@@ -374,7 +377,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
                             AND dr.created_at > coalesce((SELECT max(dd.decided_at) FROM decisions dd WHERE dd.facility_id = r.facility_id AND dd.referral_id = r.id), '-infinity')
                             AND NOT EXISTS (SELECT 1 FROM decision_requests n WHERE n.facility_id = dr.facility_id AND n.referral_id = dr.referral_id AND n.created_at > dr.created_at)) AS cosign_waiting
            FROM page r
-           LEFT JOIN LATERAL (SELECT id, outcome, sub_reasons FROM evaluations ev
+           LEFT JOIN LATERAL (SELECT id, outcome, sub_reasons, raw FROM evaluations ev
                               WHERE ev.facility_id = r.facility_id AND ev.referral_id = r.id ORDER BY ev.evaluated_at DESC LIMIT 1) e ON true
            ORDER BY r.updated_at ${order}, r.id ${order}`, [fid, states, cursorAt ?? null, cursorId ?? null]);
         // I4: a list of a facility's referrals is a read of referral data, audited like opening one
@@ -443,8 +446,10 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
            VALUES ($1, $2, $3, $4, 'user', $5, $6, $7, $8, $9, $10) RETURNING id`,
           [fid, rid, spec.key, value, note, asOf, spec.critical, protectedKey, previous?.id ?? null, `user:${user}`]);
         const factId = rows[0]!.id;
-        await audit(q, fid, user, previous ? 'fact.corrected' : 'fact.entered', 'fact', factId);
-        await emit(q, fid, rid, user, previous ? 'fact.corrected' : 'fact.entered', { ...(protectedKey ? {} : { fact_key: spec.key }), decisive: spec.critical });
+        // a person stating the value the AI read is a confirmation of it (§14.1), not a correction
+        const kind = !previous ? 'fact.entered' : previous.source === 'ai' && JSON.stringify(previous.value) === JSON.stringify(value) ? 'fact.confirmed' : 'fact.corrected';
+        await audit(q, fid, user, kind, 'fact', factId);
+        await emit(q, fid, rid, user, kind, { ...(protectedKey ? {} : { fact_key: spec.key }), decisive: spec.critical });
 
         // Re-evaluate on the current fact set (§14.2: every fact change produces a new immutable snapshot).
         await reevaluate(q, fid, rid, ruleSet, user, 1, spec.key);
@@ -814,6 +819,30 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
       });
       if (body.referral.status === 'processing') await enqueue(fid, rid);
       return reply.code(201).send(body);
+    } catch (err) { return fail(reply, err); }
+  });
+
+  // a short-lived link to one document on this referral (SPEC §12.1, XF-11, I4): a read of the record, audited; never the key
+  app.get<{ Params: { fid: string; rid: string; did: string }; Querystring: { fact?: string; page?: string } }>('/api/facilities/:fid/referrals/:rid/documents/:did/view', async (req, reply) => {
+    try {
+      const user = caller(req.headers);
+      const { fid, rid } = ids(req.params);
+      const did = req.params.did;
+      if (!UUID.test(did)) throw new HttpError(404, 'not_found');
+      const s3 = needStorage();
+      return reply.send(await tx(async (q) => {
+        const who = await enter(q, fid, user);
+        if (!READ_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
+        const doc = (await q<{ storage_key: string }>('SELECT storage_key FROM documents WHERE facility_id = $1 AND referral_id = $2 AND id = $3', [fid, rid, did])).rows[0];
+        if (!doc) throw new HttpError(404, 'not_found');
+        await audit(q, fid, user, 'document.viewed', 'document', did);
+        // opened from a fact: counted only when that fact really cites this page of this document
+        const fact = (await currentFacts(q, fid, rid)).find((f) => f.key === req.query.fact && f.evidence?.document_id === did && String(f.evidence.page) === req.query.page);
+        if (fact?.evidence) {
+          await emit(q, fid, rid, user, 'evidence.viewed', { ...(fact.specially_protected ? {} : { fact_key: fact.key }), document_id: did, page: fact.evidence.page, decisive: fact.is_critical });
+        }
+        return { url: await s3.presignGet(doc.storage_key), expires_in: VIEW_TTL_SECONDS };
+      }));
     } catch (err) { return fail(reply, err); }
   });
 

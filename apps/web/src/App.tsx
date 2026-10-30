@@ -7,6 +7,7 @@ import { CheckCircleIcon, PlusIcon, ProhibitIcon, WarningCircleIcon, type Icon }
 import { amendReferral, ApiError, resolveFailures, uploadDocument, cosignRequest, createReferral, enterFact, finalizeReferral, getReferral, moveReferral, reevaluateReferral, requestCosign, type ReferralView, type Tri } from './api.ts';
 import { ReviewPanel } from './ReviewPanel.tsx';
 import { DocumentsPanel } from './DocumentsPanel.tsx';
+import { EvidencePanel } from './EvidencePanel.tsx';
 import { QueuePanel } from './QueuePanel.tsx';
 import { useReviewTimer } from './reviewTimer.ts';
 import { Logo } from './Logo.tsx';
@@ -144,6 +145,9 @@ export function App() {
 
         {screen === 'referrals' && view && (
           <Grid gap="4" templateColumns={{ base: 'minmax(0, 1fr)', xl: 'repeat(2, minmax(0, 1fr))' }} alignItems="start">
+            <Grid gap="4" minW="0">
+            <EvidencePanel view={view} facility={facility} user={user} busy={busy}
+              onConfirm={(f) => void run(() => enterFact(facility, view.referral.id, user, { key: f.key, value: f.value as { type: 'tri_state'; value: Tri }, note: `Confirmed against ${f.evidence ? `page ${f.evidence.page}` : 'the documents'}`, as_of_date: null }))} />
             <Panel id="enter" title="Enter or correct a fact">
               <Box mb="3"><Sub>Status: {view.referral.status}. Each entry needs a note saying where the information came from. A correction keeps the earlier value on record.</Sub></Box>
               {view.form.fact_keys.map((k) => (
@@ -152,6 +156,7 @@ export function App() {
                   onSubmit={(value, note, asOf) => run(() => enterFact(facility, view.referral.id, user, { key: k.key, value: { type: 'tri_state', value }, note, as_of_date: asOf }))} />
               ))}
             </Panel>
+            </Grid>
             <Grid gap="4" minW="0">
               <Recommendation view={view} />
               <ReviewPanel view={view} busy={busy} on={{

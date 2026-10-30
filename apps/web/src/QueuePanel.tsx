@@ -57,7 +57,7 @@ export function QueuePanel({ facility, user, onOpen }: { facility: string; user:
               {rows.map((r) => (
                 <Table.Row key={r.id} bg="transparent">
                   <Table.Cell>{STATUS_LABEL[r.status] ?? r.status}{r.cosign_waiting ? ' · waiting for co-sign' : ''}</Table.Cell>
-                  <Table.Cell>{r.outcome ? <Badge bg={`${OUTCOME_TONE[r.outcome]}Soft`} color={OUTCOME_TONE[r.outcome]}>{OUTCOME_LABEL[r.outcome]}</Badge> : <Text as="span" color="muted">No facts yet</Text>}</Table.Cell>
+                  <Table.Cell>{r.outcome ? <Badge bg={`${OUTCOME_TONE[r.outcome]}Soft`} color={OUTCOME_TONE[r.outcome]}>{OUTCOME_LABEL[r.outcome]}{r.raw ? ', preliminary' : ''}</Badge> : <Text as="span" color="muted">No facts yet</Text>}</Table.Cell>
                   <Table.Cell>{r.documents}{r.failed_documents ? ` (${r.failed_documents} failed)` : ''}</Table.Cell>
                   <Table.Cell whiteSpace="nowrap">{new Date(r.updated_at).toLocaleString()}</Table.Cell>
                   <Table.Cell textAlign="end"><Button size="xs" variant="outline" onClick={() => onOpen(r.id)}>Open</Button></Table.Cell>

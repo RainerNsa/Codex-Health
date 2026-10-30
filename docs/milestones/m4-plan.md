@@ -32,8 +32,6 @@ Not M4: fuzzy quote matching and page-coordinate highlights (M5). Usability sess
 
 - **Slice 6:** a referral stays in processing if the queue send fails after the commit (503 to the user); the watchdog
   re-sends (`enqueue.failed` is logged, with ids only). Measure cache reads: the system prompt may sit under the model's minimum cacheable size.
-- **Slice 3, before any demo with AI facts:** evidence on screen. Until then a raw recommendation is labelled preliminary
-  on the review screen only, not in the queue.
 - **Slice 4:** a document that failed on a passing Textract fault cannot be re-sent, because the same file is refused as a
   duplicate; a person can only mark it not applicable. Retry OCR without repeating it on every delivery, and decide a
   referral-level page cap, which needs a page count before OCR (documents over 300 pages fail after OCR, before the model).
