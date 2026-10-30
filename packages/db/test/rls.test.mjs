@@ -135,7 +135,7 @@ test('row-level security, organisation isolation, audit immutability, the hash c
           await asFacility(c, FAC.a1);
         }
         // Exact readable-table count per role: a dropped or added SELECT grant must be a visible change here.
-        assert.equal(checked, { codex_app: 12, codex_worker: 6 }[role], `${role} could read ${checked} tenant tables`);
+        assert.equal(checked, { codex_app: 12, codex_worker: 7 }[role], `${role} could read ${checked} tenant tables`);
       });
     }
 
@@ -335,9 +335,11 @@ test('row-level security, organisation isolation, audit immutability, the hash c
         'codex_worker documents SELECT', 'codex_worker documents UPDATE (pages,status,updated_at)',
         'codex_worker evaluations INSERT', 'codex_worker evaluations SELECT',
         'codex_worker facilities SELECT',
+        'codex_worker facility_profiles SELECT',
         'codex_worker facts INSERT', 'codex_worker facts SELECT',
         'codex_worker product_events INSERT',
         'codex_worker referrals SELECT', 'codex_worker referrals UPDATE (status,updated_at)',
+        'codex_worker rule_sets SELECT',
       ]);
       const views = await count(c, "SELECT count(*) AS n FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace WHERE n.nspname = 'public' AND c.relkind IN ('v', 'm')");
       assert.equal(views, 0, 'no view or materialized view exists in public (one would copy tenant rows out from under the policies)');
