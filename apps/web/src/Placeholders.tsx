@@ -1,15 +1,18 @@
 // Navigable placeholders (dev-alignment 3.1): screens the product will have, shown now so the shape of the app is
 // clear, holding no data until their milestone. Each says what it will hold and what to use until then.
+import { Box, Heading, Text, chakra } from '@chakra-ui/react';
+import { ChartBarIcon, ClockCounterClockwiseIcon, ListChecksIcon, ShieldCheckIcon, SlidersHorizontalIcon, TrayIcon, UsersThreeIcon, type Icon } from '@phosphor-icons/react';
+
 export type Screen = 'referrals' | 'settings' | 'dashboard' | 'history' | 'audit' | 'criteria' | 'users';
 
-export const SCREENS: { id: Screen; label: string }[] = [
-  { id: 'referrals', label: 'Referrals' },
-  { id: 'dashboard', label: 'Dashboard' },
-  { id: 'history', label: 'History' },
-  { id: 'audit', label: 'Audit trail' },
-  { id: 'criteria', label: 'Criteria versions' },
-  { id: 'settings', label: 'Facility settings' },
-  { id: 'users', label: 'Users' },
+export const SCREENS: { id: Screen; label: string; icon: Icon }[] = [
+  { id: 'referrals', label: 'Referrals', icon: TrayIcon },
+  { id: 'dashboard', label: 'Dashboard', icon: ChartBarIcon },
+  { id: 'history', label: 'History', icon: ClockCounterClockwiseIcon },
+  { id: 'audit', label: 'Audit trail', icon: ShieldCheckIcon },
+  { id: 'criteria', label: 'Criteria versions', icon: ListChecksIcon },
+  { id: 'settings', label: 'Facility settings', icon: SlidersHorizontalIcon },
+  { id: 'users', label: 'Users', icon: UsersThreeIcon },
 ];
 
 const PLACEHOLDER: Partial<Record<Screen, { holds: string; meanwhile: string }>> = {
@@ -37,14 +40,16 @@ const PLACEHOLDER: Partial<Record<Screen, { holds: string; meanwhile: string }>>
 
 export function Nav({ screen, onSelect }: { screen: Screen; onSelect: (s: Screen) => void }) {
   return (
-    <nav aria-label="Screens" className="mb-6 flex flex-wrap gap-2 border-b border-gray-300 pb-2">
+    <Box as="nav" aria-label="Screens" display="grid" gap="0.5">
       {SCREENS.map((s) => (
-        <button key={s.id} type="button" aria-current={screen === s.id ? 'page' : undefined} onClick={() => onSelect(s.id)}
-          className={`rounded px-3 py-1 text-sm ${screen === s.id ? 'bg-gray-900 text-white' : 'border border-gray-300'}`}>
-          {s.label}{PLACEHOLDER[s.id] ? <span className="sr-only"> (coming at M6)</span> : null}
-        </button>
+        <chakra.button key={s.id} type="button" aria-current={screen === s.id ? 'page' : undefined} onClick={() => onSelect(s.id)}
+          display="flex" alignItems="center" gap="2.5" px="2.5" py="1.5" borderRadius="l2" fontSize="sm" textAlign="left" cursor="pointer" whiteSpace="nowrap"
+          fontWeight={screen === s.id ? '600' : '400'} bg={screen === s.id ? 'whiteAlpha.200' : 'transparent'} opacity={screen === s.id ? 1 : 0.85} _hover={{ bg: 'whiteAlpha.100', opacity: 1 }}>
+          <s.icon size={18} weight={screen === s.id ? 'bold' : 'regular'} aria-hidden="true" />
+          {s.label}{PLACEHOLDER[s.id] ? <chakra.span srOnly> (coming at M6)</chakra.span> : null}
+        </chakra.button>
       ))}
-    </nav>
+    </Box>
   );
 }
 
@@ -53,12 +58,12 @@ export function Placeholder({ screen }: { screen: Screen }) {
   if (!p) return null;
   const label = SCREENS.find((s) => s.id === screen)?.label ?? screen;
   return (
-    <section aria-labelledby="placeholder" className="rounded border border-dashed border-gray-400 p-6">
-      <h2 id="placeholder" className="font-semibold">{label}</h2>
-      <p className="mt-1 text-xs uppercase tracking-wide text-gray-500">Arrives at M6. No data on this screen yet.</p>
-      <p className="mt-3 text-sm">It will hold: {p.holds}</p>
-      <p className="mt-2 text-sm text-gray-700">Until then: {p.meanwhile}</p>
-    </section>
+    <Box as="section" aria-labelledby="placeholder" bg="surface" borderWidth="1px" borderStyle="dashed" borderColor="line" borderRadius="l2" p="6" maxW="44rem">
+      <Heading id="placeholder" as="h2" size="md">{label}</Heading>
+      <Text mt="1" fontSize="xs" textTransform="uppercase" letterSpacing="0.06em" color="muted">Arrives at M6. No data on this screen yet.</Text>
+      <Text mt="3" fontSize="sm">It will hold: {p.holds}</Text>
+      <Text mt="2" fontSize="sm" color="muted">Until then: {p.meanwhile}</Text>
+    </Box>
   );
 }
 

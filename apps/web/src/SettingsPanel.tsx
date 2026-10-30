@@ -1,7 +1,9 @@
 // Facility settings (M3 slice 1; SPEC §2, §8; D2, R7): the completeness checklist first, then the profile and the
 // rule switches. Reviewers read; only an Admin saves, and every save is a new audited profile version.
 import { useState } from 'react';
+import { Box, Button, Input, SimpleGrid, Text, chakra } from '@chakra-ui/react';
 import { ApiError, getSettings, saveSettings, type Settings } from './api.ts';
+import { Callout, Field, Panel, Select } from './ui.tsx';
 
 const label = (k: string) => k.replaceAll('_', ' ');
 
@@ -39,48 +41,47 @@ export function SettingsPanel({ facility, user }: { facility: string; user: stri
     }
   };
   return (
-    <section aria-labelledby="settings" className="mb-6 rounded border border-gray-300 p-4">
-      <div className="flex items-center gap-3">
-        <h2 id="settings" className="font-semibold">Facility settings</h2>
-        <button type="button" className="rounded border border-gray-900 px-3 py-1 text-sm" onClick={load}>Load</button>
-      </div>
-      {msg && <p role="status" className="mt-2 text-sm">{msg}</p>}
-      {s && !s.configured && <p className="mt-2 text-sm">This facility has no rule set or profile yet; referrals cannot be evaluated.</p>}
+    <Panel id="settings" title="Facility settings" action={<Button size="xs" variant="outline" onClick={load}>Load</Button>}>
+      {msg && <Text role="status" fontSize="sm">{msg}</Text>}
+      {s && !s.configured && <Text mt="2" fontSize="sm">This facility has no rule set or profile yet; referrals cannot be evaluated.</Text>}
       {s?.configured && s.profile_keys && s.completeness && s.rule_set && (
         <>
-          <p className="mt-2 text-sm">Rule set version {s.rule_set.version} ({s.rule_set.criteria_document_ref}); profile version {s.profile?.version}.</p>
-          <div className={`mt-2 rounded border-l-4 p-2 text-sm ${s.completeness.missing_keys.length ? 'border-amber-700 bg-amber-50' : 'border-green-700 bg-green-50'}`}>
-            {s.completeness.missing_keys.length
-              ? <>Not set, and read by an enabled rule (referrals will need review until set): {s.completeness.missing_keys.map(label).join(', ')}</>
-              : <>Every setting an enabled rule reads is set.</>}
-          </div>
-          <fieldset className="mt-3">
-            <legend className="font-medium">Capabilities</legend>
-            {Object.entries(s.profile_keys).map(([k, type]) => (
-              <label key={k} className="mr-4 mt-1 inline-block text-sm">
-                {label(k)}{' '}
-                {type === 'boolean'
-                  ? <select value={caps[k] === undefined ? '' : String(caps[k])} onChange={(e) => setCaps(e.target.value === '' ? Object.fromEntries(Object.entries(caps).filter(([x]) => x !== k)) : { ...caps, [k]: e.target.value === 'true' })} className="rounded border p-1">
-                      <option value="">not set</option><option value="true">yes</option><option value="false">no</option>
-                    </select>
-                  : <input type="number" min={0} value={caps[k] === undefined ? '' : String(caps[k])} onChange={(e) => setCaps(e.target.value === '' ? Object.fromEntries(Object.entries(caps).filter(([x]) => x !== k)) : { ...caps, [k]: Math.max(0, Math.trunc(Number(e.target.value))) })} className="w-20 rounded border p-1" />}
-              </label>
-            ))}
-          </fieldset>
-          <fieldset className="mt-3">
-            <legend className="font-medium">Rules at this facility</legend>
+          <Text mt="2" fontSize="sm">Rule set version {s.rule_set.version} ({s.rule_set.criteria_document_ref}); profile version {s.profile?.version}.</Text>
+          <Box mt="2">
+            <Callout tone={s.completeness.missing_keys.length ? 'review' : 'admit'}>
+              {s.completeness.missing_keys.length
+                ? <>Not set, and read by an enabled rule (referrals will need review until set): {s.completeness.missing_keys.map(label).join(', ')}</>
+                : <>Every setting an enabled rule reads is set.</>}
+            </Callout>
+          </Box>
+          <chakra.fieldset mt="3">
+            <chakra.legend fontWeight="600" fontSize="sm">Capabilities</chakra.legend>
+            <SimpleGrid mt="1" columns={{ base: 1, sm: 2, lg: 3 }} gap="3">
+              {Object.entries(s.profile_keys).map(([k, type]) => (
+                <Field key={k} label={label(k)}>
+                  {type === 'boolean'
+                    ? <Select value={caps[k] === undefined ? '' : String(caps[k])} onChange={(v) => setCaps(v === '' ? Object.fromEntries(Object.entries(caps).filter(([x]) => x !== k)) : { ...caps, [k]: v === 'true' })}>
+                        <option value="">not set</option><option value="true">yes</option><option value="false">no</option>
+                      </Select>
+                    : <Input size="sm" type="number" min={0} value={caps[k] === undefined ? '' : String(caps[k])} onChange={(e) => setCaps(e.target.value === '' ? Object.fromEntries(Object.entries(caps).filter(([x]) => x !== k)) : { ...caps, [k]: Math.max(0, Math.trunc(Number(e.target.value))) })} />}
+                </Field>
+              ))}
+            </SimpleGrid>
+          </chakra.fieldset>
+          <chakra.fieldset mt="3">
+            <chakra.legend fontWeight="600" fontSize="sm">Rules at this facility</chakra.legend>
             {s.rule_set.rules.map((r) => (
-              <label key={r.id} className="block text-sm">
+              <Box as="label" key={r.id} display="block" fontSize="sm" mt="1">
                 <input type="checkbox" checked={r.enabled_in_rule_set && !off.includes(r.id)} disabled={!r.switchable}
                   onChange={(e) => setOff(e.target.checked ? off.filter((x) => x !== r.id) : [...off, r.id])} />{' '}
-                <span className="font-mono text-xs">{r.id}</span> ({label(r.kind)}){r.explanation ? ` — ${r.explanation}` : ''}
+                <chakra.span fontFamily="mono" fontSize="xs">{r.id}</chakra.span> ({label(r.kind)}){r.explanation ? ` — ${r.explanation}` : ''}
                 {!r.enabled_in_rule_set ? ' (off in the organisation rule set)' : !r.switchable ? ' (always on)' : ''}
-              </label>
+              </Box>
             ))}
-          </fieldset>
-          <button type="button" className="mt-3 rounded bg-gray-900 px-3 py-1 text-sm text-white" onClick={save}>Save as a new version</button>
+          </chakra.fieldset>
+          <Button mt="3" size="sm" onClick={save}>Save as a new version</Button>
         </>
       )}
-    </section>
+    </Panel>
   );
 }

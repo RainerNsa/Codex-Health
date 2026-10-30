@@ -2,7 +2,10 @@
 // actions this user may take now, and the record of what happened. The API returns the allowed actions and
 // checks each again; the database checks the transition and the decision a third time. Text only, no HTML.
 import { useState } from 'react';
+import { Box, Button, Flex, Grid, Heading, HStack, Text, Textarea, chakra } from '@chakra-ui/react';
+import { CheckIcon, XIcon } from '@phosphor-icons/react';
 import type { Action, DecisionBody, ReferralView } from './api.ts';
+import { Callout, Field, Panel, Select } from './ui.tsx';
 
 const keyLabel = (k: string) => k.replaceAll('_', ' ');
 const ACTION_LABEL: Record<Action, string> = {
@@ -41,137 +44,139 @@ export function ReviewPanel({ view, busy, on }: { view: ReferralView; busy: bool
   const amending = open === 'amend';
   const requestable = [...new Set([...(ev?.trace.blocking ?? []), ...(ev?.trace.missing ?? []), ...view.form.fact_keys.map((k) => k.key)])];
 
+  const noteField = (title: string, value: string, set: (v: string) => void, required = true) => (
+    <Field label={title}><Textarea size="sm" required={required} maxLength={view.form.note_max} rows={2} value={value} onChange={(e) => set(e.target.value)} /></Field>
+  );
+  const box = { mt: '3', borderWidth: '1px', borderColor: 'line', borderRadius: 'l2', p: '3', fontSize: 'sm' } as const;
+
   return (
-    <section aria-labelledby="review" className="mt-6 rounded border border-gray-300 p-4">
-      <h2 id="review" className="font-semibold">Review and decision</h2>
-      <p className="text-sm">Status: <span className="font-medium">{STATUS_LABEL[view.referral.status] ?? view.referral.status}</span></p>
+    <Panel id="review" title="Review and decision">
+      <Text fontSize="sm">Status: <chakra.span fontWeight="600">{STATUS_LABEL[view.referral.status] ?? view.referral.status}</chakra.span></Text>
 
       {view.confirmation.length > 0 && (
-        <div className="mt-3">
-          <h3 className="text-sm font-medium">Facts this decision rests on</h3>
-          <ul className="text-sm">
+        <Box mt="3">
+          <Heading as="h3" size="xs">Facts this decision rests on</Heading>
+          <chakra.ul fontSize="sm" mt="1">
             {view.confirmation.map((c) => (
-              <li key={c.key}>{c.confirmed ? '✓' : '✗'} {keyLabel(c.key)} {c.confirmed ? '' : '(not yet stated: enter it on the left)'}</li>
+              <Flex as="li" key={c.key} align="center" gap="1.5">
+                {c.confirmed ? <CheckIcon aria-hidden="true" weight="bold" color="var(--chakra-colors-admit)" /> : <XIcon aria-hidden="true" weight="bold" color="var(--chakra-colors-stop)" />}
+                <span>{keyLabel(c.key)} {c.confirmed ? '(stated)' : '(not yet stated: enter it on the left)'}</span>
+              </Flex>
             ))}
-          </ul>
-        </div>
+          </chakra.ul>
+        </Box>
       )}
 
       {view.decisions.length > 0 && (
-        <div className="mt-3 rounded border-l-4 border-gray-700 bg-gray-50 p-2 text-sm">
-          <h3 className="font-medium">Decisions (newest first; none is ever changed)</h3>
+        <Box mt="3" bg="infoSoft" borderLeftWidth="4px" borderColor="info" borderRadius="l2" p="2" fontSize="sm">
+          <Heading as="h3" size="xs">Decisions (newest first; none is ever changed)</Heading>
           <ol>
             {view.decisions.map((d, i) => (
-              <li key={d.id} className={i === 0 ? 'font-medium' : 'text-gray-700'}>
+              <Box as="li" key={d.id} fontWeight={i === 0 ? '600' : '400'} color={i === 0 ? 'ink' : 'muted'}>
                 {new Date(d.decided_at).toLocaleString()}: {d.amends_decision_id ? 'Amended to' : 'Decided'} {OUTCOME_TEXT[d.decision]} (recommended {OUTCOME_TEXT[d.recommended_outcome]})
                 {d.cosigned_by ? ', co-signed' : ''}{d.override_reason ? `. Override reason: ${d.override_reason}` : ''}{d.amendment_reason ? `. Amendment reason: ${d.amendment_reason}` : ''}
-              </li>
+              </Box>
             ))}
           </ol>
-        </div>
+        </Box>
       )}
 
-      {view.evaluation_outdated && <p role="status" className="mt-2 text-sm text-amber-900">The facility's settings changed after this recommendation. Re-evaluate before deciding.</p>}
-      {view.cosign.any && <p role="status" className="mt-2 text-sm text-amber-900">A hard-stop fact was changed from one known value to another, so any decision is filed for a second Admin to co-sign.</p>}
-      {!view.cosign.any && view.cosign.admit && view.evaluation?.outcome !== 'do_not_admit' && <p role="status" className="mt-2 text-sm text-amber-900">A hard stop decided this referral earlier, so an Admit is filed for a second Admin to co-sign.</p>}
-      {view.pending_request && (
-        <div className="mt-2 rounded border-l-4 border-amber-700 bg-amber-50 p-2 text-sm">
-          {view.pending_request.amends_decision_id ? 'Amendment filed' : 'Filed'} for co-sign by {view.pending_request.requested_by_name}: <span className="font-medium">{OUTCOME_TEXT[view.pending_request.decision]}</span>
-          {view.pending_request.amendment_reason && <> (amendment reason: {view.pending_request.amendment_reason})</>}
-          {view.pending_request.override_reason && <> (reason: {view.pending_request.override_reason})</>}.
-          {' '}{view.pending_request.can_cosign ? 'You can co-sign it.' : 'Waiting for an Admin who did not file it.'}
-          {open === 'cosign' && view.pending_request.can_cosign && (
-            <div className="mt-2">
-              <p>Co-signing records this decision for {view.pending_request.requested_by_name}, with you as the second Admin, and finalizes the referral.</p>
-              <button type="button" disabled={busy} className="mt-1 rounded bg-gray-900 px-3 py-1 text-white disabled:opacity-50"
-                onClick={() => view.pending_request && void on.cosign(view.pending_request.id).then((ok) => ok && reset())}>Co-sign and finalize</button>
-              <button type="button" className="ml-2 rounded border border-gray-900 px-3 py-1" onClick={reset}>Cancel</button>
-            </div>
-          )}
-        </div>
-      )}
+      <Grid gap="2" mt="2">
+        {view.evaluation_outdated && <Callout tone="review" role="status">The facility's settings changed after this recommendation. Re-evaluate before deciding.</Callout>}
+        {view.cosign.any && <Callout tone="review" role="status">A hard-stop fact was changed from one known value to another, so any decision is filed for a second Admin to co-sign.</Callout>}
+        {!view.cosign.any && view.cosign.admit && view.evaluation?.outcome !== 'do_not_admit' && <Callout tone="review" role="status">A hard stop decided this referral earlier, so an Admit is filed for a second Admin to co-sign.</Callout>}
+        {view.pending_request && (
+          <Callout tone="review">
+            {view.pending_request.amends_decision_id ? 'Amendment filed' : 'Filed'} for co-sign by {view.pending_request.requested_by_name}: <chakra.span fontWeight="600">{OUTCOME_TEXT[view.pending_request.decision]}</chakra.span>
+            {view.pending_request.amendment_reason && <> (amendment reason: {view.pending_request.amendment_reason})</>}
+            {view.pending_request.override_reason && <> (reason: {view.pending_request.override_reason})</>}.
+            {' '}{view.pending_request.can_cosign ? 'You can co-sign it.' : 'Waiting for an Admin who did not file it.'}
+            {open === 'cosign' && view.pending_request.can_cosign && (
+              <Box mt="2">
+                <Text>Co-signing records this decision for {view.pending_request.requested_by_name}, with you as the second Admin, and finalizes the referral.</Text>
+                <HStack mt="1" gap="2">
+                  <Button size="sm" disabled={busy} onClick={() => view.pending_request && void on.cosign(view.pending_request.id).then((ok) => ok && reset())}>Co-sign and finalize</Button>
+                  <Button size="sm" variant="outline" onClick={reset}>Cancel</Button>
+                </HStack>
+              </Box>
+            )}
+          </Callout>
+        )}
+      </Grid>
 
       {view.actions.length > 0 && (
-        <div className="mt-3 flex flex-wrap gap-2">
+        <Flex mt="3" wrap="wrap" gap="2">
           {view.actions.filter((a) => a !== 'upload' && a !== 'resolve_failures' && a !== 'process').map((a) => (
-            <button key={a} type="button" disabled={busy} aria-pressed={open === a}
-              className={`rounded px-3 py-1 text-sm disabled:opacity-50 ${a === 'finalize' ? 'bg-gray-900 text-white' : 'border border-gray-900'}`}
+            <Button key={a} size="sm" disabled={busy} aria-pressed={open === a} variant={a === 'finalize' ? 'solid' : 'outline'}
               onClick={() => (a === 'submit' ? void on.move({ action: 'submit' }) : a === 'reevaluate' ? void on.reevaluate()
-                : setOpen(open === a ? null : a))}>{ACTION_LABEL[a]}</button>
+                : setOpen(open === a ? null : a))}>{ACTION_LABEL[a]}</Button>
           ))}
-        </div>
+        </Flex>
       )}
 
       {open && (open === 'hold' || open === 'request_info' || open === 'escalate' || open === 'resume') && (
-        <form className="mt-3 rounded border border-gray-300 p-3 text-sm" onSubmit={(e) => { e.preventDefault(); void on.move({ action: open as 'hold' | 'request_info' | 'escalate' | 'resume', ...(note.trim() ? { note } : {}), ...(open === 'escalate' ? { department } : {}), ...(open === 'request_info' ? { items } : {}) }).then((ok) => ok && reset()); }}>
+        <chakra.form {...box} onSubmit={(e) => { e.preventDefault(); void on.move({ action: open as 'hold' | 'request_info' | 'escalate' | 'resume', ...(note.trim() ? { note } : {}), ...(open === 'escalate' ? { department } : {}), ...(open === 'request_info' ? { items } : {}) }).then((ok) => ok && reset()); }}>
           {open === 'request_info' && (
             <fieldset>
-              <legend className="font-medium">What is needed (pick at least one)</legend>
-              {requestable.map((k) => (
-                <label key={k} className="mr-3 inline-block"><input type="checkbox" checked={items.includes(k)} onChange={(e) => setItems(e.target.checked ? [...items, k] : items.filter((x) => x !== k))} /> {keyLabel(k)}</label>
-              ))}
+              <chakra.legend fontWeight="600">What is needed (pick at least one)</chakra.legend>
+              <Flex wrap="wrap" gap="3">
+                {requestable.map((k) => (
+                  <label key={k}><input type="checkbox" checked={items.includes(k)} onChange={(e) => setItems(e.target.checked ? [...items, k] : items.filter((x) => x !== k))} /> {keyLabel(k)}</label>
+                ))}
+              </Flex>
             </fieldset>
           )}
           {open === 'escalate' && (
-            <label className="block">Department
-              <select required className="ml-2 rounded border p-1" value={department} onChange={(e) => setDepartment(e.target.value)}>
+            <Field label="Department">
+              <Select required value={department} onChange={setDepartment}>
                 <option value="">choose</option>
                 {view.form.departments.map((d) => <option key={d} value={d}>{keyLabel(d)}</option>)}
-              </select>
-            </label>
+              </Select>
+            </Field>
           )}
-          <label className="mt-2 block">Note{open === 'request_info' ? ' (optional)' : ''}
-            <textarea required={open !== 'request_info'} maxLength={view.form.note_max} rows={2} className="mt-1 block w-full rounded border p-1" value={note} onChange={(e) => setNote(e.target.value)} />
-          </label>
-          <button type="submit" disabled={busy || (open === 'request_info' ? items.length === 0 : !note.trim()) || (open === 'escalate' && !department)}
-            className="mt-2 rounded bg-gray-900 px-3 py-1 text-white disabled:opacity-50">{ACTION_LABEL[open]}</button>
-        </form>
+          <Box mt="2">{noteField(`Note${open === 'request_info' ? ' (optional)' : ''}`, note, setNote, open !== 'request_info')}</Box>
+          <Button type="submit" mt="2" size="sm" disabled={busy || (open === 'request_info' ? items.length === 0 : !note.trim()) || (open === 'escalate' && !department)}>{ACTION_LABEL[open]}</Button>
+        </chakra.form>
       )}
 
       {(open === 'finalize' || amending) && ev && (
-        <form className="mt-3 rounded border border-gray-300 p-3 text-sm" onSubmit={(e) => {
+        <chakra.form {...box} onSubmit={(e) => {
           e.preventDefault();
           if (!decision) return;
           const body: DecisionBody = { evaluation_id: ev.id, decision, ...(override ? { override_reason: note } : {}), ...(amending ? { amendment_reason: amendmentReason } : {}) };
           void (needsCosign ? on.requestCosign(body) : amending ? on.amend(body) : on.finalize(body)).then((ok) => ok && reset());
         }}>
-          {amending && (
-            <label className="mb-2 block">Why the decision is being amended (required; the earlier decision stays on record)
-              <textarea required maxLength={view.form.note_max} rows={2} className="mt-1 block w-full rounded border p-1" value={amendmentReason} onChange={(e) => setAmendmentReason(e.target.value)} />
-            </label>
-          )}
-          <p>Recommendation: <span className="font-medium">{OUTCOME_TEXT[ev.outcome]}</span>. Staff make the decision.</p>
-          {unconfirmed.length > 0 && <p role="alert" className="mt-1 text-red-800">State every fact above before deciding: {unconfirmed.map((c) => keyLabel(c.key)).join(', ')}.</p>}
-          <fieldset className="mt-2">
-            <legend className="font-medium">Decision</legend>
-            {(['admit', 'do_not_admit'] as const).map((d) => (
-              <label key={d} className="mr-4"><input type="radio" name="decision" value={d} checked={decision === d} disabled={d === 'admit' && view.admit_requires.length > 0} onChange={() => setDecision(d)} /> {OUTCOME_TEXT[d]}</label>
-            ))}
-          </fieldset>
-          {view.admit_requires.length > 0 && <p className="mt-1 text-xs">Admit needs a known value (not unknown) for: {view.admit_requires.map(keyLabel).join(', ')}.</p>}
-          {needsCosign && <p className="mt-1 text-xs">This decision is filed for a second Admin to co-sign; it is final only once they do.</p>}
-          {override && (
-            <label className="mt-2 block">Override reason (required: the decision differs from the recommendation)
-              <textarea required maxLength={view.form.note_max} rows={2} className="mt-1 block w-full rounded border p-1" value={note} onChange={(e) => setNote(e.target.value)} />
-            </label>
-          )}
-          <button type="submit" disabled={busy || !decision || unconfirmed.length > 0 || (override && !note.trim()) || (amending && !amendmentReason.trim())} className="mt-2 rounded bg-gray-900 px-3 py-1 text-white disabled:opacity-50">{needsCosign ? 'File for co-sign' : amending ? 'Record amendment' : 'Record decision'}</button>
-        </form>
+          {amending && <Box mb="2">{noteField('Why the decision is being amended (required; the earlier decision stays on record)', amendmentReason, setAmendmentReason)}</Box>}
+          <Text>Recommendation: <chakra.span fontWeight="600">{OUTCOME_TEXT[ev.outcome]}</chakra.span>. Staff make the decision.</Text>
+          {unconfirmed.length > 0 && <Text role="alert" mt="1" color="stop">State every fact above before deciding: {unconfirmed.map((c) => keyLabel(c.key)).join(', ')}.</Text>}
+          <chakra.fieldset mt="2">
+            <chakra.legend fontWeight="600">Decision</chakra.legend>
+            <HStack gap="4">
+              {(['admit', 'do_not_admit'] as const).map((d) => (
+                <label key={d}><input type="radio" name="decision" value={d} checked={decision === d} disabled={d === 'admit' && view.admit_requires.length > 0} onChange={() => setDecision(d)} /> {OUTCOME_TEXT[d]}</label>
+              ))}
+            </HStack>
+          </chakra.fieldset>
+          {view.admit_requires.length > 0 && <Text mt="1" fontSize="xs">Admit needs a known value (not unknown) for: {view.admit_requires.map(keyLabel).join(', ')}.</Text>}
+          {needsCosign && <Text mt="1" fontSize="xs">This decision is filed for a second Admin to co-sign; it is final only once they do.</Text>}
+          {override && <Box mt="2">{noteField('Override reason (required: the decision differs from the recommendation)', note, setNote)}</Box>}
+          <Button type="submit" mt="2" size="sm" disabled={busy || !decision || unconfirmed.length > 0 || (override && !note.trim()) || (amending && !amendmentReason.trim())}>{needsCosign ? 'File for co-sign' : amending ? 'Record amendment' : 'Record decision'}</Button>
+        </chakra.form>
       )}
 
       {view.transitions.length > 0 && (
-        <div className="mt-4">
-          <h3 className="text-sm font-medium">History</h3>
-          <ol className="text-xs">
+        <Box mt="4">
+          <Heading as="h3" size="xs">History</Heading>
+          <chakra.ol fontSize="xs" mt="1">
             {view.transitions.map((t) => (
               <li key={`${t.created_at}-${t.transition}`}>
                 {new Date(t.created_at).toLocaleString()}: {STATUS_LABEL[t.from_status]} → {STATUS_LABEL[t.to_status]}
                 {t.department ? ` (${keyLabel(t.department)})` : ''}{t.requested_items.length ? ` — requested: ${t.requested_items.map(keyLabel).join(', ')}` : ''}{t.note ? ` — ${t.note}` : ''}
               </li>
             ))}
-          </ol>
-        </div>
+          </chakra.ol>
+        </Box>
       )}
-    </section>
+    </Panel>
   );
 }

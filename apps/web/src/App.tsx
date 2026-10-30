@@ -2,13 +2,17 @@
 // returns is rendered as text (no HTML injection anywhere, CONSTRAINTS Floor). Defaults are the synthetic seed
 // (scripts/dev/seed-synthetic.mjs): ZZTEST Alpha Facility 1 and its Reviewer.
 import { useEffect, useState, type FormEvent } from 'react';
+import { Badge, Box, Button, Flex, Grid, Heading, HStack, Input, SimpleGrid, Table, Text, Textarea, VisuallyHidden, chakra } from '@chakra-ui/react';
+import { CheckCircleIcon, PlusIcon, ProhibitIcon, WarningCircleIcon, type Icon } from '@phosphor-icons/react';
 import { amendReferral, ApiError, resolveFailures, uploadDocument, cosignRequest, createReferral, enterFact, finalizeReferral, getReferral, moveReferral, reevaluateReferral, requestCosign, type ReferralView, type Tri } from './api.ts';
 import { ReviewPanel } from './ReviewPanel.tsx';
 import { DocumentsPanel } from './DocumentsPanel.tsx';
 import { QueuePanel } from './QueuePanel.tsx';
 import { useReviewTimer } from './reviewTimer.ts';
-import { Nav, Placeholder, type Screen } from './Placeholders.tsx';
+import { Logo } from './Logo.tsx';
+import { Nav, Placeholder, SCREENS, type Screen } from './Placeholders.tsx';
 import { SettingsPanel } from './SettingsPanel.tsx';
+import { Callout, Field, Panel, Select, Sub, type Tone } from './ui.tsx';
 
 const SEED_FACILITY = '00000000-0000-4000-8000-00000000f0a1';
 const SEED_USERS = [
@@ -17,7 +21,7 @@ const SEED_USERS = [
   { id: '00000000-0000-4000-8000-0000000000e3', label: 'ZZTEST Viewer (read only)' },
 ];
 const OUTCOME_LABEL = { admit: 'Admit', needs_review: 'Needs Review', do_not_admit: 'Do Not Admit' } as const;
-const OUTCOME_STYLE = { admit: 'bg-green-100 border-green-700', needs_review: 'bg-amber-100 border-amber-700', do_not_admit: 'bg-red-100 border-red-700' } as const;
+const OUTCOME_LOOK: Record<string, { tone: Tone; icon: Icon }> = { admit: { tone: 'admit', icon: CheckCircleIcon }, needs_review: { tone: 'review', icon: WarningCircleIcon }, do_not_admit: { tone: 'stop', icon: ProhibitIcon } };
 const REASON_LABEL: Record<string, string> = {
   missing_info: 'Missing information', clinical: 'Clinical review', financial: 'Financial review', leadership: 'Leadership review', processing_incomplete: 'Processing incomplete',
 };
@@ -85,78 +89,83 @@ export function App() {
   };
 
   return (
-    <main className="mx-auto max-w-5xl p-6 font-sans text-gray-900">
-      <header className="mb-6">
-        <h1 className="text-xl font-semibold">Codex Health</h1>
-        <p className="text-sm text-gray-600">Internal build. Synthetic data only. Local sign-in stub: no real accounts.</p>
-      </header>
+    <Grid colorPalette="brand" minH="100dvh" templateColumns={{ base: 'minmax(0, 1fr)', lg: '15rem minmax(0, 1fr)' }}>
+      {/* the rail is navy in both themes, so its focus ring uses the signal colour */}
+      <Box as="header" bg="rail" color="railInk" css={{ '--chakra-colors-brand-solid': 'var(--chakra-colors-signal)' }}>
+      <Flex direction="column" gap="6" p="4" position={{ lg: 'sticky' }} top="0" h={{ lg: '100dvh' }}>
+        <Logo />
+        <Nav screen={screen} onSelect={setScreen} />
+        <Box mt={{ lg: 'auto' }}>
+          <Field label="Signed in as">
+            <Select value={user} onChange={setUser}>{SEED_USERS.map((u) => <option key={u.id} value={u.id}>{u.label}</option>)}</Select>
+          </Field>
+        </Box>
+      </Flex>
+      </Box>
 
-      <section aria-labelledby="ctx" className="mb-6 grid gap-3 rounded border border-gray-300 p-4 sm:grid-cols-3">
-        <h2 id="ctx" className="sr-only">Who and where</h2>
-        <label className="text-sm">User
-          <select className="mt-1 block w-full rounded border p-1" value={user} onChange={(e) => setUser(e.target.value)}>
-            {SEED_USERS.map((u) => <option key={u.id} value={u.id}>{u.label}</option>)}
-          </select>
-        </label>
-        <label className="text-sm">Facility id
-          <input className="mt-1 block w-full rounded border p-1 font-mono text-xs" value={facility} onChange={(e) => setFacility(e.target.value.trim())} />
-        </label>
-        <label className="text-sm">Referral id
-          <input className="mt-1 block w-full rounded border p-1 font-mono text-xs" value={referralId} onChange={(e) => setReferralId(e.target.value.trim())} />
-        </label>
-        <div className="flex gap-2 sm:col-span-3">
-          <button type="button" disabled={busy} className="rounded bg-gray-900 px-3 py-1 text-white disabled:opacity-50" onClick={() => run(() => createReferral(facility, user))}>New referral</button>
-          <button type="button" disabled={busy || !referralId} className="rounded border border-gray-900 px-3 py-1 disabled:opacity-50" onClick={() => run(() => getReferral(facility, referralId, user))}>Open referral</button>
-        </div>
-      </section>
+      <Grid as="main" templateColumns="minmax(0, 1fr)" gap="4" p={{ base: '4', lg: '6' }} alignContent="start" minW="0">
+        <Box>
+          <Heading as="h1" size="lg" fontWeight="700">{SCREENS.find((s) => s.id === screen)?.label}</Heading>
+          <Sub>Internal build. Synthetic data only. Local sign-in stub: no real accounts.</Sub>
+        </Box>
 
-      <Nav screen={screen} onSelect={setScreen} />
+        <Panel id="ctx">
+          <VisuallyHidden as="h2">Which facility and referral</VisuallyHidden>
+          <SimpleGrid columns={{ base: 1, sm: 2 }} gap="3">
+            <Field label="Facility id"><Input size="sm" fontFamily="mono" value={facility} onChange={(e) => setFacility(e.target.value.trim())} /></Field>
+            <Field label="Referral id"><Input size="sm" fontFamily="mono" value={referralId} onChange={(e) => setReferralId(e.target.value.trim())} /></Field>
+          </SimpleGrid>
+          <HStack mt="3" gap="2">
+            <Button size="sm" disabled={busy} onClick={() => run(() => createReferral(facility, user))}><PlusIcon aria-hidden="true" /> New referral</Button>
+            <Button size="sm" variant="outline" disabled={busy || !referralId} onClick={() => run(() => getReferral(facility, referralId, user))}>Open referral</Button>
+          </HStack>
+        </Panel>
 
-      {error && <p role="alert" className="mb-4 rounded border border-red-700 bg-red-50 p-3 text-sm">{error}</p>}
+        {error && <Callout tone="stop" role="alert">{error}</Callout>}
 
-      {screen === 'settings' && <SettingsPanel facility={facility} user={user} />}
-      <Placeholder screen={screen} />
+        {screen === 'settings' && <SettingsPanel facility={facility} user={user} />}
+        <Placeholder screen={screen} />
 
-      {/* a new facility or user starts an empty list: one person's queue never shows under another's name */}
-      {screen === 'referrals' && <QueuePanel key={`${facility}:${user}`} facility={facility} user={user} onOpen={(id) => void run(() => getReferral(facility, id, user))} />}
+        {/* a new facility or user starts an empty list: one person's queue never shows under another's name */}
+        {screen === 'referrals' && <QueuePanel key={`${facility}:${user}`} facility={facility} user={user} onOpen={(id) => void run(() => getReferral(facility, id, user))} />}
 
-      {screen === 'referrals' && view && (
-        <DocumentsPanel view={view} busy={busy} on={{
-          upload: async (files, type, replaces) => {
-            let ok = true;
-            for (const f of files) ok = (await run(() => uploadDocument(facility, view.referral.id, user, f, type, replaces))) && ok;
-            return ok;
-          },
-          process: () => run(() => moveReferral(facility, view.referral.id, user, { action: 'process' })),
-          resolve: (documents) => run(() => resolveFailures(facility, view.referral.id, user, documents)),
-        }} />
-      )}
+        {screen === 'referrals' && view && (
+          <DocumentsPanel view={view} busy={busy} on={{
+            upload: async (files, type, replaces) => {
+              let ok = true;
+              for (const f of files) ok = (await run(() => uploadDocument(facility, view.referral.id, user, f, type, replaces))) && ok;
+              return ok;
+            },
+            process: () => run(() => moveReferral(facility, view.referral.id, user, { action: 'process' })),
+            resolve: (documents) => run(() => resolveFailures(facility, view.referral.id, user, documents)),
+          }} />
+        )}
 
-      {screen === 'referrals' && view && (
-        <div className="grid gap-6 lg:grid-cols-2">
-          <section aria-labelledby="enter">
-            <h2 id="enter" className="mb-2 font-semibold">Enter or correct a fact</h2>
-            <p className="mb-3 text-sm text-gray-600">Status: {view.referral.status}. Each entry needs a note saying where the information came from. A correction keeps the earlier value on record.</p>
-            {view.form.fact_keys.map((k) => (
-              <FactForm key={k.key} fact={k.key} critical={k.critical} noteMax={view.form.note_max} disabled={busy}
-                current={view.facts.find((f) => f.key === k.key)}
-                onSubmit={(value, note, asOf) => run(() => enterFact(facility, view.referral.id, user, { key: k.key, value: { type: 'tri_state', value }, note, as_of_date: asOf }))} />
-            ))}
-          </section>
-          <div>
-            <Recommendation view={view} />
-            <ReviewPanel view={view} busy={busy} on={{
-              move: (body) => run(() => moveReferral(facility, view.referral.id, user, body)),
-              finalize: (body) => run(() => finalizeReferral(facility, view.referral.id, user, body)),
-              reevaluate: () => run(() => reevaluateReferral(facility, view.referral.id, user)),
-              requestCosign: (body) => run(() => requestCosign(facility, view.referral.id, user, body)),
-              amend: (body) => run(() => amendReferral(facility, view.referral.id, user, body)),
-              cosign: (request) => run(() => cosignRequest(facility, view.referral.id, request, user)),
-            }} />
-          </div>
-        </div>
-      )}
-    </main>
+        {screen === 'referrals' && view && (
+          <Grid gap="4" templateColumns={{ base: 'minmax(0, 1fr)', xl: 'repeat(2, minmax(0, 1fr))' }} alignItems="start">
+            <Panel id="enter" title="Enter or correct a fact">
+              <Box mb="3"><Sub>Status: {view.referral.status}. Each entry needs a note saying where the information came from. A correction keeps the earlier value on record.</Sub></Box>
+              {view.form.fact_keys.map((k) => (
+                <FactForm key={k.key} fact={k.key} critical={k.critical} noteMax={view.form.note_max} disabled={busy}
+                  current={view.facts.find((f) => f.key === k.key)}
+                  onSubmit={(value, note, asOf) => run(() => enterFact(facility, view.referral.id, user, { key: k.key, value: { type: 'tri_state', value }, note, as_of_date: asOf }))} />
+              ))}
+            </Panel>
+            <Grid gap="4" minW="0">
+              <Recommendation view={view} />
+              <ReviewPanel view={view} busy={busy} on={{
+                move: (body) => run(() => moveReferral(facility, view.referral.id, user, body)),
+                finalize: (body) => run(() => finalizeReferral(facility, view.referral.id, user, body)),
+                reevaluate: () => run(() => reevaluateReferral(facility, view.referral.id, user)),
+                requestCosign: (body) => run(() => requestCosign(facility, view.referral.id, user, body)),
+                amend: (body) => run(() => amendReferral(facility, view.referral.id, user, body)),
+                cosign: (request) => run(() => cosignRequest(facility, view.referral.id, request, user)),
+              }} />
+            </Grid>
+          </Grid>
+        )}
+      </Grid>
+    </Grid>
   );
 }
 
@@ -171,62 +180,68 @@ function FactForm(props: { fact: string; critical: boolean; noteMax: number; dis
   };
   const id = `fact-${props.fact}`;
   return (
-    <form onSubmit={submit} className="mb-3 rounded border border-gray-300 p-3" aria-labelledby={`${id}-legend`}>
+    <chakra.form onSubmit={submit} mb="3" borderWidth="1px" borderColor="line" borderRadius="l2" p="3" aria-labelledby={`${id}-legend`}>
       <fieldset>
-        <legend id={`${id}-legend`} className="font-medium">
-          {keyLabel(props.fact)} {props.critical && <span className="ml-1 rounded bg-gray-200 px-1 text-xs">critical</span>}
-        </legend>
-        <p className="text-xs text-gray-600">Current: {props.current ? `${String(props.current.value.value)} (${props.current.source}${props.current.as_of_date ? `, as of ${props.current.as_of_date}` : ''})` : 'not entered'}</p>
-        <div className="mt-2 flex gap-4 text-sm">
+        <chakra.legend id={`${id}-legend`} fontWeight="600" fontSize="sm">
+          {keyLabel(props.fact)} {props.critical && <Badge ml="1" size="xs" bg="infoSoft" color="info">critical</Badge>}
+        </chakra.legend>
+        <Text fontSize="xs" color="muted">Current: {props.current ? `${String(props.current.value.value)} (${props.current.source}${props.current.as_of_date ? `, as of ${props.current.as_of_date}` : ''})` : 'not entered'}</Text>
+        <HStack mt="2" gap="4" fontSize="sm">
           {(['yes', 'no', 'unknown'] as const).map((v) => (
             <label key={v}><input type="radio" name={`${id}-value`} value={v} checked={value === v} onChange={() => setValue(v)} /> {v}</label>
           ))}
-        </div>
-        <label className="mt-2 block text-sm">Note (source of this information)
-          <textarea required maxLength={props.noteMax} className="mt-1 block w-full rounded border p-1" rows={2} value={note} onChange={(e) => setNote(e.target.value)} />
-        </label>
-        <label className="mt-2 block text-sm">As of (optional)
-          <input type="date" className="mt-1 block rounded border p-1" value={asOf} onChange={(e) => setAsOf(e.target.value)} />
-        </label>
-        <button type="submit" disabled={props.disabled || !note.trim()} className="mt-2 rounded bg-gray-900 px-3 py-1 text-sm text-white disabled:opacity-50">Save</button>
+        </HStack>
+        <Grid mt="2" gap="2">
+          <Field label="Note (source of this information)"><Textarea size="sm" required maxLength={props.noteMax} rows={2} value={note} onChange={(e) => setNote(e.target.value)} /></Field>
+          <Field label="As of (optional)"><Input size="sm" w="auto" type="date" value={asOf} onChange={(e) => setAsOf(e.target.value)} /></Field>
+        </Grid>
+        <Button type="submit" mt="2" size="xs" disabled={props.disabled || !note.trim()}>Save</Button>
       </fieldset>
-    </form>
+    </chakra.form>
   );
 }
 
 function Recommendation({ view }: { view: ReferralView }) {
   const ev = view.evaluation;
+  const look = ev ? OUTCOME_LOOK[ev.outcome]! : null;
+  const list = (title: string, keys: string[]) => keys.length > 0 && <Text mb="2" fontSize="sm"><chakra.span fontWeight="600">{title}:</chakra.span> {keys.map(keyLabel).join(', ')}</Text>;
   return (
-    <section aria-labelledby="rec" aria-live="polite">
-      <h2 id="rec" className="mb-2 font-semibold">Recommendation</h2>
-      {!ev && <p className="text-sm text-gray-600">No facts entered yet.</p>}
-      {ev && (
-        <>
-          <div className={`mb-3 rounded border-l-4 p-3 ${OUTCOME_STYLE[ev.outcome]}`}>
-            <p className="text-lg font-semibold">{OUTCOME_LABEL[ev.outcome]}</p>
-            {ev.sub_reasons.length > 0 && <p className="text-sm">{ev.sub_reasons.map((r) => REASON_LABEL[r] ?? r).join(' · ')}</p>}
-            <p className="text-xs text-gray-700">Clinical: {ev.clinical_outcome.replaceAll('_', ' ')} · Financial: {ev.financial_status}. Staff make the final decision.</p>
-          </div>
-          {ev.trace.missing.length > 0 && <p className="mb-2 text-sm"><span className="font-medium">Missing critical information:</span> {ev.trace.missing.map(keyLabel).join(', ')}</p>}
-          {ev.trace.blocking.length > 0 && <p className="mb-2 text-sm"><span className="font-medium">Confirm first:</span> {ev.trace.blocking.map(keyLabel).join(', ')}</p>}
-          {ev.trace.conflicts.length > 0 && <p className="mb-2 text-sm"><span className="font-medium">Conflicting:</span> {ev.trace.conflicts.map(keyLabel).join(', ')}</p>}
-          {(ev.trace.confirmation_set ?? []).length > 0 && <p className="mb-2 text-sm"><span className="font-medium">To confirm before a decision:</span> {(ev.trace.confirmation_set ?? []).map(keyLabel).join(', ')}</p>}
-          <table className="mt-3 w-full text-left text-sm">
-            <caption className="text-left font-medium">Why: every rule and what it read</caption>
-            <thead><tr><th scope="col">Rule</th><th scope="col">Kind</th><th scope="col">Result</th><th scope="col">Inputs</th></tr></thead>
-            <tbody>
-              {ev.trace.trace.map((t) => (
-                <tr key={t.rule_id} className="border-t align-top">
-                  <td className="py-1 font-mono text-xs">{t.rule_id}{view.rule_explanations[t.rule_id] && <span className="block font-sans text-gray-700">{view.rule_explanations[t.rule_id]}</span>}</td>
-                  <td>{t.kind.replaceAll('_', ' ')}</td>
-                  <td>{t.result === 'yes' ? 'fired' : t.result === 'no' ? 'did not fire' : 'unknown'}</td>
-                  <td className="text-xs">{t.inputs.map((i) => `${keyLabel(i.key)}: ${i.value ?? i.presence}`).join('; ')}</td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </>
-      )}
-    </section>
+    <Box aria-live="polite" minW="0">
+      <Panel id="rec" title="Recommendation">
+        {!ev && <Sub>No facts entered yet.</Sub>}
+        {ev && look && (
+          <>
+            <Box mb="3" bg={`${look.tone}Soft`} borderLeftWidth="4px" borderColor={look.tone} borderRadius="l2" p="3">
+              <Flex align="center" gap="2" color={look.tone}>
+                <look.icon size={24} weight="bold" aria-hidden="true" />
+                <Text fontSize="xl" fontWeight="700">{OUTCOME_LABEL[ev.outcome]}</Text>
+              </Flex>
+              {ev.sub_reasons.length > 0 && <Text fontSize="sm" fontWeight="500">{ev.sub_reasons.map((r) => REASON_LABEL[r] ?? r).join(' · ')}</Text>}
+              <Text fontSize="xs" color="muted">Clinical: {ev.clinical_outcome.replaceAll('_', ' ')} · Financial: {ev.financial_status}. Staff make the final decision.</Text>
+            </Box>
+            {list('Missing critical information', ev.trace.missing)}
+            {list('Confirm first', ev.trace.blocking)}
+            {list('Conflicting', ev.trace.conflicts)}
+            {list('To confirm before a decision', ev.trace.confirmation_set ?? [])}
+            <Table.ScrollArea mt="3" tabIndex={0} position="relative">
+              <Table.Root size="sm">
+                <Table.Caption captionSide="top" textAlign="left" fontWeight="600" color="ink" mb="1">Why: every rule and what it read</Table.Caption>
+                <Table.Header><Table.Row bg="transparent"><Table.ColumnHeader>Rule</Table.ColumnHeader><Table.ColumnHeader>Kind</Table.ColumnHeader><Table.ColumnHeader>Result</Table.ColumnHeader><Table.ColumnHeader>Inputs</Table.ColumnHeader></Table.Row></Table.Header>
+                <Table.Body>
+                  {ev.trace.trace.map((t) => (
+                    <Table.Row key={t.rule_id} bg="transparent" verticalAlign="top">
+                      <Table.Cell fontFamily="mono" fontSize="xs" whiteSpace="normal" minW="14rem" wordBreak="break-word">{t.rule_id}{view.rule_explanations[t.rule_id] && <Text fontFamily="body" color="muted">{view.rule_explanations[t.rule_id]}</Text>}</Table.Cell>
+                      <Table.Cell>{t.kind.replaceAll('_', ' ')}</Table.Cell>
+                      <Table.Cell>{t.result === 'yes' ? 'fired' : t.result === 'no' ? 'did not fire' : 'unknown'}</Table.Cell>
+                      <Table.Cell fontSize="xs" whiteSpace="normal" minW="10rem">{t.inputs.map((i) => `${keyLabel(i.key)}: ${i.value ?? i.presence}`).join('; ')}</Table.Cell>
+                    </Table.Row>
+                  ))}
+                </Table.Body>
+              </Table.Root>
+            </Table.ScrollArea>
+          </>
+        )}
+      </Panel>
+    </Box>
   );
 }
