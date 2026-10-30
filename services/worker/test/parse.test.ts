@@ -6,7 +6,7 @@ const ok = { facilityId: '00000000-0000-4000-8000-00000000f0a1', referralId: '00
 
 test('a job message is exactly three ids; anything else is refused', () => {
   assert.deepEqual(parseJob(JSON.stringify(ok)), ok);
-  for (const bad of [undefined, '', 'nope', 'null', '[]', JSON.stringify({ ...ok, extra: 1 }), JSON.stringify({ ...ok, referralId: 'x' }), JSON.stringify({ ...ok, facilityId: 7 }), JSON.stringify({ ...ok, jobId: 'Bad_Job' })]) {
+  for (const bad of [undefined, '', 'nope', 'null', '[]', JSON.stringify({ ...ok, extra: 1 }), JSON.stringify({ ...ok, referralId: 'x' }), JSON.stringify({ ...ok, facilityId: 7 }), JSON.stringify({ ...ok, jobId: 'Bad_Job' }), JSON.stringify({ ...ok, jobId: 7 }), JSON.stringify({ ...ok, jobId: 'a'.repeat(65) }), JSON.stringify({ ...ok, facilityId: `${ok.facilityId}x` }), JSON.stringify({ ...ok, referralId: `${ok.referralId}x` })]) {
     assert.throws(() => parseJob(bad), /job message/);
   }
 });

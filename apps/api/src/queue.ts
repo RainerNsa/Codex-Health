@@ -5,9 +5,8 @@ import { SendMessageCommand, SQSClient } from '@aws-sdk/client-sqs';
 
 export type Enqueue = (facilityId: string, referralId: string) => Promise<void>;
 
-export function sqsEnqueue(queueUrl: string): Enqueue {
-  const sqs = new SQSClient({});
+export function sqsEnqueue(queueUrl: string, send: (c: SendMessageCommand) => Promise<unknown> = (c) => new SQSClient({}).send(c)): Enqueue {
   return async (facilityId, referralId) => {
-    await sqs.send(new SendMessageCommand({ QueueUrl: queueUrl, MessageBody: JSON.stringify({ facilityId, referralId, jobId: randomUUID() }) }));
+    await send(new SendMessageCommand({ QueueUrl: queueUrl, MessageBody: JSON.stringify({ facilityId, referralId, jobId: randomUUID() }) }));
   };
 }

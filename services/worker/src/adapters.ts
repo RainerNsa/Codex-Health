@@ -15,10 +15,10 @@ const MAX_PAGES = 300; // per document; a longer one fails before any model spen
 
 /** Page text by Textract's asynchronous detection, the one path that takes PDFs, TIFFs and images alike. PARTIAL_SUCCESS
  *  counts as failure: a document with missing pages is never read as if it were whole. */
-export function textractOcr(send: Send, bucket: string, pollMs = 2000): Ports['ocr'] {
+export function textractOcr(send: Send, bucket: string, pollMs = 2000, timeoutMs = OCR_TIMEOUT_MS): Ports['ocr'] {
   return async (doc: DocumentRef): Promise<Page[]> => {
     const { JobId } = await send(new StartDocumentTextDetectionCommand({ DocumentLocation: { S3Object: { Bucket: bucket, Name: doc.storage_key } } }));
-    const deadline = Date.now() + OCR_TIMEOUT_MS;
+    const deadline = Date.now() + timeoutMs;
     const blocks: Block[] = [];
     let next: string | undefined;
     for (;;) {

@@ -6,8 +6,8 @@ import { TextractClient } from '@aws-sdk/client-textract';
 import { bedrockClientConfig, requireEnv } from '@codex-health/shared';
 import { bedrockExtract, textractOcr, VERSIONS, type Send } from './adapters.ts';
 import { poolTx } from './db.ts';
-import { drain } from './loop.ts';
-import { failReferral, processReferral, type Ports } from './pipeline.ts';
+import { drain, handlers } from './loop.ts';
+import type { Ports } from './pipeline.ts';
 
 const queue = requireEnv('SQS_PROCESSING_QUEUE_URL');
 const deadLetters = requireEnv('SQS_PROCESSING_DLQ_URL');
@@ -20,9 +20,8 @@ const textract = new TextractClient({ region });
 const bedrock = new BedrockRuntimeClient({ region, requestHandler: { requestTimeout: 300_000 } });
 const clientSend = (c: { send: (x: never) => Promise<unknown> }): Send => (cmd) => c.send(cmd as never) as Promise<Record<string, unknown>>;
 
-const versions = { ...VERSIONS, model_id: modelId };
 const ports: Ports = {
-  versions,
+  versions: { ...VERSIONS, model_id: modelId },
   ocr: textractOcr(clientSend(textract), bucket),
   extract: bedrockExtract(clientSend(bedrock), modelId, (usage) => console.log(JSON.stringify({ event: 'extract.usage', usage }))),
 };
@@ -30,10 +29,11 @@ const ports: Ports = {
 const forever = async (url: string, label: string, handle: Parameters<typeof drain>[3]) => {
   for (;;) await drain(clientSend(sqs), url, label, handle);
 };
+const on = handlers(tx, ports);
 console.log('worker listening');
 await Promise.all([
-  forever(queue, 'processing', (job) => processReferral(tx, ports, job)),
-  forever(deadLetters, 'dead-letter', (job, sentAt) => failReferral(tx, versions, job, sentAt)),
+  forever(queue, 'processing', on.processing),
+  forever(deadLetters, 'dead-letter', on.deadLetter),
 ]).catch((err: { name?: string }) => {
   console.error(JSON.stringify({ event: 'worker.stopped', error: err.name ?? 'Error' })); // never the message: a provider's text
   process.exit(1);

@@ -7,6 +7,7 @@ import { readdirSync, readFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { ENGINE_VERSION } from '@codex-health/rules-engine';
+import { handlers } from '../src/loop.ts';
 import { failReferral, processReferral, type Extracted, type Page, type Ports, type Query, type Tx } from '../src/pipeline.ts';
 
 const url = process.env['DATABASE_URL'];
@@ -247,7 +248,7 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
 
   test('a later document cannot settle a disagreement: yes then no stays Unknown, in both directions', async () => {
     for (const [first, second, q1, q2] of [['no', 'yes', 'Not on a ventilator', 'Remains on a ventilator today'], ['yes', 'no', 'Remains on a ventilator today', 'Not on a ventilator']] as const) {
-      const { rid, docs } = await referral(`g-${first}`);
+      const { rid } = await referral(`g-${first}`);
       const mk = (v: 'yes' | 'no', q: string) => (d: string) => clean(d).map((e) => (e.key === 'ventilator_use' ? { ...e, value: tri(v), quote: q } : e));
       await processReferral(tx, ports(() => [{ page: 1, text: PAGE }], mk(first, q1)), job(rid));
       await addDocument(rid, `g2-${first}`);
@@ -263,7 +264,6 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
       await addDocument(rid, `g3-${first}`);
       await processReferral(tx, ports(() => [{ page: 1, text: PAGE }], mk('no', 'Not on a ventilator')), job(rid));
       assert.equal((await state(rid)).evals[2].outcome, 'needs_review');
-      assert.ok(docs.length);
     }
   });
 
@@ -345,9 +345,8 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
     await processReferral(tx, ports((id) => { if (id === docs[0]) throw new Error('x'); return [{ page: 1, text: PAGE }]; }, clean), job(rid));
     assert.equal((await state(rid)).status, 'partial_failure');
     await asOwner();
-    const id = (await c.query(`INSERT INTO documents (facility_id, referral_id, type, sha256, storage_key) VALUES ($1::uuid, $2::uuid, 'other', sha256('m3'::bytea),
-      'documents/' || $1::uuid::text || '/' || $2::uuid::text || '/' || encode(sha256('m3'::bytea), 'hex')) RETURNING id`, [FAC, rid])).rows[0].id;
-    assert.ok(id);
+    await c.query(`INSERT INTO documents (facility_id, referral_id, type, sha256, storage_key) VALUES ($1::uuid, $2::uuid, 'other', sha256('m3'::bytea),
+      'documents/' || $1::uuid::text || '/' || $2::uuid::text || '/' || encode(sha256('m3'::bytea), 'hex'))`, [FAC, rid]);
     await c.query("UPDATE referrals SET status = 'processing' WHERE id = $1", [rid]);
     await processReferral(tx, ports(() => [{ page: 1, text: PAGE }], clean), job(rid));
     const s = await state(rid);
@@ -494,10 +493,25 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
     await failReferral(tx, VERSIONS, job(rid), Date.now() - 3_600_000);
     const s = await state(rid);
     assert.deepEqual([s.status, s.docs.some((d) => d.status === 'failed'), s.evals.length], ['processing', false, 1]);
+    await failReferral(tx, VERSIONS, job(rid), Date.now() - 120_000); // past the margin: still a newer round
+    assert.equal((await state(rid)).status, 'processing');
+    await failReferral(tx, VERSIONS, job(rid), Date.now() - 30_000); // inside the margin: the clocks may differ, so it is its own round
+    assert.equal((await state(rid)).status, 'partial_failure');
+  });
+
+  test('each queue does its own job: a dead letter reaches a person, stamped with the running versions', async () => {
+    const { rid } = await referral('v7');
+    const on = handlers(tx, ports(() => [{ page: 1, text: PAGE }], clean));
+    await on.deadLetter(job(rid), Date.now());
+    const s = await state(rid);
+    assert.deepEqual([s.status, s.evals[0].prompt_version], ['partial_failure', VERSIONS.prompt_version]);
+    const b = await referral('v8');
+    assert.equal(await on.processing(job(b.rid)), 'done');
+    assert.equal((await state(b.rid)).status, 'ready_for_review');
   });
 
   test('a dead-lettered job with no usable settings still reaches a person, without an evaluation', async () => {
-    const { rid } = await referral('v4');
+    const { rid, docs } = await referral('v4');
     await asOwner();
     await c.query('SAVEPOINT sets');
     await c.query('ALTER TABLE rule_sets DISABLE TRIGGER USER');
@@ -506,6 +520,8 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
     await failReferral(tx, VERSIONS, job(rid), Date.now());
     const s = await state(rid);
     assert.deepEqual([s.status, s.docs.map((d) => d.status), s.evals.length], ['partial_failure', ['failed'], 0]);
+    const trail = (await c.query('SELECT action FROM audit_log WHERE entity_id = ANY($1) ORDER BY action', [[rid, ...docs]])).rows.map((r) => r.action);
+    assert.ok(trail.includes('document.failed') && trail.includes('referral.partial_failure'));
     await c.query('ROLLBACK TO SAVEPOINT sets');
   });
 });
