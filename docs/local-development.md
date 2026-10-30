@@ -37,6 +37,10 @@ npm test -w @codex-health/db             # migration-runner unit test + cross-fa
 npm run dev:down                      # stop containers, keep data
 ```
 
+With the API running, `npm run test:e2e -w @codex-health/web` opens every screen in light and dark, at desktop and phone
+width: it checks accessibility and sideways scroll, and leaves screenshots in `apps/web/test-results/shots`. It adds ZZTEST
+draft referrals to the local database. First run needs `npx playwright install chromium`. It does not run in CI yet.
+
 `npm run dev:up` (root) is the bare `docker compose up -d` without the wait and migrate; use `scripts/dev/up.sh`.
 
 ## Synthetic only: what it means in practice

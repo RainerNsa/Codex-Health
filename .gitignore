@@ -31,3 +31,5 @@ data/local/
 infra/terraform/envs/demo/terraform.tfstate*
 infra/terraform/envs/demo/demo.tfvars
 infra/terraform/envs/demo/.terraform/
+test-results/
+playwright-report/
