@@ -474,6 +474,18 @@ describe.skipIf(!url)('manual fact entry API', () => {
     expect((await requestCosign(flip.rid, U.reviewer, dna)).json().pending_request.decision).toBe('do_not_admit');
     const qid = (await requestCosign(flip.rid, U.reviewer, { evaluation_id: flip.ev.id, decision: 'admit' })).json().pending_request.id as string;
     expect((await cosign(flip.rid, qid, U.admin)).json().decision).toMatchObject({ decision: 'admit', override_reason: null });
+    // AI readings that differ, with no person involved, are not a person's correction: no co-sign is forced
+    const aiOnly = await newReferral();
+    await asOwner(FAC.a);
+    const ai = (v: 'yes' | 'no', sup: string | null) => c.query(`INSERT INTO facts (facility_id, referral_id, key, value, source, evidence, confidence_band, supersedes, created_by)
+      VALUES ($1, $2, 'ventilator_use', $3, 'ai', $4, 'high', $5, 'worker:zz') RETURNING id`, [FAC.a, aiOnly, { type: 'tri_state', value: v }, { document_id: 'zz', page: 1, quote: 'SYNTHETIC', verified: true }, sup]);
+    const firstAi = (await ai('yes', null)).rows[0].id as string;
+    await ai('no', firstAi);
+    await c.query("SELECT set_config('app.facility_id', '', true)");
+    expect((await get(refUrl(aiOnly), U.reviewer)).json().cosign.any).toBe(false);
+    // ...but a person correcting the AI's reading is a flip
+    await post(factsUrl(aiOnly), U.reviewer, fact('ventilator_use', 'yes'));
+    expect((await get(refUrl(aiOnly), U.reviewer)).json().cosign.any).toBe(true);
     for (const steps of [[['ventilator_use', 'unknown'], ['ventilator_use', 'no']], [['ventilator_use', 'no'], ['daily_skilled_need', 'no'], ['daily_skilled_need', 'yes']]] as [string, 'yes' | 'no' | 'unknown'][][]) {
       const r = await withFacts(...steps, ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
       await move(r.rid, U.reviewer, { action: 'submit' });

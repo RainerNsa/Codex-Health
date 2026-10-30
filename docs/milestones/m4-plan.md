@@ -24,3 +24,10 @@ Not M4: fuzzy quote matching and page-coordinate highlights (M5). Usability sess
 - **Preliminary recommendations.** A review-rule fact the extractor is silent on can still give a raw Admit (§4 step 3
   covers hard-stop and critical inputs only); a person must state it at T12. The raw result is shown labelled
   preliminary (slice 3); changing the resolution order would need a founder decision.
+
+## Accepted limit until M5 (re-review of PR #35)
+
+A quote proves its words are on the page, not that they are about this fact: `ventilator_use = no` backed by "No recent
+aggression" verifies. A person states every hard-stop and review fact before an Admit (T12), so this cannot finalize
+anything. M5 adds key-aware checks and the page-image confirmation that reads `single_source`. Slice 3 shows
+`disagreements` on screen (§13 row 4).

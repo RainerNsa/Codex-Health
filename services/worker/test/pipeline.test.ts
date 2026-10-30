@@ -267,6 +267,66 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
     }
   });
 
+  const entry = (d: string, key: string, v: 'yes' | 'no', quote: string, band: 'high' | 'low' = 'high'): Extracted => ({ key, value: tri(v), document_id: d, page: 1, quote, confidence_band: band });
+  const Y = 'Remains on a ventilator today';
+  const N = 'Not on a ventilator';
+  const AGG_Y = 'Needs daily skilled nursing'; // on the page; the words do not matter to the rule under test
+  const others = (d: string) => clean(d).filter((e) => e.key !== 'ventilator_use');
+
+  test('a review-rule Yes that is disputed or low confidence never turns into an Admit', async () => {
+    const a = await referral('r1');
+    const aggY = (d: string) => clean(d).map((e) => (e.key === 'recent_aggression' ? entry(d, 'recent_aggression', 'yes', AGG_Y) : e));
+    await processReferral(tx, ports(() => [{ page: 1, text: PAGE }], aggY), job(a.rid));
+    await addDocument(a.rid, 'r2');
+    await processReferral(tx, ports(() => [{ page: 1, text: PAGE }], clean), job(a.rid));
+    let s = await state(a.rid);
+    assert.equal(s.evals.at(-1).outcome, 'needs_review');
+    await addDocument(a.rid, 'r3');
+    await processReferral(tx, ports(() => [{ page: 1, text: PAGE }], () => []), job(a.rid)); // a silent run keeps it, and keeps showing why
+    s = await state(a.rid);
+    assert.deepEqual([s.evals.at(-1).outcome, s.evals.at(-1).trace.disagreements], ['needs_review', ['recent_aggression']]);
+    const b = await referral('r4');
+    const lowY = (d: string) => clean(d).map((e) => (e.key === 'recent_aggression' ? entry(d, 'recent_aggression', 'yes', AGG_Y, 'low') : e));
+    await processReferral(tx, ports(() => [{ page: 1, text: PAGE }], lowY), job(b.rid));
+    assert.equal((await state(b.rid)).evals[0].outcome, 'needs_review');
+  });
+
+  test('a Yes nobody can rely on is never overturned by a No without a person, across runs or within one', async () => {
+    const pageOk = () => [{ page: 1, text: PAGE }];
+    const lowY = (d: string) => [...others(d), entry(d, 'ventilator_use', 'yes', Y, 'low')];
+    const fakeY = (d: string) => [...others(d), entry(d, 'ventilator_use', 'yes', 'Weaned off in spring')];
+    const goodN = (d: string) => [...others(d), entry(d, 'ventilator_use', 'no', N)];
+    for (const first of [lowY, fakeY]) {
+      const { rid } = await referral(`s-${first === lowY}`);
+      await processReferral(tx, ports(pageOk, first), job(rid));
+      await addDocument(rid, `s2-${first === lowY}`);
+      await processReferral(tx, ports(pageOk, goodN), job(rid));
+      const s = await state(rid);
+      assert.deepEqual([s.evals.at(-1).outcome, s.evals.at(-1).trace.disagreements], ['needs_review', ['ventilator_use']]);
+    }
+    const { rid } = await referral('s3');
+    await processReferral(tx, ports(pageOk, (d) => [...others(d), entry(d, 'ventilator_use', 'yes', Y, 'low'), entry(d, 'ventilator_use', 'no', N)]), job(rid));
+    assert.equal((await state(rid)).evals[0].outcome, 'needs_review');
+  });
+
+  test('a confident reading replaces a low-confidence one of the same value', async () => {
+    const { rid } = await referral('t1');
+    const yes = (band: 'high' | 'low') => (d: string) => [...others(d), entry(d, 'ventilator_use', 'yes', Y, band)];
+    await processReferral(tx, ports(() => [{ page: 1, text: PAGE }], yes('low')), job(rid));
+    assert.equal((await state(rid)).evals[0].outcome, 'needs_review');
+    await addDocument(rid, 't2');
+    await processReferral(tx, ports(() => [{ page: 1, text: PAGE }], yes('high')), job(rid));
+    assert.equal((await state(rid)).evals.at(-1).outcome, 'do_not_admit');
+  });
+
+  test('a document contradicting a person is shown, and the person\'s value stands', async () => {
+    const { rid } = await referral('u1');
+    await c.query(`INSERT INTO facts (facility_id, referral_id, key, value, source, note, created_by) VALUES ($1, $2, 'ventilator_use', $3, 'user', 'SYNTHETIC', 'user:00000000-0000-4000-8000-00000000d1aa')`, [FAC, rid, tri('no')]);
+    await processReferral(tx, ports(() => [{ page: 1, text: PAGE }], (d) => [...others(d), entry(d, 'ventilator_use', 'yes', Y)]), job(rid));
+    const s = await state(rid);
+    assert.deepEqual([s.evals[0].outcome, s.evals[0].trace.disagreements], ['admit', ['ventilator_use']]);
+  });
+
   test('a re-run reads only new documents; agreement changes nothing and reports no change', async () => {
     const { rid } = await referral('g4');
     await processReferral(tx, ports(() => [{ page: 1, text: PAGE }], clean), job(rid));

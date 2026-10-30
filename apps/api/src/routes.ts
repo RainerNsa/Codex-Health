@@ -118,15 +118,16 @@ const admitKeys = (ruleSet: RuleSet, ev: EvaluationRow) => [...new Set([
   ...ruleSet.rules.filter((r) => r.enabled && (r.kind === 'hard_stop' || r.kind === 'review')).flatMap((r) => r.inputs).filter((k) => !k.startsWith('facility.')),
 ])].sort();
 
-/** A hard-stop input a person changed from one known value to another, at any point in its history (§5.1 T12,
- *  open question 24). Unknown to known is a fact arriving, not a flip. */
+/** A hard-stop input with two known values in its history, where a person stated one of them (§5.1 T12, open question
+ *  24): a person's correction, of a person or of the AI. Unknown to known is a fact arriving, not a flip, and AI readings
+ *  that differ with no person involved are a disagreement, not a correction. */
 async function hardStopFlipped(q: Query, facilityId: string, referralId: string, ruleSet: RuleSet): Promise<boolean> {
   const keys = [...new Set(ruleSet.rules.filter((r) => r.enabled && r.kind === 'hard_stop').flatMap((r) => r.inputs))];
   const { rows } = await q<{ n: string }>(
     `SELECT count(*) AS n FROM (
        SELECT key FROM facts
        WHERE facility_id = $1 AND referral_id = $2 AND key = ANY($3) AND value->'value' <> 'null'::jsonb AND value->>'value' <> 'unknown'
-       GROUP BY key HAVING count(DISTINCT value->'value') > 1) flipped`, [facilityId, referralId, keys]);
+       GROUP BY key HAVING count(DISTINCT value->'value') > 1 AND bool_or(source = 'user')) flipped`, [facilityId, referralId, keys]);
   return Number(rows[0]!.n) > 0;
 }
 
@@ -140,13 +141,15 @@ async function reevaluate(q: Query, fid: string, rid: string, ruleSet: RuleSet, 
   const result = evaluate({ facts, profile: ruleSet.profile, rules: ruleSet.rules, referral_date: referralDate, processing_complete: processingComplete });
   const prev = await q<{ id: string }>('SELECT id FROM evaluations WHERE facility_id = $1 AND referral_id = $2 ORDER BY evaluated_at DESC LIMIT 1', [fid, rid]);
   const { trace, missing, conflicts, blocking, empty_profile_keys, resolution_step, confirmation_set } = result;
+  // keys the pipeline left Unknown because documents disagree, carried on every evaluation until a person states them
+  const disagreements = facts.filter((f) => f.source === 'ai' && (f.value.value === null || f.value.value === 'unknown')).map((f) => f.key);
   const ev = await q<{ id: string }>(
     `INSERT INTO evaluations (facility_id, referral_id, previous_evaluation_id, raw, outcome, clinical_outcome, financial_status, sub_reasons, trace,
        criteria_document_ref, rule_set_version, facility_profile_version, model_id, prompt_version, extractor_version, ocr_engine_version, engine_version)
      VALUES ($1, $2, $3, false, $4, $5, $6, $7, $8, $9, $10, $11, 'none', 'none', 'manual-entry', 'none', $12) RETURNING id`,
     [fid, rid, prev.rows[0]?.id ?? null, result.outcome, result.clinical_outcome, result.financial_status, result.sub_reasons,
       // every input of evaluate() beyond the facts is pinned, so the snapshot replays (I6)
-      { resolution_step, trace, missing, conflicts, blocking, empty_profile_keys, confirmation_set, inputs: { referral_date: referralDate, processing_complete: processingComplete, fact_ids: facts.map((f) => f.id) } }, ruleSet.criteriaRef, ruleSet.ruleSetVersion, ruleSet.profileVersion, ENGINE_VERSION]);
+      { resolution_step, trace, missing, conflicts, disagreements, blocking, empty_profile_keys, confirmation_set, inputs: { referral_date: referralDate, processing_complete: processingComplete, fact_ids: facts.map((f) => f.id) } }, ruleSet.criteriaRef, ruleSet.ruleSetVersion, ruleSet.profileVersion, ENGINE_VERSION]);
   await audit(q, fid, user, 'evaluation.created', 'evaluation', ev.rows[0]!.id);
   await emit(q, fid, rid, user, 'evaluation.created', {
     evaluation_id: ev.rows[0]!.id, ...(prev.rows[0] ? { previous_evaluation_id: prev.rows[0].id } : {}), raw: false, outcome: result.outcome, changed_fact_count: changedFactCount,

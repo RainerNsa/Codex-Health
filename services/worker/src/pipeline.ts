@@ -115,39 +115,52 @@ export async function processReferral(tx: Tx, ports: Ports, job: Job): Promise<'
     const docSet = new Set(read.map((r) => r.doc.id));
     const entries = extracted.flatMap((e) => clean(e, plan.types, keySet, docSet) ?? []).map((e) => ({ ...e, verified: verifyEvidence(e.value, e.quote, pageText.get(`${e.document_id}:${e.page}`) ?? '') }));
     const unknownOf = (t: FactValue['type']) => ({ type: t, value: t === 'tri_state' ? 'unknown' : null }) as FactValue;
-    const insert = async (key: string, value: FactValue, e: (typeof entries)[number] | null, singleSource: boolean, supersedes: string | null) => {
+    // critical: a Yes on record that nobody can yet rely on, or a dispute, holds the outcome for a person (§3, §4 step 3)
+    const insert = async (key: string, value: FactValue, e: (typeof entries)[number] | null, singleSource: boolean, supersedes: string | null, critical = false) => {
       const f = await q<{ id: string }>(
         `INSERT INTO facts (facility_id, referral_id, key, value, source, evidence, confidence_band, is_critical, single_source, supersedes, created_by)
-         VALUES ($1, $2, $3, $4, 'ai', $5, $6, false, $7, $8, $9) RETURNING id`,
-        [fid, rid, key, value, e ? { document_id: e.document_id, page: e.page, quote: e.quote, verified: e.verified, span: null, coordinates: null } : null, e?.confidence_band ?? null, singleSource, supersedes, actor]);
+         VALUES ($1, $2, $3, $4, 'ai', $5, $6, $10, $7, $8, $9) RETURNING id`,
+        [fid, rid, key, value, e ? { document_id: e.document_id, page: e.page, quote: e.quote, verified: e.verified, span: null, coordinates: null } : null, e?.confidence_band ?? null, singleSource, supersedes, actor, critical]);
       await q('INSERT INTO audit_log (facility_id, actor, action, entity_type, entity_id) VALUES ($1, $2, $3, $4, $5)', [fid, actor, 'fact.extracted', 'fact', f.rows[0]!.id]);
     };
     let changed = 0;
-    const disagreements: string[] = [];
+    const contested: string[] = [];
     for (const key of plan.keys) {
       const found = entries.filter((e) => e.key === key);
       const current = before.get(key);
-      if (found.length === 0 || current?.source === 'user') continue; // silence stays silence (I1); a person's statement stands
-      // the pipeline writes an Unknown only for a disagreement, which stands until a person states the fact (§3)
-      if (current && !isKnown(current.value)) { disagreements.push(key); continue; }
+      if (found.length === 0) continue; // silence stays silence (I1)
       const usable = found.filter((e) => e.verified && e.confidence_band !== 'low');
+      if (current?.source === 'user') {
+        // a person's statement stands; a document that contradicts it is shown, not applied
+        if (usable.some((e) => JSON.stringify(e.value) !== JSON.stringify(current.value))) contested.push(key);
+        continue;
+      }
+      // the pipeline writes an Unknown only for a disagreement, which stands until a person states the fact (§3)
+      if (current && !isKnown(current.value)) continue;
       if (usable.length === 0) {
-        // nothing trustworthy: keep a first sighting on record (it reads as Unknown), never replace anything with it
-        if (!current) { await insert(key, found[0]!.value, found[0]!, false, null); changed += 1; }
+        // nothing trustworthy: keep a first sighting on record, the most cautious one, and never replace anything with it
+        if (!current) {
+          const worst = found.find((e) => !isNegative(e.value)) ?? found[0]!;
+          await insert(key, worst.value, worst, false, null, !isNegative(worst.value));
+          changed += 1;
+        }
         continue;
       }
-      // every trustworthy value on record for this key: a later document cannot quietly overturn an earlier one
-      const earlier = (await q<{ value: FactValue }>(
-        `SELECT value FROM facts WHERE facility_id = $1 AND referral_id = $2 AND key = $3 AND source = 'ai' AND (evidence->>'verified')::boolean AND confidence_band IN ('high', 'medium')`, [fid, rid, key])).rows.map((r) => r.value);
-      const values = new Set([...earlier, ...usable.map((e) => e.value)].map((v) => JSON.stringify(v)));
-      if (values.size > 1) {
-        disagreements.push(key);
-        const unknown = unknownOf(usable[0]!.value.type);
-        if (JSON.stringify(current?.value) !== JSON.stringify(unknown)) { await insert(key, unknown, null, false, current?.id ?? null); changed += 1; }
-        continue;
-      }
+      const onRecord = (await q<{ value: FactValue; trusted: boolean }>(
+        `SELECT value, coalesce((evidence->>'verified')::boolean, false) AND confidence_band IN ('high', 'medium') AS trusted
+         FROM facts WHERE facility_id = $1 AND referral_id = $2 AND key = $3 AND source = 'ai'`, [fid, rid, key])).rows.filter((r) => isKnown(r.value));
       const chosen = usable[0]!;
-      if (current && JSON.stringify(current.value) === JSON.stringify(chosen.value) && current.evidence?.verified) continue;
+      const same = (v: FactValue) => JSON.stringify(v) === JSON.stringify(chosen.value);
+      // verified values that differ are a disagreement. A negative value must also answer to every other reading, trusted
+      // or not: a Yes on record is never overturned without a person, while a fabricated No cannot unseat a verified Yes.
+      const disputed = [...onRecord.filter((r) => r.trusted).map((r) => r.value), ...usable.map((e) => e.value)].some((v) => !same(v))
+        || (isNegative(chosen.value) && [...onRecord.map((r) => r.value), ...found.map((e) => e.value)].some((v) => !same(v)));
+      if (disputed) {
+        await insert(key, unknownOf(chosen.value.type), null, false, current?.id ?? null, true);
+        changed += 1;
+        continue;
+      }
+      if (current && same(current.value) && current.evidence?.verified && current.confidence_band !== 'low') continue;
       // a hard-stop No resting on one document is flagged for confirmation against the page (§5.1 T12, XF-7b)
       const single = plan.hardKeys.has(key) && isNegative(chosen.value) && new Set(usable.map((e) => e.document_id)).size === 1;
       await insert(key, chosen.value, chosen, single, current?.id ?? null);
@@ -158,6 +171,7 @@ export async function processReferral(tx: Tx, ports: Ports, job: Job): Promise<'
     const open = (await q<{ n: string }>("SELECT count(*) AS n FROM documents WHERE facility_id = $1 AND referral_id = $2 AND status NOT IN ('processed', 'not_applicable')", [fid, rid])).rows[0]!.n;
     const anyFailed = open !== '0';
     const facts = await currentFacts(q, fid, rid);
+    const disagreements = [...new Set([...contested, ...facts.filter((f) => f.source === 'ai' && !isKnown(f.value)).map((f) => f.key)])].sort();
     const raw = !facts.some((f) => f.source === 'user'); // §14.2: raw is the AI-only snapshot, before any person touched a fact
     const referralDate = new Date().toISOString().slice(0, 10);
     const result = evaluate({ facts, profile: set.profile, rules: set.rules, referral_date: referralDate, processing_complete: !anyFailed });
