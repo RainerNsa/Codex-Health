@@ -6,6 +6,7 @@ import { amendReferral, ApiError, resolveFailures, uploadDocument, cosignRequest
 import { ReviewPanel } from './ReviewPanel.tsx';
 import { DocumentsPanel } from './DocumentsPanel.tsx';
 import { QueuePanel } from './QueuePanel.tsx';
+import { useReviewTimer } from './reviewTimer.ts';
 import { SettingsPanel } from './SettingsPanel.tsx';
 
 const SEED_FACILITY = '00000000-0000-4000-8000-00000000f0a1';
@@ -59,6 +60,7 @@ export function App() {
   const [view, setView] = useState<ReferralView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
+  useReviewTimer(facility, user, view?.referral.id ?? null);
 
   const run = async (fn: () => Promise<ReferralView>): Promise<boolean> => {
     setBusy(true);

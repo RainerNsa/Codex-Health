@@ -287,6 +287,27 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
     } catch (err) { return fail(reply, err); }
   });
 
+  // --- review time (M3 slice 7; dev-alignment 3.3): active time on a referral, reported by the browser when the
+  // Reviewer leaves it. Counted only while the page is visible and the person is interacting; a measurement for
+  // the pilot, not a control, so the browser's figure is taken as reported within a sane cap.
+  const MAX_ACTIVE_MS = 8 * 60 * 60 * 1000;
+  app.post<{ Params: { fid: string; rid: string }; Body: unknown }>('/api/facilities/:fid/referrals/:rid/review-time', async (req, reply) => {
+    try {
+      const user = caller(req.headers);
+      const { fid, rid } = ids(req.params);
+      const ms = ((req.body ?? {}) as { active_ms?: unknown }).active_ms;
+      if (!Number.isInteger(ms) || (ms as number) < 1 || (ms as number) > MAX_ACTIVE_MS) throw new HttpError(400, 'invalid_review_time');
+      await tx(async (q) => {
+        const who = await enter(q, fid, user);
+        if (!READ_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
+        const ref = await q('SELECT 1 FROM referrals WHERE facility_id = $1 AND id = $2', [fid, rid]);
+        if (!ref.rowCount) throw new HttpError(404, 'not_found');
+        await emit(q, fid, rid, user, 'review.ended', { screen: 'review', active_ms: ms });
+      });
+      return reply.code(204).send();
+    } catch (err) { return fail(reply, err); }
+  });
+
   // --- the referral queue (M3 slice 6): the facility's referrals by status, oldest waiting first ---------------
   // Ids, statuses, codes and counts only: no fact values, notes or reasons, so a list never carries patient data.
   const QUEUE_FILTERS: Record<string, readonly string[]> = {
@@ -364,6 +385,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
         if (!READ_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
         const view = await referralView(q, fid, rid, await loadSettings(q, fid, who.organizationId), who);
         await audit(q, fid, user, 'referral.viewed', 'referral', rid); // I4: reads of patient data are audited (1.10)
+        await emit(q, fid, rid, user, 'review.started', { screen: 'review' }); // 3.3: per-user review time starts here
         return view;
       }));
     } catch (err) { return fail(reply, err); }

@@ -97,3 +97,10 @@ export interface QueueRow { id: string; status: string; referral_type: string; c
 export type QueueFilter = 'open' | 'processing' | 'closed';
 export const listReferrals = (facility: string, user: string, filter: QueueFilter, after?: string) =>
   call<{ filter: QueueFilter; referrals: QueueRow[]; next: string | null }>(`/api/facilities/${facility}/referrals?filter=${filter}${after ? `&after=${encodeURIComponent(after)}` : ''}`, user);
+
+// Sent as the Reviewer leaves; keepalive lets it finish while the page closes. Failures are ignored: a lost
+// measurement must never interrupt work.
+export const sendReviewTime = (facility: string, referral: string, user: string, activeMs: number) =>
+  fetch(`/api/facilities/${facility}/referrals/${referral}/review-time`, {
+    method: 'POST', keepalive: true, headers: { 'content-type': 'application/json', 'x-codex-dev-user': user }, body: JSON.stringify({ active_ms: activeMs }),
+  }).catch(() => undefined);

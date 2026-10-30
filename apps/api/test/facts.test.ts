@@ -823,6 +823,25 @@ describe.skipIf(!url)('manual fact entry API', () => {
     expect(await count("SELECT count(*) AS n FROM audit_log WHERE facility_id = $1 AND action = 'referrals.listed' AND actor = $2", [QF, `user:${U.reviewer}`])).toBe(reads); // every successful read; refused queries read nothing
   });
 
+  it('review time: opening a referral starts it; the browser reports active time when the Reviewer leaves, within a cap', async () => {
+    const rid = await newReferral();
+    await get(refUrl(rid), U.reviewer);
+    const time = (user: string, body: unknown, id = rid) => post(`${refUrl(id)}/review-time`, user, body);
+    expect((await time(U.reviewer, { active_ms: 42_000 })).statusCode).toBe(204);
+    for (const bad of [{}, { active_ms: 0 }, { active_ms: -5 }, { active_ms: 1.5 }, { active_ms: '42000' }, { active_ms: 8 * 3600 * 1000 + 1 }]) {
+      expect((await time(U.reviewer, bad)).json(), JSON.stringify(bad)).toEqual({ error: 'invalid_review_time' });
+    }
+    expect((await time(U.viewer, { active_ms: 1000 })).statusCode).toBe(403);
+    expect((await time(U.other, { active_ms: 1000 })).statusCode).toBe(404);
+    expect((await time(U.reviewer, { active_ms: 1000 }, '00000000-0000-4000-8000-0000000000ff')).statusCode).toBe(404);
+    await asOwner(FAC.a);
+    const ev = (await c.query("SELECT event, actor, attrs FROM product_events WHERE referral_id = $1 AND event LIKE 'review.%' ORDER BY at", [rid])).rows;
+    expect(ev).toEqual([
+      { event: 'review.started', actor: `user:${U.reviewer}`, attrs: { screen: 'review' } },
+      { event: 'review.ended', actor: `user:${U.reviewer}`, attrs: { screen: 'review', active_ms: 42_000 } },
+    ]);
+  });
+
   it('review: hold, request information, escalate and resume move only from the states §5.1 allows, each with its fields', async () => {
     const { rid } = await withFacts(['daily_skilled_need', 'yes']);
     await move(rid, U.reviewer, { action: 'submit' });
