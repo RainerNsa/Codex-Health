@@ -140,7 +140,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        root: [org, dev, test, prod]
+        root: [org, dev, test, prod, demo]
     env:
       TF_IN_AUTOMATION: 'true'
     steps:

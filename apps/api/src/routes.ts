@@ -731,7 +731,8 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
           "SELECT count(*) AS n, bool_or(sha256 = decode($3, 'hex')) AS dup FROM documents WHERE facility_id = $1 AND referral_id = $2", [fid, rid, b.sha256]);
         if (docs.rows[0]!.dup) throw new HttpError(409, 'document_duplicate');
         if (Number(docs.rows[0]!.n) >= 20) throw new HttpError(409, 'document_limit');
-        return { url: await s3.presignPut(quarantineKey(fid, rid, b.sha256 as string), b.bytes as number), expires_in: UPLOAD_TTL_SECONDS };
+        const signed = await s3.presignPut(quarantineKey(fid, rid, b.sha256 as string), b.bytes as number);
+        return { url: signed.url, headers: signed.headers, expires_in: UPLOAD_TTL_SECONDS };
       });
       return reply.code(201).send(body);
     } catch (err) { return fail(reply, err); }

@@ -14,8 +14,8 @@ export interface Inspected { bytes: number; sha256: string; head: Buffer; etag: 
 const CONTENT_TYPE = { pdf: 'application/pdf', png: 'image/png', jpeg: 'image/jpeg', tiff: 'image/tiff' } as const;
 
 export interface Storage {
-  /** A URL the browser PUTs exactly these bytes to, within the TTL. */
-  presignPut(key: string, bytes: number): Promise<string>;
+  /** A URL the browser PUTs exactly these bytes to, within the TTL, with the headers it must send unchanged. */
+  presignPut(key: string, bytes: number): Promise<{ url: string; headers: Record<string, string> }>;
   /** The object's size, SHA-256 (hex), first bytes and version, or null when it is not there or too large. */
   inspect(key: string): Promise<Inspected | null>;
   /** Copy exactly the inspected version (refused if the object changed since), with its content type set from the
@@ -34,13 +34,22 @@ export function sniff(head: Buffer): 'pdf' | 'png' | 'jpeg' | 'tiff' | null {
   return null;
 }
 
-export function s3Storage(bucket: string): Storage {
+/** kmsKeyId: the real bucket refuses any object write that does not ask for SSE-KMS (modules/storage policy), so
+ *  the signed upload and the promotion copy both name the key. LocalStack runs without one. */
+export function s3Storage(bucket: string, kmsKeyId?: string): Storage {
+  const sse = kmsKeyId ? { ServerSideEncryption: 'aws:kms' as const, SSEKMSKeyId: kmsKeyId } : {};
+  const sseHeaders: Record<string, string> = kmsKeyId ? { 'x-amz-server-side-encryption': 'aws:kms', 'x-amz-server-side-encryption-aws-kms-key-id': kmsKeyId } : {};
   const endpoint = process.env['AWS_ENDPOINT_URL']; // localstack only; unset in AWS
   // LocalStack locally (path-style); the real bucket in a sandbox. Presigned URLs carry no extra checksum header
   // the browser would have to reproduce: the API verifies the bytes itself on completion.
   const s3 = new S3Client({ ...(endpoint ? { endpoint, forcePathStyle: true } : {}), requestChecksumCalculation: 'WHEN_REQUIRED', responseChecksumValidation: 'WHEN_REQUIRED' });
   return {
-    presignPut: (key, bytes) => getSignedUrl(s3, new PutObjectCommand({ Bucket: bucket, Key: key, ContentLength: bytes }), { expiresIn: UPLOAD_TTL_SECONDS }),
+    // the encryption headers are signed and must travel as headers (not query parameters): the browser sends them
+    presignPut: async (key, bytes) => ({
+      url: await getSignedUrl(s3, new PutObjectCommand({ Bucket: bucket, Key: key, ContentLength: bytes, ...sse }),
+        { expiresIn: UPLOAD_TTL_SECONDS, unhoistableHeaders: new Set(Object.keys(sseHeaders)) }),
+      headers: sseHeaders,
+    }),
     async inspect(key) {
       let res;
       try {
@@ -66,7 +75,7 @@ export function s3Storage(bucket: string): Storage {
       const source = `${bucket}/${from}${checked.versionId ? `?versionId=${encodeURIComponent(checked.versionId)}` : ''}`;
       await s3.send(new CopyObjectCommand({
         Bucket: bucket, Key: to, CopySource: source, CopySourceIfMatch: checked.etag,
-        MetadataDirective: 'REPLACE', ContentType: CONTENT_TYPE[kind], ContentDisposition: 'attachment',
+        MetadataDirective: 'REPLACE', ContentType: CONTENT_TYPE[kind], ContentDisposition: 'attachment', ...sse,
       }), { abortSignal: AbortSignal.timeout(S3_TIMEOUT_MS) });
       await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: from, ...(checked.versionId ? { VersionId: checked.versionId } : {}) }));
     },

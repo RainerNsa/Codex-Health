@@ -27,3 +27,7 @@ data/local/
 !.vscode/extensions.json
 # ponytail / agent tooling local state
 .claude/settings.local.json
+# demo: local state and values hold the gate password and origin secret
+infra/terraform/envs/demo/terraform.tfstate*
+infra/terraform/envs/demo/demo.tfvars
+infra/terraform/envs/demo/.terraform/

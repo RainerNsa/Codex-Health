@@ -33,7 +33,7 @@ describe.skipIf(!endpoint)('move', () => {
     const key = `quarantine/zz-test/move/${Date.now()}`;
     const to = `documents/zz-test/move/${Date.now()}`;
     const good = Buffer.from('%PDF-1.4 ZZTEST good');
-    const url = await st.presignPut(key, good.length);
+    const { url } = await st.presignPut(key, good.length);
     await fetch(url, { method: 'PUT', body: good });
     const checked = await st.inspect(key);
     expect(checked && sniff(checked.head)).toBe('pdf');
@@ -41,5 +41,17 @@ describe.skipIf(!endpoint)('move', () => {
     await expect(st.move(key, to, checked!, 'pdf')).rejects.toMatchObject({ name: 'PreconditionFailed' });
     expect(await st.inspect(to)).toBe(null);
     await st.remove(key);
+  });
+});
+
+describe('presign with the bucket key', () => {
+  it('signs the SSE-KMS headers and hands them to the browser to send (the real bucket refuses uploads without them)', async () => {
+    const st = s3Storage('zz-bucket', 'arn:aws:kms:us-east-1:000000000000:key/zz-key');
+    const { url, headers } = await st.presignPut('quarantine/zz/zz/zz', 10);
+    expect(headers).toEqual({ 'x-amz-server-side-encryption': 'aws:kms', 'x-amz-server-side-encryption-aws-kms-key-id': 'arn:aws:kms:us-east-1:000000000000:key/zz-key' });
+    const signed = new URL(url).searchParams.get('X-Amz-SignedHeaders')!.split(';');
+    expect(signed).toEqual(expect.arrayContaining(['x-amz-server-side-encryption', 'x-amz-server-side-encryption-aws-kms-key-id', 'content-length']));
+    expect(new URL(url).searchParams.has('x-amz-server-side-encryption')).toBe(false);
+    expect((await s3Storage('zz-bucket').presignPut('k', 10)).headers).toEqual({});
   });
 });
