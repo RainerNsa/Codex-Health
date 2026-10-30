@@ -160,6 +160,14 @@ const hardStopEverFired = async (q: Query, facilityId: string, referralId: strin
   "SELECT count(*) AS n FROM evaluations WHERE facility_id = $1 AND referral_id = $2 AND 'do_not_admit' IN (outcome, clinical_outcome)",
   [facilityId, referralId])).rows[0]!.n !== '0';
 
+/** This user's review of this referral that has started and not ended: the latest start, if no end came after it. */
+async function openReviewStart(q: Query, facilityId: string, referralId: string, userId: string): Promise<string | null> {
+  const { rows } = await q<{ event: string; at: string }>(
+    `SELECT event, at FROM product_events WHERE facility_id = $1 AND referral_id = $2 AND actor = $3 AND event IN ('review.started', 'review.ended')
+     ORDER BY at DESC LIMIT 1`, [facilityId, referralId, `user:${userId}`]);
+  return rows[0]?.event === 'review.started' ? new Date(rows[0].at).toISOString() : null;
+}
+
 async function referralView(q: Query, facilityId: string, referralId: string, ruleSet: RuleSet | null, who: Caller | null = null) {
   const role = who?.role ?? '';
   const ref = await q<{ id: string; status: string }>('SELECT id, status FROM referrals WHERE facility_id = $1 AND id = $2', [facilityId, referralId]);
@@ -297,12 +305,17 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
       const { fid, rid } = ids(req.params);
       const ms = ((req.body ?? {}) as { active_ms?: unknown }).active_ms;
       if (!Number.isInteger(ms) || (ms as number) < 1 || (ms as number) > MAX_ACTIVE_MS) throw new HttpError(400, 'invalid_review_time');
+      limit(user);
       await tx(async (q) => {
         const who = await enter(q, fid, user);
         if (!READ_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
         const ref = await q('SELECT 1 FROM referrals WHERE facility_id = $1 AND id = $2', [fid, rid]);
         if (!ref.rowCount) throw new HttpError(404, 'not_found');
-        await emit(q, fid, rid, user, 'review.ended', { screen: 'review', active_ms: ms });
+        // one end per start, by the same person, and never more time than has passed since that start
+        const started = await openReviewStart(q, fid, rid, user);
+        if (!started) throw new HttpError(409, 'no_review_open');
+        const elapsed = Date.now() - Date.parse(started);
+        await emit(q, fid, rid, user, 'review.ended', { screen: 'review', active_ms: Math.min(ms as number, Math.max(1, elapsed)) });
       });
       return reply.code(204).send();
     } catch (err) { return fail(reply, err); }
@@ -385,7 +398,8 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
         if (!READ_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
         const view = await referralView(q, fid, rid, await loadSettings(q, fid, who.organizationId), who);
         await audit(q, fid, user, 'referral.viewed', 'referral', rid); // I4: reads of patient data are audited (1.10)
-        await emit(q, fid, rid, user, 'review.started', { screen: 'review' }); // 3.3: per-user review time starts here
+        // 3.3: per-user review time starts here, once: reopening a referral already under review adds nothing
+        if (!(await openReviewStart(q, fid, rid, user))) await emit(q, fid, rid, user, 'review.started', { screen: 'review' });
         return view;
       }));
     } catch (err) { return fail(reply, err); }

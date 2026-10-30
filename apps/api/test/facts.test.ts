@@ -823,23 +823,33 @@ describe.skipIf(!url)('manual fact entry API', () => {
     expect(await count("SELECT count(*) AS n FROM audit_log WHERE facility_id = $1 AND action = 'referrals.listed' AND actor = $2", [QF, `user:${U.reviewer}`])).toBe(reads); // every successful read; refused queries read nothing
   });
 
-  it('review time: opening a referral starts it; the browser reports active time when the Reviewer leaves, within a cap', async () => {
+  it('review time: one start per open review, one end per start, never more time than has passed, nothing for refused callers', async () => {
     const rid = await newReferral();
+    const time = (user: string, body: unknown, id = rid, fac = FAC.a) => post(`/api/facilities/${fac}/referrals/${id}/review-time`, user, body);
+    // nothing is open yet: an end without a start is refused
+    expect((await time(U.reviewer, { active_ms: 1000 })).json()).toEqual({ error: 'no_review_open' });
+    // refused readers start nothing
+    expect((await get(refUrl(rid), U.viewer)).statusCode).toBe(403);
+    expect((await get(refUrl(rid), U.other)).statusCode).toBe(404);
     await get(refUrl(rid), U.reviewer);
-    const time = (user: string, body: unknown, id = rid) => post(`${refUrl(id)}/review-time`, user, body);
-    expect((await time(U.reviewer, { active_ms: 42_000 })).statusCode).toBe(204);
+    await get(refUrl(rid), U.reviewer); // reopening adds no second start
     for (const bad of [{}, { active_ms: 0 }, { active_ms: -5 }, { active_ms: 1.5 }, { active_ms: '42000' }, { active_ms: 8 * 3600 * 1000 + 1 }]) {
       expect((await time(U.reviewer, bad)).json(), JSON.stringify(bad)).toEqual({ error: 'invalid_review_time' });
     }
     expect((await time(U.viewer, { active_ms: 1000 })).statusCode).toBe(403);
     expect((await time(U.other, { active_ms: 1000 })).statusCode).toBe(404);
-    expect((await time(U.reviewer, { active_ms: 1000 }, '00000000-0000-4000-8000-0000000000ff')).statusCode).toBe(404);
+    // another facility's real referral, through this facility's URL
+    const foreign = (await post(`/api/facilities/${FAC.b}/referrals`, U.other)).json().referral.id as string;
+    expect((await time(U.reviewer, { active_ms: 1000 }, foreign)).statusCode).toBe(404);
+    // 42 seconds claimed a few milliseconds after the start: stored as at most the time that has passed
+    expect((await time(U.reviewer, { active_ms: 42_000 })).statusCode).toBe(204);
+    expect((await time(U.reviewer, { active_ms: 1000 })).json()).toEqual({ error: 'no_review_open' }); // one end per start
     await asOwner(FAC.a);
     const ev = (await c.query("SELECT event, actor, attrs FROM product_events WHERE referral_id = $1 AND event LIKE 'review.%' ORDER BY at", [rid])).rows;
-    expect(ev).toEqual([
-      { event: 'review.started', actor: `user:${U.reviewer}`, attrs: { screen: 'review' } },
-      { event: 'review.ended', actor: `user:${U.reviewer}`, attrs: { screen: 'review', active_ms: 42_000 } },
-    ]);
+    expect(ev.map((e) => [e.event, e.actor])).toEqual([['review.started', `user:${U.reviewer}`], ['review.ended', `user:${U.reviewer}`]]);
+    expect(ev[1].attrs.screen).toBe('review');
+    expect(ev[1].attrs.active_ms).toBeGreaterThanOrEqual(1);
+    expect(ev[1].attrs.active_ms).toBeLessThan(42_000);
   });
 
   it('review: hold, request information, escalate and resume move only from the states §5.1 allows, each with its fields', async () => {
