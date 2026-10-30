@@ -287,6 +287,61 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
     } catch (err) { return fail(reply, err); }
   });
 
+  // --- the referral queue (M3 slice 6): the facility's referrals by status, oldest waiting first ---------------
+  // Ids, statuses, codes and counts only: no fact values, notes or reasons, so a list never carries patient data.
+  const QUEUE_FILTERS: Record<string, readonly string[]> = {
+    // what needs a person now (the pipeline owns processing)
+    open: ['draft', 'ready_for_review', 'on_hold', 'info_requested', 'escalated', 'partial_failure'],
+    processing: ['processing'],
+    closed: ['finalized', 'amended'],
+  };
+  const QUEUE_LIMIT = 100;
+  app.get<{ Params: { fid: string }; Querystring: { filter?: string; after?: string } }>('/api/facilities/:fid/referrals', async (req, reply) => {
+    try {
+      const user = caller(req.headers);
+      const { fid } = ids(req.params);
+      const filter = req.query.filter ?? 'open';
+      const states = QUEUE_FILTERS[filter];
+      // paging: an opaque cursor the API returned, "<updated_at as Postgres prints it>|<referral id>"; rows are ordered
+      // by both, so ties never skip or repeat a referral
+      const after = req.query.after;
+      const [cursorAt, cursorId] = typeof after === 'string' ? after.split('|') : [];
+      if (!states || (after !== undefined && (!cursorAt || Number.isNaN(Date.parse(cursorAt)) || !cursorId || !UUID.test(cursorId)))) throw new HttpError(400, 'invalid_query');
+      return reply.send(await tx(async (q) => {
+        const who = await enter(q, fid, user);
+        if (!READ_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
+        // open referrals: longest waiting first; closed ones: most recent first
+        const order = filter === 'closed' ? 'DESC' : 'ASC';
+        const { rows } = await q<Record<string, unknown>>(
+          `SELECT r.id, r.status, r.referral_type, r.created_at, r.updated_at, r.updated_at::text AS cursor_at,
+                  e.outcome, e.sub_reasons,
+                  (SELECT count(*)::int FROM documents d WHERE d.facility_id = r.facility_id AND d.referral_id = r.id AND d.status <> 'not_applicable') AS documents,
+                  (SELECT count(*)::int FROM documents d WHERE d.facility_id = r.facility_id AND d.referral_id = r.id AND d.status IN ('failed', 'unreadable')) AS failed_documents,
+                  -- a filed decision waits for a co-sign: the latest request, newer than any decision, on the latest evaluation
+                  EXISTS (SELECT 1 FROM decision_requests dr
+                          WHERE dr.facility_id = r.facility_id AND dr.referral_id = r.id AND dr.evaluation_id = e.id
+                            AND dr.created_at > coalesce((SELECT max(dd.decided_at) FROM decisions dd WHERE dd.facility_id = r.facility_id AND dd.referral_id = r.id), '-infinity')
+                            AND NOT EXISTS (SELECT 1 FROM decision_requests n WHERE n.facility_id = dr.facility_id AND n.referral_id = dr.referral_id AND n.created_at > dr.created_at)) AS cosign_waiting
+           FROM referrals r
+           LEFT JOIN LATERAL (SELECT id, outcome, sub_reasons FROM evaluations ev
+                              WHERE ev.facility_id = r.facility_id AND ev.referral_id = r.id ORDER BY ev.evaluated_at DESC LIMIT 1) e ON true
+           WHERE r.facility_id = $1 AND r.status = ANY($2::referral_status[])
+             AND ($3::timestamptz IS NULL OR (r.updated_at, r.id) ${order === 'ASC' ? '>' : '<'} ($3::timestamptz, $4::uuid))
+           ORDER BY r.updated_at ${order}, r.id ${order}
+           LIMIT ${QUEUE_LIMIT + 1}`, [fid, states, cursorAt ?? null, cursorId ?? null]);
+        // I4: a list of a facility's referrals is a read of referral data, audited like opening one
+        await audit(q, fid, user, 'referrals.listed', 'facility', fid);
+        const page = rows.slice(0, QUEUE_LIMIT);
+        const last = page.at(-1);
+        return {
+          filter,
+          referrals: page.map((row) => Object.fromEntries(Object.entries(row).filter(([k]) => k !== 'cursor_at'))),
+          next: rows.length > QUEUE_LIMIT && last ? `${last['cursor_at'] as string}|${last['id'] as string}` : null,
+        };
+      }));
+    } catch (err) { return fail(reply, err); }
+  });
+
   app.get<{ Params: { fid: string; rid: string } }>('/api/facilities/:fid/referrals/:rid', async (req, reply) => {
     try {
       const user = caller(req.headers);

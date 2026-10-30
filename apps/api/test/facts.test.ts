@@ -710,6 +710,73 @@ describe.skipIf(!url)('manual fact entry API', () => {
     });
   });
 
+  it('queue: a facility\'s referrals by status, with codes and counts only, paged without skipping ties, audited', async () => {
+    const QF = '00000000-0000-4000-8000-00000000fc13';
+    await c.query("SELECT set_config('app.organization_id', $1, true), set_config('app.facility_id', $2, true)", [ORG.a, QF]);
+    await c.query('INSERT INTO facilities (facility_id, organization_id, name) VALUES ($1, $2, $3)', [QF, ORG.a, 'ZZTEST API Facility queue']);
+    for (const [u, role] of [[U.reviewer, 'admissions_reviewer'], [U.admin, 'facility_admin'], [U.viewer, 'viewer']]) {
+      await c.query('INSERT INTO user_facility_roles (user_id, facility_id, role) VALUES ($1, $2, $3)', [u, QF, role]);
+    }
+    await c.query("INSERT INTO facility_profiles (facility_id, version, capabilities, created_by) VALUES ($1, 0, $2, 'platform:test')", [QF, SEED_CAPS]);
+    await c.query("SELECT set_config('app.facility_id', '', true), set_config('app.organization_id', '', true)");
+    const base = `/api/facilities/${QF}/referrals`;
+    const list = async (query = '', user = U.reviewer) => (await get(`${base}${query}`, user));
+    const mk = async () => (await post(base, U.reviewer)).json().referral.id as string;
+    const factIn = (rid: string, k: string, v: 'yes' | 'no' | 'unknown') => post(`${base}/${rid}/facts`, U.reviewer, fact(k, v));
+
+    expect((await list('', U.viewer)).statusCode).toBe(403);
+    expect((await list('', U.other)).statusCode).toBe(404);
+    for (const bad of ['?filter=everything', '?after=garbage', `?after=2026-10-30|not-a-uuid`]) expect((await list(bad)).json(), bad).toEqual({ error: 'invalid_query' });
+
+    const draft = await mk();
+    const ready = await mk();
+    for (const [k, v] of [['ventilator_use', 'no'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']] as const) await factIn(ready, k, v);
+    await post(`${base}/${ready}/transitions`, U.reviewer, { action: 'submit' });
+    const done = await mk();
+    for (const [k, v] of [['ventilator_use', 'no'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']] as const) await factIn(done, k, v);
+    const doneEv = (await post(`${base}/${done}/transitions`, U.reviewer, { action: 'submit' })).json().evaluation.id;
+    await post(`${base}/${done}/decision`, U.reviewer, { evaluation_id: doneEv, decision: 'admit' });
+    // a hard stop the Reviewer filed for co-sign
+    const filed = await mk();
+    for (const [k, v] of [['ventilator_use', 'yes'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']] as const) await factIn(filed, k, v);
+    const filedEv = (await post(`${base}/${filed}/transitions`, U.reviewer, { action: 'submit' })).json().evaluation.id;
+    await post(`${base}/${filed}/decision-requests`, U.reviewer, { evaluation_id: filedEv, decision: 'admit', override_reason: 'SYNTHETIC: queue' });
+    // one in processing with a failed document (the pipeline's part done as the owner)
+    const proc = await mk();
+    await c.query("SELECT set_config('app.facility_id', $1, true)", [QF]);
+    await c.query(`INSERT INTO documents (facility_id, referral_id, type, status, sha256, storage_key) VALUES ($1::uuid, $2::uuid, 'other', 'failed', sha256('zzq'::bytea),
+      'documents/' || $1::uuid::text || '/' || $2::uuid::text || '/' || encode(sha256('zzq'::bytea), 'hex'))`, [QF, proc]);
+    await c.query("UPDATE referrals SET status = 'processing' WHERE id = $1", [proc]);
+    await c.query("SELECT set_config('app.facility_id', '', true)");
+
+    const open = (await list()).json();
+    expect(open.filter).toBe('open');
+    // (every row here shares the test's one transaction, so one updated_at: order falls to the id tie-breaker)
+    expect(open.referrals.map((r: { id: string }) => r.id)).toEqual([draft, ready, filed].sort());
+    const row = (id: string, rows: Record<string, unknown>[]) => rows.find((r) => r['id'] === id)!;
+    expect([row(draft, open.referrals)['outcome'], row(ready, open.referrals)['outcome'], row(filed, open.referrals)['outcome']]).toEqual([null, 'admit', 'do_not_admit']);
+    expect([row(ready, open.referrals)['cosign_waiting'], row(filed, open.referrals)['cosign_waiting']]).toEqual([false, true]);
+    expect(Object.keys(row(ready, open.referrals)).sort()).toEqual(['cosign_waiting', 'created_at', 'documents', 'failed_documents', 'id', 'outcome', 'referral_type', 'status', 'sub_reasons', 'updated_at']);
+    expect(JSON.stringify(open)).not.toContain('SYNTHETIC'); // no notes, reasons or fact values in a list
+    const processing = (await list('?filter=processing')).json().referrals;
+    expect([processing.length, processing[0].id, processing[0].documents, processing[0].failed_documents]).toEqual([1, proc, 1, 1]);
+    expect((await list('?filter=closed')).json().referrals.map((r: { id: string }) => r.id)).toEqual([done]);
+
+    // 101 more drafts written in one transaction share one updated_at: two pages, every referral exactly once
+    await c.query("SELECT set_config('app.facility_id', $1, true)", [QF]);
+    await c.query('INSERT INTO referrals (facility_id) SELECT $1 FROM generate_series(1, 101)', [QF]);
+    await c.query("SELECT set_config('app.facility_id', '', true)");
+    const p1 = (await list()).json();
+    expect([p1.referrals.length, typeof p1.next]).toEqual([100, 'string']);
+    const p2 = (await list(`?after=${encodeURIComponent(p1.next)}`)).json();
+    expect([p2.referrals.length, p2.next]).toEqual([4, null]);
+    const seen = [...p1.referrals, ...p2.referrals].map((r: { id: string }) => r.id);
+    expect([seen.length, new Set(seen).size]).toEqual([104, 104]);
+
+    await asOwner(QF);
+    expect(await count("SELECT count(*) AS n FROM audit_log WHERE facility_id = $1 AND action = 'referrals.listed' AND actor = $2", [QF, `user:${U.reviewer}`])).toBe(5); // the five successful reads; refused queries read nothing
+  });
+
   it('review: hold, request information, escalate and resume move only from the states §5.1 allows, each with its fields', async () => {
     const { rid } = await withFacts(['daily_skilled_need', 'yes']);
     await move(rid, U.reviewer, { action: 'submit' });
