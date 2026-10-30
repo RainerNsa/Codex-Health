@@ -100,7 +100,7 @@ async function settingsOrRefuse(q: Query, facilityId: string, organizationId: st
 interface EvaluationRow { id: string; outcome: string; clinical_outcome: string; rule_set_version: number; facility_profile_version: number; trace: { confirmation_set?: string[]; disagreements?: string[] } }
 
 const latestEvaluation = async (q: Query, facilityId: string, referralId: string) => (await q<EvaluationRow & Record<string, unknown>>(
-  `SELECT id, raw, outcome, clinical_outcome, financial_status, sub_reasons, trace, engine_version, rule_set_version, facility_profile_version
+  `SELECT id, previous_evaluation_id, raw, outcome, clinical_outcome, financial_status, sub_reasons, trace, engine_version, rule_set_version, facility_profile_version
    FROM evaluations WHERE facility_id = $1 AND referral_id = $2 ORDER BY evaluated_at DESC LIMIT 1`, [facilityId, referralId])).rows[0];
 
 const isKnown = (v: FactValue) => v.value !== null && v.value !== 'unknown';
@@ -137,6 +137,25 @@ async function hardStopFlipped(q: Query, facilityId: string, referralId: string,
        AND EXISTS (SELECT 1 FROM evaluations e WHERE e.facility_id = f.facility_id AND e.referral_id = f.referral_id AND e.trace->'disagreements' ? f.key)
        AND NOT coalesce((SELECT e.trace->'disagreements' ? f.key FROM evaluations e WHERE e.facility_id = f.facility_id AND e.referral_id = f.referral_id ORDER BY e.evaluated_at DESC LIMIT 1), false)`, [facilityId, referralId, keys]);
   return Number(settled.rows[0]!.n) > 0;
+}
+
+/** What the latest evaluation changed against the one before it (4.1, 6.6): the outcome, and each fact whose value differs.
+ *  Read from the fact ids each evaluation records, so the comparison is of what was actually evaluated. */
+async function whatChanged(q: Query, fid: string, rid: string, ev: { previous_evaluation_id?: unknown; trace: unknown } | undefined) {
+  if (!ev?.previous_evaluation_id) return null;
+  const before = (await q<{ outcome: string; trace: { inputs?: { fact_ids?: string[] } } }>('SELECT outcome, trace FROM evaluations WHERE facility_id = $1 AND referral_id = $2 AND id = $3', [fid, rid, ev.previous_evaluation_id])).rows[0];
+  if (!before) return null;
+  const idsOf = (t: unknown) => (t as { inputs?: { fact_ids?: string[] } }).inputs?.fact_ids ?? [];
+  const oldIds = idsOf(before.trace);
+  const newIds = idsOf(ev.trace);
+  const rows = (await q<{ id: string; key: string; value: FactValue }>('SELECT id, key, value FROM facts WHERE facility_id = $1 AND referral_id = $2 AND id = ANY($3)', [fid, rid, [...oldIds, ...newIds]])).rows;
+  const side = (ids: string[]) => new Map(rows.filter((r) => ids.includes(r.id)).map((r) => [r.key, r.value]));
+  const from = side(oldIds);
+  const to = side(newIds);
+  const facts = [...new Set([...from.keys(), ...to.keys()])].sort()
+    .filter((k) => JSON.stringify(from.get(k)) !== JSON.stringify(to.get(k)))
+    .map((k) => ({ key: k, from: from.get(k)?.value ?? null, to: to.get(k)?.value ?? null }));
+  return { previous_outcome: before.outcome, facts };
 }
 
 /** Evaluate the current facts under the current settings and store the immutable snapshot (§14.2, I6). */
@@ -233,6 +252,7 @@ async function referralView(q: Query, facilityId: string, referralId: string, ru
       confidence_band: f.confidence_band, single_source: f.single_source })),
     form: { fact_keys: ruleSet?.factKeys ?? [], note_max: NOTE_MAX, configured: ruleSet !== null, departments: DEPARTMENTS },
     evaluation: ev ?? null,
+    changes: await whatChanged(q, facilityId, referralId, ev),
     rule_explanations: explanations,
     confirmation: confirmation(ev?.trace.confirmation_set ?? [], facts),
     // keys an Admit decision would also need stated as known values (shown when the recommendation is not Admit)
@@ -253,6 +273,7 @@ async function referralView(q: Query, facilityId: string, referralId: string, ru
         && (a !== 'submit' || docs.length === 0) && (a !== 'process' || waiting)),
       ...(UPLOAD_STATES.has(status) ? ['upload'] : []),
       ...(status === 'partial_failure' && failed ? ['resolve_failures'] : []),
+      ...(status === 'partial_failure' && docs.some((d) => d.status === 'failed') ? ['retry_failed'] : []),
       ...(outdated && OPEN_STATES.has(status) ? ['reevaluate'] : []),
       // finalize covers both paths: a decision that needs a co-sign is filed as a request instead
       ...(status === 'ready_for_review' && ev && !outdated ? ['finalize'] : []),
@@ -859,6 +880,30 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
         }
         return { url: await s3.presignGet(doc.storage_key), expires_in: VIEW_TTL_SECONDS };
       }));
+    } catch (err) { return fail(reply, err); }
+  });
+
+  // T4 with the same file: documents that failed go back to the pipeline. Unreadable ones were read, so they stay
+  app.post<{ Params: { fid: string; rid: string } }>('/api/facilities/:fid/referrals/:rid/documents/retry', async (req, reply) => {
+    try {
+      const user = caller(req.headers);
+      const { fid, rid } = ids(req.params);
+      const body = await tx(async (q) => {
+        const who = await enter(q, fid, user);
+        if (!WRITE_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
+        const ruleSet = await loadSettings(q, fid, who.organizationId);
+        const ref = await q<{ status: string }>('SELECT status FROM referrals WHERE facility_id = $1 AND id = $2 FOR UPDATE', [fid, rid]);
+        if (!ref.rows[0]) throw new HttpError(404, 'not_found');
+        if (ref.rows[0].status !== 'partial_failure') throw new HttpError(409, 'transition_not_allowed');
+        const docs = await q<{ id: string }>("UPDATE documents SET status = 'uploaded', updated_at = now() WHERE facility_id = $1 AND referral_id = $2 AND status = 'failed' RETURNING id", [fid, rid]);
+        if (docs.rows.length === 0) throw new HttpError(409, 'transition_not_allowed');
+        for (const d of docs.rows) await audit(q, fid, user, 'document.retried', 'document', d.id);
+        await q('INSERT INTO referral_transitions (facility_id, referral_id, transition, from_status, to_status, created_by) VALUES ($1, $2, $3, $4, $5, $6)',
+          [fid, rid, 'T4', 'partial_failure', 'processing', `user:${user}`]);
+        return referralView(q, fid, rid, ruleSet, who);
+      });
+      await enqueue(fid, rid);
+      return reply.code(201).send(body);
     } catch (err) { return fail(reply, err); }
   });
 

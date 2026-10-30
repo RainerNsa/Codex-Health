@@ -437,10 +437,38 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
     }
   });
 
+  test('one document the model cannot finish fails alone: the others count, and its error text goes nowhere', async () => {
+    const { rid, docs } = await referral('w1', 'w2');
+    const bad = docs[0]!;
+    const seen: string[][] = [];
+    const p: Ports = { versions: VERSIONS, ocr: async () => [{ page: 1, text: PAGE }], extract: async (pages) => {
+      seen.push(pages.map((x) => x.document_id));
+      if (pages[0]!.document_id === bad) throw new Error('SYNTHETIC-CANARY refused');
+      return pages.flatMap((x) => clean(x.document_id));
+    } };
+    await processReferral(tx, p, job(rid));
+    assert.deepEqual(seen.map((x) => x.length), [1, 1]); // one document per call
+    const s = await state(rid);
+    assert.equal(s.status, 'partial_failure');
+    assert.deepEqual(s.docs.map((d) => d.status).sort(), ['failed', 'processed']);
+    assert.equal(s.facts.length, 3);
+    assert.deepEqual([s.evals[0].outcome, s.evals[0].sub_reasons], ['needs_review', ['processing_incomplete']]);
+    const events = (await c.query("SELECT attrs FROM product_events WHERE referral_id = $1 AND event = 'document.failed'", [rid])).rows;
+    assert.deepEqual(events.map((e) => [e.attrs.document_id, e.attrs.stage]), [[bad, 'extract']]);
+    assert.ok(!JSON.stringify(events).includes('CANARY'));
+  });
+
+  test('an unreadable document with an extraction outage on the rest is still an outage', async () => {
+    const { rid, docs } = await referral('w3', 'w4');
+    const p: Ports = { versions: VERSIONS, ocr: async (d) => (d.id === docs[0] ? [] : [{ page: 1, text: PAGE }]), extract: async () => { throw new Error('down'); } };
+    await assert.rejects(processReferral(tx, p, job(rid)), /no document could be extracted/);
+    assert.equal((await state(rid)).status, 'processing');
+  });
+
   test('a crash in extraction leaves nothing written, and the job can run again', async () => {
     const { rid } = await referral('i');
     const crash: Ports = { versions: VERSIONS, ocr: async () => [{ page: 1, text: PAGE }], extract: async () => { throw new Error('boom'); } };
-    await assert.rejects(processReferral(tx, crash, job(rid)), /boom/);
+    await assert.rejects(processReferral(tx, crash, job(rid)), /no document could be extracted/);
     let s = await state(rid);
     assert.deepEqual([s.status, s.docs[0].status, s.facts, s.evals], ['processing', 'uploaded', [], []]);
     assert.equal(await processReferral(tx, ports(() => [{ page: 1, text: PAGE }], clean), job(rid)), 'done');

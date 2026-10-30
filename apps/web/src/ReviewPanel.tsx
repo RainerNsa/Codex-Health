@@ -11,7 +11,7 @@ const keyLabel = (k: string) => k.replaceAll('_', ' ');
 const ACTION_LABEL: Record<Action, string> = {
   submit: 'Submit for review', hold: 'Hold', request_info: 'Request information', escalate: 'Escalate', resume: 'Resume review', finalize: 'Record decision',
   reevaluate: 'Re-evaluate with current settings', cosign: 'Co-sign the filed decision', amend: 'Amend the decision',
-  process: 'Submit for processing', upload: 'Add documents', resolve_failures: 'Resolve failed documents',
+  process: 'Submit for processing', upload: 'Add documents', resolve_failures: 'Resolve failed documents', retry_failed: 'Try failed documents again',
 };
 const STATUS_LABEL: Record<string, string> = {
   draft: 'Draft', ready_for_review: 'Ready for review', on_hold: 'On hold', info_requested: 'Information requested', escalated: 'Escalated', finalized: 'Finalized', amended: 'Amended',
@@ -106,7 +106,7 @@ export function ReviewPanel({ view, busy, on }: { view: ReferralView; busy: bool
 
       {view.actions.length > 0 && (
         <Flex mt="3" wrap="wrap" gap="2">
-          {view.actions.filter((a) => a !== 'upload' && a !== 'resolve_failures' && a !== 'process').map((a) => (
+          {view.actions.filter((a) => a !== 'upload' && a !== 'resolve_failures' && a !== 'retry_failed' && a !== 'process').map((a) => (
             <Button key={a} size="sm" disabled={busy} aria-pressed={open === a} variant={a === 'finalize' ? 'solid' : 'outline'}
               onClick={() => (a === 'submit' ? void on.move({ action: 'submit' }) : a === 'reevaluate' ? void on.reevaluate()
                 : setOpen(open === a ? null : a))}>{ACTION_LABEL[a]}</Button>

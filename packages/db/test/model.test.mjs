@@ -109,6 +109,10 @@ test('referral data model', { skip: !url && 'DATABASE_URL not set' }, async (t) 
       await c.query('SET LOCAL ROLE codex_app');
       await expectFailure(c, "UPDATE documents SET status = 'processed' WHERE id = $1", /codex_app may not move document/, [doc]);
       await expectFailure(c, 'UPDATE documents SET pages = 3 WHERE id = $1', /permission denied/, [doc]);
+      await c.query('RESET ROLE');
+      await c.query("UPDATE documents SET status = 'failed' WHERE id = $1", [doc]);
+      await c.query('SET LOCAL ROLE codex_app');
+      await expectFailure(c, "UPDATE documents SET status = 'uploaded' WHERE id = $1", /codex_app may not move document/, [doc]); // retry: only from a partial failure
       await c.query("UPDATE documents SET status = 'not_applicable', not_applicable_reason = 'SYNTHETIC: duplicate of the H&P' WHERE id = $1", [doc]);
       await expectFailure(c, "UPDATE documents SET status = 'uploaded', not_applicable_reason = NULL WHERE id = $1", /codex_app may not move document/, [doc]);
     });

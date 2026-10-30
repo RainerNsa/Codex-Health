@@ -812,6 +812,43 @@ describe.skipIf(!url)('manual fact entry API', () => {
       await c.query("SELECT set_config('app.facility_id', '', true)");
     });
 
+    it('trying again sends the same file back through the pipeline; only failed documents, only from a partial failure', async () => {
+      const sent: string[] = [];
+      docApp = buildServer({ tx, auth: 'local-stub', env: 'test', storage: s3Storage(BUCKET), enqueue: async (_f, r) => { sent.push(r); } });
+      const retry = (rid: string, user = U.reviewer) => docApp.inject({ method: 'POST', url: `${refUrl(rid)}/documents/retry`, headers: as(user) });
+      const rid = await newReferral();
+      const a = (await upload(rid, PDF(71))).json().documents[0].id as string;
+      const b = (await upload(rid, PDF(72))).json().documents.find((d: { id: string }) => d.id !== a).id as string;
+      expect((await retry(rid)).json().error).toBe('transition_not_allowed'); // not a partial failure
+      await asOwner(FAC.a);
+      await c.query("UPDATE documents SET status = 'failed' WHERE id = $1", [a]);
+      await c.query("UPDATE documents SET status = 'unreadable' WHERE id = $1", [b]);
+      await c.query("UPDATE referrals SET status = 'partial_failure' WHERE id = $1", [rid]);
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      expect((await retry(rid, U.viewer)).statusCode).toBe(403);
+      const res = await retry(rid);
+      expect(res.statusCode).toBe(201);
+      const view = res.json();
+      const status = (id: string) => view.documents.find((d: { id: string }) => d.id === id).status;
+      expect([view.referral.status, status(a), status(b)]).toEqual(['processing', 'uploaded', 'unreadable']);
+      expect(sent).toEqual([rid]);
+      await asOwner(FAC.a);
+      expect(await count("SELECT count(*) AS n FROM audit_log WHERE action = 'document.retried' AND entity_id = $1", [a])).toBe(1);
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      expect((await retry(rid)).json().error).toBe('transition_not_allowed');
+    });
+
+    it('what changed: the outcome and each fact that differs from the evaluation before', async () => {
+      const rid = await newReferral();
+      expect((await post(factsUrl(rid), U.reviewer, fact('ventilator_use', 'no'))).json().changes).toBeNull();
+      await post(factsUrl(rid), U.reviewer, fact('recent_aggression', 'no'));
+      const v = (await post(factsUrl(rid), U.reviewer, fact('ventilator_use', 'yes'))).json();
+      expect(v.changes.facts).toEqual([{ key: 'ventilator_use', from: 'no', to: 'yes' }]);
+      expect(v.changes.previous_outcome).not.toBe(v.evaluation.outcome);
+      const added = (await post(factsUrl(rid), U.reviewer, fact('daily_skilled_need', 'yes'))).json();
+      expect(added.changes.facts).toEqual([{ key: 'daily_skilled_need', from: null, to: 'yes' }]);
+    });
+
     it('confirming needs the page opened by this person, on the current reading, and keeps the flag', async () => {
       const { rid, docId, factId } = await withReading(52);
       const confirm = (over = {}, user = U.reviewer) => post(factsUrl(rid), user, { ...fact('ventilator_use', 'no'), confirms: factId, ...over });
@@ -900,7 +937,7 @@ describe.skipIf(!url)('manual fact entry API', () => {
       await move(rid, U.reviewer, { action: 'process' });
       await asPipeline(rid, 'failed', 'partial_failure');
       let view = (await get(refUrl(rid), U.reviewer)).json();
-      expect(view.actions).toEqual(['upload', 'resolve_failures']);
+      expect(view.actions).toEqual(['upload', 'resolve_failures', 'retry_failed']);
       const failed = view.documents[0].id as string;
       expect((await upload(rid, PDF(7))).json()).toEqual({ error: 'replace_required' });
       view = (await upload(rid, PDF(8), { replaces: failed })).json();

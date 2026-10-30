@@ -14,6 +14,7 @@ export interface DocumentHandlers {
   upload: (files: File[], type: string, replaces?: string) => Promise<boolean>;
   process: () => Promise<boolean>;
   resolve: (documents: { id: string; reason: string }[]) => Promise<boolean>;
+  retry: () => Promise<boolean>;
 }
 
 export function DocumentsPanel({ view, busy, on }: { view: ReferralView; busy: boolean; on: DocumentHandlers }) {
@@ -54,6 +55,7 @@ export function DocumentsPanel({ view, busy, on }: { view: ReferralView; busy: b
           </Table.Root>
         </Table.ScrollArea>
       )}
+      {view.actions.includes('retry_failed') && <Button mt="2" mr="2" size="sm" disabled={busy} onClick={() => void on.retry()}>Try failed documents again</Button>}
       {partial && failed.length > 0 && (
         <Button mt="2" size="sm" variant="outline" disabled={busy || failed.some((d) => !(reasons[d.id] ?? '').trim())}
           onClick={() => void on.resolve(failed.map((d) => ({ id: d.id, reason: (reasons[d.id] ?? '').trim() }))).then((ok) => ok && setReasons({}))}>

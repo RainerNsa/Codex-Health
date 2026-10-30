@@ -4,7 +4,7 @@
 import { useEffect, useState, type FormEvent } from 'react';
 import { Box, Button, Flex, Grid, Heading, HStack, Input, Progress as ChakraProgress, Table, Text, Textarea, chakra } from '@chakra-ui/react';
 import { ArrowLeftIcon, CheckCircleIcon, PlusIcon, ProhibitIcon, WarningCircleIcon, type Icon } from '@phosphor-icons/react';
-import { amendReferral, ApiError, resolveFailures, uploadDocument, cosignRequest, createReferral, enterFact, finalizeReferral, getReferral, moveReferral, reevaluateReferral, requestCosign, type ReferralView, type Tri } from './api.ts';
+import { amendReferral, ApiError, resolveFailures, retryFailed, uploadDocument, cosignRequest, createReferral, enterFact, finalizeReferral, getReferral, moveReferral, reevaluateReferral, requestCosign, type ReferralView, type Tri } from './api.ts';
 import { ReviewPanel } from './ReviewPanel.tsx';
 import { DocumentsPanel } from './DocumentsPanel.tsx';
 import { EvidencePanel } from './EvidencePanel.tsx';
@@ -149,6 +149,7 @@ export function App() {
 
         {inReferral && view.referral.status === 'processing' && <Progress documents={view.documents} />}
         {inReferral && <Recommendation view={view} />}
+        {inReferral && <Changes view={view} />}
 
         {inReferral && (
           <Grid gap="4" templateColumns={{ base: 'minmax(0, 1fr)', xl: 'minmax(0, 3fr) minmax(0, 2fr)' }} alignItems="start">
@@ -166,6 +167,7 @@ export function App() {
                 },
                 process: () => run(() => moveReferral(facility, view.referral.id, user, { action: 'process' })),
                 resolve: (documents) => run(() => resolveFailures(facility, view.referral.id, user, documents)),
+                retry: () => run(() => retryFailed(facility, view.referral.id, user)),
               }} />
             </Grid>
             <Grid gap="4" minW="0">
@@ -249,6 +251,19 @@ function Recommendation({ view }: { view: ReferralView }) {
       {list('To confirm before a decision', ev.trace.confirmation_set ?? [])}
       <Text mt="1" fontSize="xs" color="muted">Clinical: {ev.clinical_outcome.replaceAll('_', ' ')} · Financial: {ev.financial_status}. Staff make the final decision.</Text>
     </Box>
+  );
+}
+
+function Changes({ view }: { view: ReferralView }) {
+  const c = view.changes;
+  const outcome = view.evaluation?.outcome;
+  if (!c || !outcome || (c.facts.length === 0 && c.previous_outcome === outcome)) return null;
+  const word = (v: unknown) => (v === null ? 'not entered' : String(v));
+  return (
+    <Panel id="changes" title="What changed since the last evaluation">
+      {c.previous_outcome !== outcome && <Text fontSize="sm"><chakra.span fontWeight="600">Recommendation:</chakra.span> {OUTCOME_LABEL[c.previous_outcome]} → {OUTCOME_LABEL[outcome]}</Text>}
+      {c.facts.map((f) => <Text key={f.key} fontSize="sm"><chakra.span fontWeight="600">{keyLabel(f.key)}:</chakra.span> {word(f.from)} → {word(f.to)}</Text>)}
+    </Panel>
   );
 }
 
