@@ -1,7 +1,7 @@
 // The rule set and facility profile an evaluation runs against, read per request from the database (migration
 // 0008): the organisation's latest rule set version and the facility's latest profile version, with the
 // facility's switched-off rules disabled. Both versions are pinned on every evaluation (SPEC §7).
-import { evaluate, lintRule, parseExpression, type Expr, type Rule, type Profile } from '@codex-health/rules-engine';
+import { evaluate, keyTypes, lintRule, type Rule, type Profile } from '@codex-health/rules-engine';
 import type { Query } from './db.ts';
 
 export const PROFILE_KEYS: Readonly<Record<string, 'boolean' | 'count'>> = {
@@ -50,18 +50,7 @@ function build(input: Parameters<typeof buildRuleSet>[0]): RuleSet {
   const enabled = rules.filter((r) => r.enabled);
   const critical = new Set(enabled.filter((r) => r.kind === 'hard_stop' || r.kind === 'payer').flatMap((r) => r.inputs).filter((k) => !k.startsWith('facility.')));
   const keys = [...new Set(enabled.flatMap((r) => r.inputs).filter((k) => !k.startsWith('facility.')))].sort();
-  // The value type each key must carry, from how the rules read it (§10.2). A key read two ways refuses the set.
-  const types = new Map<string, 'tri_state' | 'count' | 'enum'>();
-  const walk = (e: Expr): void => {
-    if (e.op === 'and' || e.op === 'or') { walk(e.left); walk(e.right); return; }
-    if (e.op === 'not') { walk(e.expr); return; }
-    const t = e.op === 'fact_is' || e.op === 'fact_within' ? 'tri_state' : e.op === 'fact_cmp' ? 'count' : e.op === 'fact_is_code' ? 'enum' : null;
-    if (!t) return;
-    const seen = types.get(e.key);
-    if (seen && seen !== t) throw new Error(`rule set refused: fact ${e.key} is read as both ${seen} and ${t}`);
-    types.set(e.key, t);
-  };
-  for (const r of enabled) walk(parseExpression(r.expression));
+  const types = keyTypes(enabled.map((r) => r.expression));
   // the engine's own refusals (duplicate ids, protected inputs without a legal reviewer, 'is unknown' outside
   // review rules) surface here, on read, instead of on the first fact entry
   evaluate({ facts: [], profile: input.capabilities, rules, referral_date: '2001-01-01', processing_complete: true });

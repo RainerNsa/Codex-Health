@@ -88,7 +88,7 @@ describe('presence(): the tri-state a hard-stop rule reads from a typed value', 
       const out = presence({ value: v, source, evidence, confidence_band: source === 'ai' ? b : null });
       const isUnknown = v.type === 'tri_state' ? v.value === 'unknown' : v.value === null;
       const noPresence = v.type === 'enum' || v.type === 'date' || v.type === 'text';
-      const trusted = source === 'user' || (isVerified && b !== 'low');
+      const trusted = source === 'user' || (isVerified && (b === 'high' || b === 'medium'));
       if (isUnknown || noPresence || !trusted) expect(out).toBe('unknown');
       else if (v.type === 'tri_state') expect(out).toBe(v.value);
       else if (v.type === 'count') expect(out).toBe(v.value === 0 ? 'no' : 'yes');

@@ -327,3 +327,14 @@ describe('runRuleTests', () => {
     expect(runRuleTests([r, typed, recency]).map((x) => [x.name, x.ok])).toEqual([['t', true], ['f', true], ['u', true], ['wrong', false], ['typed', true], ['recent', true]]);
   });
 });
+
+describe('value parsing shared by manual entry and extraction', () => {
+  it('rebuilds a clean value of the key\'s type and refuses anything else', async () => {
+    const { keyTypes, parseFactValue } = await import('../src/index.ts');
+    const types = keyTypes(['x is yes', 'n >= 3']);
+    expect([types.get('x'), types.get('n')]).toEqual(['tri_state', 'count']);
+    expect(() => keyTypes(['x is yes', 'x >= 3'])).toThrow(/read as both/);
+    expect(parseFactValue({ type: 'tri_state', value: 'no', hack: 1 }, 'tri_state')).toEqual({ type: 'tri_state', value: 'no' });
+    for (const bad of [null, 'no', { type: 'count', value: 0 }, { type: 'tri_state', value: 'No' }]) expect(parseFactValue(bad, 'tri_state')).toBe(null);
+  });
+});

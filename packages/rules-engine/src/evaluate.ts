@@ -105,7 +105,7 @@ function viewFacts(facts: readonly Fact[]): Map<string, FactView> {
 }
 
 const KEY = /^[a-z][a-z0-9_]*$/;
-const trusted = (f: Fact): boolean => f.source === 'user' || (f.evidence?.verified === true && f.confidence_band !== 'low');
+const trusted = (f: Fact): boolean => f.source === 'user' || (f.evidence?.verified === true && (f.confidence_band === 'high' || f.confidence_band === 'medium'));
 /** The value is a real value of its declared type (a 'Yes', a string count or an empty text is not). */
 function wellFormed(v: FactValue): boolean {
   switch (v.type) {

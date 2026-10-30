@@ -123,7 +123,7 @@ FROM (VALUES
   ('referral_transitions', 'referral_transitions_guard'), ('referral_transitions', 'referral_transitions_apply'),
   ('referrals', 'referrals_app_status_guard'), ('decisions', 'decisions_app_guard'), ('decisions', 'decisions_finalized_check'),
   ('decision_requests', 'decision_requests_guard'), ('decision_requests', 'decision_requests_audit'),
-  ('documents', 'documents_app_insert_guard')) AS e(tbl, trg)
+  ('documents', 'documents_app_insert_guard'), ('facts', 'facts_worker_keeps_user_facts')) AS e(tbl, trg)
 WHERE to_regclass('public.' || e.tbl) IS NOT NULL
   AND NOT EXISTS (
     SELECT 1 FROM pg_trigger g

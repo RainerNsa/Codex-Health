@@ -11,5 +11,5 @@ test('worker logs idle and exits 0 when env is set', () => {
     env: { ...process.env, QUEUE_URL: 'https://sqs.example.invalid/queue', AWS_REGION: 'us-east-1' },
   });
   assert.equal(r.status, 0, r.stderr);
-  assert.match(r.stdout, /worker idle: pipeline arrives at M3/);
+  assert.match(r.stdout, /worker idle: queue loop arrives with M4 slice 2/);
 });

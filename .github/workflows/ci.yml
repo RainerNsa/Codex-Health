@@ -238,6 +238,8 @@ jobs:
         run: npm test -w @codex-health/db
       - name: Anchoring job and verifier against LocalStack (write-once anchors, tamper and truncation detection)
         run: npm test -w @codex-health/anchor
+      - name: Worker pipeline against the database (as codex_worker, fake OCR and extraction; never calls AWS AI)
+        run: npm test -w @codex-health/worker
       - name: API against the database (manual fact entry as codex_app under RLS; auth stub, test env only)
         run: npm test -w @codex-health/api
       - name: RLS enumeration and grant checks

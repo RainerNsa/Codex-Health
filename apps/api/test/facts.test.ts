@@ -2,7 +2,7 @@
 // in a savepoint of one outer transaction as codex_app, exactly the role and bindings production uses, and the
 // outer transaction is rolled back: the suite leaves nothing behind. Skips without DATABASE_URL; fails where
 // REQUIRE_DATABASE is set (the CI db-checks job).
-import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import pg from 'pg';
 import { buildServer } from '../src/server.ts';
 import { DEV_USER_HEADER } from '../src/auth.ts';
@@ -474,6 +474,18 @@ describe.skipIf(!url)('manual fact entry API', () => {
     expect((await requestCosign(flip.rid, U.reviewer, dna)).json().pending_request.decision).toBe('do_not_admit');
     const qid = (await requestCosign(flip.rid, U.reviewer, { evaluation_id: flip.ev.id, decision: 'admit' })).json().pending_request.id as string;
     expect((await cosign(flip.rid, qid, U.admin)).json().decision).toMatchObject({ decision: 'admit', override_reason: null });
+    // AI readings that differ, with no person involved, are not a person's correction: no co-sign is forced
+    const aiOnly = await newReferral();
+    await asOwner(FAC.a);
+    const ai = (v: 'yes' | 'no', sup: string | null) => c.query(`INSERT INTO facts (facility_id, referral_id, key, value, source, evidence, confidence_band, supersedes, created_by)
+      VALUES ($1, $2, 'ventilator_use', $3, 'ai', $4, 'high', $5, 'worker:zz') RETURNING id`, [FAC.a, aiOnly, { type: 'tri_state', value: v }, { document_id: 'zz', page: 1, quote: 'SYNTHETIC', verified: true }, sup]);
+    const firstAi = (await ai('yes', null)).rows[0].id as string;
+    await ai('no', firstAi);
+    await c.query("SELECT set_config('app.facility_id', '', true)");
+    expect((await get(refUrl(aiOnly), U.reviewer)).json().cosign.any).toBe(false);
+    // ...but a person correcting the AI's reading is a flip
+    await post(factsUrl(aiOnly), U.reviewer, fact('ventilator_use', 'yes'));
+    expect((await get(refUrl(aiOnly), U.reviewer)).json().cosign.any).toBe(true);
     for (const steps of [[['ventilator_use', 'unknown'], ['ventilator_use', 'no']], [['ventilator_use', 'no'], ['daily_skilled_need', 'no'], ['daily_skilled_need', 'yes']]] as [string, 'yes' | 'no' | 'unknown'][][]) {
       const r = await withFacts(...steps, ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
       await move(r.rid, U.reviewer, { action: 'submit' });
@@ -577,7 +589,9 @@ describe.skipIf(!url)('manual fact entry API', () => {
   const BUCKET = process.env['S3_DOCUMENTS_BUCKET'] ?? 'codex-health-documents-local';
   const withS3 = !!process.env['AWS_ENDPOINT_URL']; // localstack only
   if (!withS3 && process.env['REQUIRE_DATABASE']) throw new Error('AWS_ENDPOINT_URL (localstack) must be set here: the document tests may not be skipped in the db-checks job');
-  const docApp = buildServer({ tx, auth: 'local-stub', env: 'test', storage: withS3 ? s3Storage(BUCKET) : null });
+  // rebuilt for each test: the upload rate limit counts per server, and the suite would otherwise add up to it
+  let docApp = buildServer({ tx, auth: 'local-stub', env: 'test', storage: withS3 ? s3Storage(BUCKET) : null });
+  beforeEach(() => { docApp = buildServer({ tx, auth: 'local-stub', env: 'test', storage: withS3 ? s3Storage(BUCKET) : null }); });
   const PDF = (n: number) => Buffer.from(`%PDF-1.4\nZZTEST synthetic document ${n}\n`);
   const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
   /** Upload like the browser: ask for a URL, PUT the bytes, then ask the API to check and record them. */
@@ -660,16 +674,16 @@ describe.skipIf(!url)('manual fact entry API', () => {
       const failed = view.documents[0].id as string;
       expect((await upload(rid, PDF(7))).json()).toEqual({ error: 'replace_required' });
       view = (await upload(rid, PDF(8), { replaces: failed })).json();
-      expect([view.referral.status, view.documents.map((d: { status: string; not_applicable_reason: string | null }) => [d.status, d.not_applicable_reason])])
+      expect([view.referral.status, view.documents.map((d: { status: string; not_applicable_reason: string | null }) => [d.status, d.not_applicable_reason]).sort()])
         .toEqual(['processing', [['not_applicable', 'Replaced by a new upload'], ['uploaded', null]]]);
       // the replacement fails too: this time staff mark it not applicable
       await asPipeline(rid, 'failed', 'partial_failure');
-      const second = view.documents[1].id as string;
+      const second = view.documents.find((d: { status: string }) => d.status === 'uploaded').id as string;
       const resolve = (body: unknown) => post(`${refUrl(rid)}/documents/resolve`, U.reviewer, body);
       expect((await resolve({ documents: [{ id: second, reason: ' ' }] })).json()).toEqual({ error: 'invalid_document' });
       expect((await resolve({ documents: [] })).json()).toEqual({ error: 'resolve_all_failed' });
       view = (await resolve({ documents: [{ id: second, reason: 'SYNTHETIC: duplicate fax page' }] })).json();
-      expect([view.referral.status, view.documents[1].status, view.evaluation !== null]).toEqual(['ready_for_review', 'not_applicable', true]);
+      expect([view.referral.status, view.documents.every((d: { status: string }) => d.status === 'not_applicable'), view.evaluation !== null]).toEqual(['ready_for_review', true, true]);
       expect(view.transitions.map((t: { transition: string }) => t.transition)).toEqual(['T1', 'T4', 'T5']);
     });
 
@@ -685,7 +699,7 @@ describe.skipIf(!url)('manual fact entry API', () => {
       await c.query("UPDATE documents SET status = 'processed' WHERE id = $1", [ids2[1]]);
       await c.query("UPDATE referrals SET status = 'partial_failure' WHERE id = $1", [rid]);
       expect((await upload(rid, PDF(15), { replaces: ids2[1] })).json()).toEqual({ error: 'replace_not_failed' });
-      expect((await get(refUrl(rid), U.reviewer)).json().documents[1].status).toBe('processed');
+      expect((await get(refUrl(rid), U.reviewer)).json().documents.find((d: { id: string }) => d.id === ids2[1]).status).toBe('processed');
       // the 21st document is refused before any upload link is issued
       const full = await newReferral();
       await asOwner(FAC.a);
