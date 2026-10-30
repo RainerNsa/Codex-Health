@@ -65,26 +65,27 @@ jobs:
       # our code) and the RDS "no logging" rule: RDS log exports are off BY DESIGN because statement logs carry
       # PHI (infra/README.md "Deliberately missing"; CONSTRAINTS data policy 5; SPEC §12). Exclusions live here,
       # in a guarded file with the reason, never as an inline nosemgrep (CONSTRAINTS Floor).
-      # EX-1 (CONSTRAINTS section 7, expires 2027-01-28): the demo's main.tf is scanned separately, with one rule
-      # suspended for that file only; every other file keeps every rule.
+      # EX-1 (CONSTRAINTS section 7, expires 2027-01-28): the demo's server.tf is scanned separately, with one rule
+      # suspended for that file only; every other file keeps every rule. Keep the two steps' base arguments in step:
+      # a config or exclusion added to one belongs in the other.
       - name: semgrep (default rules, no metrics, no upload)
         uses: docker://semgrep/semgrep@sha256:3db5c7af55eb1f512eac0abf0ab69a97b52c74b5e9a27314c221aee1a78d7ab2 # 1.181.1
         with:
           args: >-
             semgrep scan --config p/default --error --metrics=off
             --exclude node_modules --exclude '*.lock' --exclude docs/tooling/upstream
-            --exclude infra/terraform/envs/demo/main.tf
+            --exclude infra/terraform/envs/demo/server.tf
             --exclude-rule terraform.aws.security.aws-db-instance-no-logging.aws-db-instance-no-logging
             .
-      - name: semgrep, demo main.tf (EX-1 suspends the public-IP rule here only)
-        if: hashFiles('infra/terraform/envs/demo/main.tf') != ''
+      - name: semgrep, demo server.tf (EX-1 suspends the public-IP rule here only; keep in step with the scan above)
+        if: hashFiles('infra/terraform/envs/demo/server.tf') != ''
         uses: docker://semgrep/semgrep@sha256:3db5c7af55eb1f512eac0abf0ab69a97b52c74b5e9a27314c221aee1a78d7ab2 # 1.181.1
         with:
           args: >-
             semgrep scan --config p/default --error --metrics=off
             --exclude-rule terraform.aws.security.aws-db-instance-no-logging.aws-db-instance-no-logging
             --exclude-rule terraform.aws.security.aws-ec2-has-public-ip.aws-ec2-has-public-ip
-            infra/terraform/envs/demo/main.tf
+            infra/terraform/envs/demo/server.tf
       - uses: gitleaks/gitleaks-action@e0c47f4f8be36e29cdc102c57e68cb5cbf0e8d1e # v3.0.0
         env:
           GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
