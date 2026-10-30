@@ -186,11 +186,13 @@ export async function processReferral(tx: Tx, ports: Ports, job: Job): Promise<'
     const open = (await q<{ n: string }>("SELECT count(*) AS n FROM documents WHERE facility_id = $1 AND referral_id = $2 AND status NOT IN ('processed', 'not_applicable')", [fid, rid])).rows[0]!.n;
     const anyFailed = open !== '0';
     const facts = await currentFacts(q, fid, rid);
-    const disagreements = [...new Set([...contested, ...facts.filter((f) => f.source === 'ai' && !isKnown(f.value)).map((f) => f.key)])].sort();
+    const previous = (await q<{ id: string; disagreements: string[] | null }>("SELECT id, trace->'disagreements' AS disagreements FROM evaluations WHERE facility_id = $1 AND referral_id = $2 ORDER BY evaluated_at DESC LIMIT 1", [fid, rid])).rows[0];
+    // a dispute stands until a person states that key again, which the API records: a later silent document never ends it
+    const disagreements = [...new Set([...contested, ...(previous?.disagreements ?? []), ...facts.filter((f) => f.source === 'ai' && !isKnown(f.value)).map((f) => f.key)])].sort();
     const raw = !facts.some((f) => f.source === 'user'); // §14.2: raw is the AI-only snapshot, before any person touched a fact
     const referralDate = new Date().toISOString().slice(0, 10);
     const result = evaluate({ facts, profile: set.profile, rules: set.rules, referral_date: referralDate, processing_complete: !anyFailed });
-    const prev = (await q<{ id: string }>('SELECT id FROM evaluations WHERE facility_id = $1 AND referral_id = $2 ORDER BY evaluated_at DESC LIMIT 1', [fid, rid])).rows[0]?.id ?? null;
+    const prev = previous?.id ?? null;
     const { trace, missing, conflicts, blocking, empty_profile_keys, resolution_step, confirmation_set } = result;
     const v = ports.versions;
     const ev = (await q<{ id: string }>(

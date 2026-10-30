@@ -325,6 +325,9 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
     await processReferral(tx, ports(() => [{ page: 1, text: PAGE }], (d) => [...others(d), entry(d, 'ventilator_use', 'yes', Y)]), job(rid));
     const s = await state(rid);
     assert.deepEqual([s.evals[0].outcome, s.evals[0].trace.disagreements], ['admit', ['ventilator_use']]);
+    await addDocument(rid, 'u2'); // a later document that says nothing does not end the dispute
+    await processReferral(tx, ports(() => [{ page: 1, text: PAGE }], () => []), job(rid));
+    assert.deepEqual((await state(rid)).evals.at(-1).trace.disagreements, ['ventilator_use']);
   });
 
   test('a re-run reads only new documents; agreement changes nothing and reports no change', async () => {
