@@ -78,8 +78,8 @@
       "page": 3,
       "quote": "decannulated and not on a ventilator at discharge",
       "span": {
-        "start": 189,
-        "end": 238
+        "start": 239,
+        "end": 288
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -97,8 +97,8 @@
       "page": 3,
       "quote": "needs daily skilled nursing for wound care",
       "span": {
-        "start": 274,
-        "end": 316
+        "start": 182,
+        "end": 224
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",

@@ -76,8 +76,8 @@
       "page": 3,
       "quote": "weaned from the ventilator on day 4 and not on a ventilator now",
       "span": {
-        "start": 242,
-        "end": 305
+        "start": 376,
+        "end": 439
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -95,8 +95,8 @@
       "page": 3,
       "quote": "does not need skilled nursing or therapy each day",
       "span": {
-        "start": 390,
-        "end": 439
+        "start": 182,
+        "end": 231
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -133,8 +133,8 @@
       "page": 2,
       "quote": "no Medicaid application is pending",
       "span": {
-        "start": 258,
-        "end": 292
+        "start": 188,
+        "end": 222
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -152,8 +152,8 @@
       "page": 2,
       "quote": "benefits and eligibility confirmed with the payer today",
       "span": {
-        "start": 191,
-        "end": 246
+        "start": 237,
+        "end": 292
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",

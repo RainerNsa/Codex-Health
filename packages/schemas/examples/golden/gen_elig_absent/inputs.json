@@ -8,8 +8,8 @@
   },
   "degrade": {
     "rotate": 0,
-    "skewDegrees": -1.33,
-    "gray": 0.18,
-    "speckle": 87
+    "skewDegrees": -1.24,
+    "gray": 0.32,
+    "speckle": 59
   }
 }

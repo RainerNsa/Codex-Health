@@ -86,8 +86,8 @@
       "page": 3,
       "quote": "requires ventilator support overnight and at rest",
       "span": {
-        "start": 428,
-        "end": 477
+        "start": 270,
+        "end": 319
       },
       "negative_quotes": [
         {
@@ -116,8 +116,8 @@
       "page": 3,
       "quote": "needs daily skilled nursing for wound care",
       "span": {
-        "start": 343,
-        "end": 385
+        "start": 327,
+        "end": 369
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",

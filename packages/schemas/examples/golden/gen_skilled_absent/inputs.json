@@ -7,9 +7,9 @@
     "value": "unknown"
   },
   "degrade": {
-    "rotate": 0,
-    "skewDegrees": -0.18,
-    "gray": 0.32,
-    "speckle": 49
+    "rotate": 90,
+    "skewDegrees": 0.6,
+    "gray": 0.26,
+    "speckle": 33
   }
 }

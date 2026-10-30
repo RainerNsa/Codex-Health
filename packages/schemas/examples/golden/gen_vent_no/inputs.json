@@ -7,9 +7,9 @@
     "value": "no"
   },
   "degrade": {
-    "rotate": 0,
-    "skewDegrees": 0.78,
-    "gray": 0.33,
+    "rotate": 90,
+    "skewDegrees": -0.68,
+    "gray": 0.21,
     "speckle": 57
   }
 }

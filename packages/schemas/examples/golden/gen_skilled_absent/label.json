@@ -111,8 +111,8 @@
       "page": 4,
       "quote": "verbal and physical aggression toward staff this week",
       "span": {
-        "start": 191,
-        "end": 244
+        "start": 305,
+        "end": 358
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -130,8 +130,8 @@
       "page": 2,
       "quote": "Medicaid pending with application filed this week",
       "span": {
-        "start": 188,
-        "end": 237
+        "start": 217,
+        "end": 266
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -149,8 +149,8 @@
       "page": 2,
       "quote": "no eligibility check has been completed yet",
       "span": {
-        "start": 252,
-        "end": 295
+        "start": 281,
+        "end": 324
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",

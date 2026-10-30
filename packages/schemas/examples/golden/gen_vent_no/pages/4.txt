@@ -4,5 +4,5 @@ Patient: ZZTEST CANARY-ALPHA   MRN: MRN-ZZCANARY-0000001   DOB: 1899-02-30
 
 Ate most of breakfast and lunch
 Behaviour: struck a staff member during morning care two days ago.
-Skin intact apart from the documented site
 Family updated by phone this afternoon
+Skin intact apart from the documented site

@@ -68,6 +68,14 @@ function mulberry32(seed) {
   };
 }
 const pick = (random, list) => list[Math.floor(random() * list.length)];
+/** Fisher-Yates: a sort with a random comparator gives a different order on a different Node version. */
+function shuffle(random, list) {
+  for (let i = list.length - 1; i > 0; i -= 1) {
+    const j = Math.floor(random() * (i + 1));
+    [list[i], list[j]] = [list[j], list[i]];
+  }
+  return list;
+}
 
 function loadSettings() {
   const dir = `${SCHEMAS}examples/rules`;
@@ -109,7 +117,7 @@ export function buildPacket(spec, settings) {
   const texts = DOCUMENTS.map((d) => {
     const body = d.document_id === 'doc_fax_cover'
       ? ['To: ZZTEST Facility Admissions', 'From: ZZTEST General Hospital, Case Management', `Pages: ${DOCUMENTS.length}`, 'Re: skilled nursing referral']
-      : [...pagesIn[d.document_id], ...FILLER[d.document_id]].sort(() => random() - 0.5);
+      : shuffle(random, [...pagesIn[d.document_id], ...FILLER[d.document_id]]);
     if (spec.inject && d.document_id === 'doc_nursing_note') body.push(INSTRUCTION);
     return [header, `${d.title} (synthetic fixture; not a real document)`, `Patient: ${canary('name')}   MRN: ${canary('mrn')}   DOB: ${canary('dob')}`, '', ...body, ''].join('\n');
   });

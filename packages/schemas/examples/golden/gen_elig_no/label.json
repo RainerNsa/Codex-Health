@@ -100,8 +100,8 @@
       "page": 3,
       "quote": "requires daily skilled therapy for gait retraining",
       "span": {
-        "start": 284,
-        "end": 334
+        "start": 312,
+        "end": 362
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -119,8 +119,8 @@
       "page": 4,
       "quote": "struck a staff member during morning care two days ago",
       "span": {
-        "start": 273,
-        "end": 327
+        "start": 305,
+        "end": 359
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -138,8 +138,8 @@
       "page": 2,
       "quote": "Medicaid pending with application filed this week",
       "span": {
-        "start": 340,
-        "end": 389
+        "start": 301,
+        "end": 350
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -157,8 +157,8 @@
       "page": 2,
       "quote": "no eligibility check has been completed yet",
       "span": {
-        "start": 191,
-        "end": 234
+        "start": 246,
+        "end": 289
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",

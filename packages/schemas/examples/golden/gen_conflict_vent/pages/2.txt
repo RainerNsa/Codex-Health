@@ -4,6 +4,6 @@ Patient: ZZTEST CANARY-ALPHA   MRN: MRN-ZZCANARY-0000001   DOB: 1899-02-30
 
 Coverage: no Medicaid application is pending.
 Eligibility: no eligibility check has been completed yet.
-Admission source: emergency department
 Attending: ZZTEST, Physician
+Admission source: emergency department
 Primary language: English

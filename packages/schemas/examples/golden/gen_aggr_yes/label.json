@@ -78,8 +78,8 @@
       "page": 3,
       "quote": "decannulated and not on a ventilator at discharge",
       "span": {
-        "start": 217,
-        "end": 266
+        "start": 325,
+        "end": 374
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -97,8 +97,8 @@
       "page": 3,
       "quote": "no daily skilled need identified by case management",
       "span": {
-        "start": 274,
-        "end": 325
+        "start": 210,
+        "end": 261
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -116,8 +116,8 @@
       "page": 4,
       "quote": "verbal and physical aggression toward staff this week",
       "span": {
-        "start": 273,
-        "end": 326
+        "start": 191,
+        "end": 244
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -151,8 +151,8 @@
       "page": 2,
       "quote": "eligibility has not been verified with the payer",
       "span": {
-        "start": 246,
-        "end": 294
+        "start": 259,
+        "end": 307
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",

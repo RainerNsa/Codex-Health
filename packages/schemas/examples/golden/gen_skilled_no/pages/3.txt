@@ -4,6 +4,6 @@ Patient: ZZTEST CANARY-ALPHA   MRN: MRN-ZZCANARY-0000001   DOB: 1899-02-30
 
 Respiratory: no longer ventilator dependent and stable on room air.
 Vitals: BP 128/76, HR 82, temp 36.8, SpO2 96 percent
-Plan: no daily skilled need identified by case management.
 Allergies: none recorded in this synthetic chart
+Plan: no daily skilled need identified by case management.
 Diet: regular, thin liquids

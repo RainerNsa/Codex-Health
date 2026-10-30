@@ -2,8 +2,8 @@ Fax received 2001-01-10 09:10  SYNTHETIC
 HOSPITAL FACE SHEET (synthetic fixture; not a real document)
 Patient: ZZTEST CANARY-ALPHA   MRN: MRN-ZZCANARY-0000001   DOB: 1899-02-30
 
+Attending: ZZTEST, Physician
 Coverage: Medicaid pending with application filed this week.
 Eligibility: no eligibility check has been completed yet.
-Attending: ZZTEST, Physician
-Primary language: English
 Admission source: emergency department
+Primary language: English

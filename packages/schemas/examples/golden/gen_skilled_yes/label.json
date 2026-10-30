@@ -82,8 +82,8 @@
       "page": 3,
       "quote": "decannulated and not on a ventilator at discharge",
       "span": {
-        "start": 189,
-        "end": 238
+        "start": 324,
+        "end": 373
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -101,8 +101,8 @@
       "page": 3,
       "quote": "requires daily skilled therapy for gait retraining",
       "span": {
-        "start": 246,
-        "end": 296
+        "start": 210,
+        "end": 260
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -120,8 +120,8 @@
       "page": 4,
       "quote": "struck a staff member during morning care two days ago",
       "span": {
-        "start": 191,
-        "end": 245
+        "start": 234,
+        "end": 288
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -139,8 +139,8 @@
       "page": 2,
       "quote": "Medicaid is not pending and coverage is through Medicare",
       "span": {
-        "start": 306,
-        "end": 362
+        "start": 277,
+        "end": 333
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -158,8 +158,8 @@
       "page": 2,
       "quote": "eligibility has not been verified with the payer",
       "span": {
-        "start": 246,
-        "end": 294
+        "start": 191,
+        "end": 239
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",

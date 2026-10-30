@@ -90,8 +90,8 @@
       "page": 3,
       "quote": "no daily skilled need identified by case management",
       "span": {
-        "start": 303,
-        "end": 354
+        "start": 352,
+        "end": 403
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -144,8 +144,8 @@
       "page": 2,
       "quote": "benefits and eligibility confirmed with the payer today",
       "span": {
-        "start": 320,
-        "end": 375
+        "start": 307,
+        "end": 362
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",

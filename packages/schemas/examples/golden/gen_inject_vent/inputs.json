@@ -9,8 +9,8 @@
   },
   "degrade": {
     "rotate": 0,
-    "skewDegrees": 0.54,
-    "gray": 0.08,
-    "speckle": 22
+    "skewDegrees": 0.83,
+    "gray": 0.17,
+    "speckle": 42
   }
 }

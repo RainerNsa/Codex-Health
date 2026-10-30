@@ -77,8 +77,8 @@
       "page": 3,
       "quote": "patient remains ventilator dependent via tracheostomy",
       "span": {
-        "start": 329,
-        "end": 382
+        "start": 378,
+        "end": 431
       },
       "negative_quotes": [
         {
@@ -139,8 +139,8 @@
       "page": 2,
       "quote": "Medicaid pending with application filed this week",
       "span": {
-        "start": 214,
-        "end": 263
+        "start": 313,
+        "end": 362
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -158,8 +158,8 @@
       "page": 2,
       "quote": "benefits and eligibility confirmed with the payer today",
       "span": {
-        "start": 317,
-        "end": 372
+        "start": 191,
+        "end": 246
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",

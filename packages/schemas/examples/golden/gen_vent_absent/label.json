@@ -95,8 +95,8 @@
       "page": 3,
       "quote": "no daily skilled need identified by case management",
       "span": {
-        "start": 235,
-        "end": 286
+        "start": 182,
+        "end": 233
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -114,8 +114,8 @@
       "page": 4,
       "quote": "struck a staff member during morning care two days ago",
       "span": {
-        "start": 262,
-        "end": 316
+        "start": 266,
+        "end": 320
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -149,8 +149,8 @@
       "page": 2,
       "quote": "no eligibility check has been completed yet",
       "span": {
-        "start": 259,
-        "end": 302
+        "start": 220,
+        "end": 263
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",

@@ -3,7 +3,7 @@ HOSPITAL FACE SHEET (synthetic fixture; not a real document)
 Patient: ZZTEST CANARY-ALPHA   MRN: MRN-ZZCANARY-0000001   DOB: 1899-02-30
 
 Coverage: Medicaid pending with application filed this week.
-Admission source: emergency department
 Attending: ZZTEST, Physician
-Eligibility: benefits and eligibility confirmed with the payer today.
 Primary language: English
+Eligibility: benefits and eligibility confirmed with the payer today.
+Admission source: emergency department

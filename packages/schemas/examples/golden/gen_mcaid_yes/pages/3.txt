@@ -2,8 +2,8 @@ Fax received 2001-01-10 09:21  SYNTHETIC
 DISCHARGE SUMMARY (synthetic fixture; not a real document)
 Patient: ZZTEST CANARY-ALPHA   MRN: MRN-ZZCANARY-0000001   DOB: 1899-02-30
 
-Diet: regular, thin liquids
 Plan: needs daily skilled nursing for wound care.
-Respiratory: weaned from the ventilator on day 4 and not on a ventilator now.
 Allergies: none recorded in this synthetic chart
+Diet: regular, thin liquids
+Respiratory: weaned from the ventilator on day 4 and not on a ventilator now.
 Vitals: BP 128/76, HR 82, temp 36.8, SpO2 96 percent
