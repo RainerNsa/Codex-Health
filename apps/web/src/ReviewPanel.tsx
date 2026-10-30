@@ -60,7 +60,7 @@ export function ReviewPanel({ view, busy, on }: { view: ReferralView; busy: bool
             {view.confirmation.map((c) => (
               <Flex as="li" key={c.key} align="center" gap="1.5">
                 {c.confirmed ? <CheckIcon aria-hidden="true" weight="bold" color="var(--chakra-colors-admit)" /> : <XIcon aria-hidden="true" weight="bold" color="var(--chakra-colors-stop)" />}
-                <span>{keyLabel(c.key)} {c.confirmed ? '(stated)' : '(not yet stated: enter it on the left)'}</span>
+                <span>{keyLabel(c.key)} {c.confirmed ? '(stated)' : '(not yet stated: enter it under the facts)'}</span>
               </Flex>
             ))}
           </chakra.ul>

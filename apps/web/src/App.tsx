@@ -2,13 +2,13 @@
 // returns is rendered as text (no HTML injection anywhere, CONSTRAINTS Floor). Defaults are the synthetic seed
 // (scripts/dev/seed-synthetic.mjs): ZZTEST Alpha Facility 1 and its Reviewer.
 import { useEffect, useState, type FormEvent } from 'react';
-import { Badge, Box, Button, Flex, Grid, Heading, HStack, Input, Table, Text, Textarea, chakra } from '@chakra-ui/react';
+import { Box, Button, Flex, Grid, Heading, HStack, Input, Progress as ChakraProgress, Table, Text, Textarea, chakra } from '@chakra-ui/react';
 import { ArrowLeftIcon, CheckCircleIcon, PlusIcon, ProhibitIcon, WarningCircleIcon, type Icon } from '@phosphor-icons/react';
 import { amendReferral, ApiError, resolveFailures, uploadDocument, cosignRequest, createReferral, enterFact, finalizeReferral, getReferral, moveReferral, reevaluateReferral, requestCosign, type ReferralView, type Tri } from './api.ts';
 import { ReviewPanel } from './ReviewPanel.tsx';
 import { DocumentsPanel } from './DocumentsPanel.tsx';
 import { EvidencePanel } from './EvidencePanel.tsx';
-import { QueuePanel } from './QueuePanel.tsx';
+import { QueuePanel, StatusPill } from './QueuePanel.tsx';
 import { useReviewTimer } from './reviewTimer.ts';
 import { Logo } from './Logo.tsx';
 import { Nav, Placeholder, SCREENS, type Screen } from './Placeholders.tsx';
@@ -27,6 +27,7 @@ const SEED_USERS = [
   { id: '00000000-0000-4000-8000-0000000000e1', label: 'ZZTEST Admin' },
   { id: '00000000-0000-4000-8000-0000000000e3', label: 'ZZTEST Viewer (read only)' },
 ];
+const POLL_MS = 10_000;
 const OUTCOME_LABEL = { admit: 'Admit', needs_review: 'Needs Review', do_not_admit: 'Do Not Admit' } as const;
 const OUTCOME_LOOK: Record<string, { tone: Tone; icon: Icon }> = { admit: { tone: 'admit', icon: CheckCircleIcon }, needs_review: { tone: 'review', icon: WarningCircleIcon }, do_not_admit: { tone: 'stop', icon: ProhibitIcon } };
 const REASON_LABEL: Record<string, string> = {
@@ -79,6 +80,15 @@ export function App() {
   useReviewTimer(facility, user, screen === 'referrals' ? view?.referral.id ?? null : null);
   // a different user or facility never keeps another's referral open (or its review time)
   useEffect(() => { setView(null); }, [user, facility]);
+  // while the pipeline has the referral, follow it: nothing else tells this screen it finished
+  const openId = view?.referral.id;
+  const processing = view?.referral.status === 'processing';
+  useEffect(() => {
+    if (!openId || !processing) return;
+    let current = true;
+    const poll = setInterval(() => { void getReferral(facility, openId, user).then((v) => { if (current) setView(v); }).catch(() => {}); }, POLL_MS);
+    return () => { current = false; clearInterval(poll); };
+  }, [openId, processing, facility, user]);
 
   const run = async (fn: () => Promise<ReferralView>): Promise<boolean> => {
     setBusy(true);
@@ -118,7 +128,10 @@ export function App() {
       <Grid as="main" templateColumns="minmax(0, 1fr)" gap="4" p={{ base: '4', lg: '6' }} alignContent="start" minW="0">
         <Flex wrap="wrap" align="start" justify="space-between" gap="3">
           <Box>
-            <Heading as="h1" size="lg" fontWeight="700">{inReferral ? <>Referral <chakra.span fontFamily="mono" fontWeight="400">{view.referral.id.slice(0, 8)}</chakra.span></> : SCREENS.find((s) => s.id === screen)?.label}</Heading>
+            <Flex wrap="wrap" align="center" gap="2.5">
+              <Heading as="h1" size="lg" fontWeight="700">{inReferral ? <>Referral <chakra.span fontFamily="mono" fontWeight="400">{view.referral.id.slice(0, 8)}</chakra.span></> : SCREENS.find((s) => s.id === screen)?.label}</Heading>
+              {inReferral && <StatusPill status={view.referral.status} />}
+            </Flex>
             <Sub>Internal build. Synthetic data only. Local sign-in stub: no real accounts.</Sub>
           </Box>
           {inReferral
@@ -134,35 +147,28 @@ export function App() {
         {/* a new facility or user starts an empty list: one person's queue never shows under another's name */}
         {screen === 'referrals' && !view && <QueuePanel key={`${facility}:${user}`} facility={facility} user={user} onOpen={(id) => void run(() => getReferral(facility, id, user))} />}
 
-        {screen === 'referrals' && view && (
-          <DocumentsPanel view={view} busy={busy} on={{
-            upload: async (files, type, replaces) => {
-              let ok = true;
-              for (const f of files) ok = (await run(() => uploadDocument(facility, view.referral.id, user, f, type, replaces))) && ok;
-              return ok;
-            },
-            process: () => run(() => moveReferral(facility, view.referral.id, user, { action: 'process' })),
-            resolve: (documents) => run(() => resolveFailures(facility, view.referral.id, user, documents)),
-          }} />
-        )}
+        {inReferral && view.referral.status === 'processing' && <Progress documents={view.documents} />}
+        {inReferral && <Recommendation view={view} />}
 
-        {screen === 'referrals' && view && (
-          <Grid gap="4" templateColumns={{ base: 'minmax(0, 1fr)', xl: 'repeat(2, minmax(0, 1fr))' }} alignItems="start">
+        {inReferral && (
+          <Grid gap="4" templateColumns={{ base: 'minmax(0, 1fr)', xl: 'minmax(0, 3fr) minmax(0, 2fr)' }} alignItems="start">
             <Grid gap="4" minW="0">
-            {/* one per referral: a link to one patient's document never survives into another's screen */}
-            <EvidencePanel key={view.referral.id} view={view} facility={facility} user={user} busy={busy}
-              onConfirm={(f) => void run(() => enterFact(facility, view.referral.id, user, { key: f.key, value: f.value as { type: 'tri_state'; value: Tri }, note: `Reading confirmed after opening page ${f.evidence?.page ?? '?'}`, as_of_date: null, confirms: f.id }))} />
-            <Panel id="enter" title="Enter or correct a fact">
-              <Box mb="3"><Sub>Status: {view.referral.status}. Each entry needs a note saying where the information came from. A correction keeps the earlier value on record.</Sub></Box>
-              {view.form.fact_keys.map((k) => (
-                <FactForm key={k.key} fact={k.key} critical={k.critical} noteMax={view.form.note_max} disabled={busy}
-                  current={view.facts.find((f) => f.key === k.key)}
-                  onSubmit={(value, note, asOf) => run(() => enterFact(facility, view.referral.id, user, { key: k.key, value: { type: 'tri_state', value }, note, as_of_date: asOf }))} />
-              ))}
-            </Panel>
+              {/* one per referral: a link to one patient's document never survives into another's screen */}
+              <EvidencePanel key={view.referral.id} view={view} facility={facility} user={user} busy={busy}
+                onConfirm={(f) => void run(() => enterFact(facility, view.referral.id, user, { key: f.key, value: f.value as { type: 'tri_state'; value: Tri }, note: `Reading confirmed after opening page ${f.evidence?.page ?? '?'}`, as_of_date: null, confirms: f.id }))}
+                form={(k) => <FactForm key={k.key} fact={k.key} noteMax={view.form.note_max} disabled={busy}
+                  onSubmit={(value, note, asOf) => run(() => enterFact(facility, view.referral.id, user, { key: k.key, value: { type: 'tri_state', value }, note, as_of_date: asOf }))} />} />
+              <DocumentsPanel view={view} busy={busy} on={{
+                upload: async (files, type, replaces) => {
+                  let ok = true;
+                  for (const f of files) ok = (await run(() => uploadDocument(facility, view.referral.id, user, f, type, replaces))) && ok;
+                  return ok;
+                },
+                process: () => run(() => moveReferral(facility, view.referral.id, user, { action: 'process' })),
+                resolve: (documents) => run(() => resolveFailures(facility, view.referral.id, user, documents)),
+              }} />
             </Grid>
             <Grid gap="4" minW="0">
-              <Recommendation view={view} />
               <ReviewPanel view={view} busy={busy} on={{
                 move: (body) => run(() => moveReferral(facility, view.referral.id, user, body)),
                 finalize: (body) => run(() => finalizeReferral(facility, view.referral.id, user, body)),
@@ -171,6 +177,7 @@ export function App() {
                 amend: (body) => run(() => amendReferral(facility, view.referral.id, user, body)),
                 cosign: (request) => run(() => cosignRequest(facility, view.referral.id, request, user)),
               }} />
+              <Why view={view} />
             </Grid>
           </Grid>
         )}
@@ -179,7 +186,20 @@ export function App() {
   );
 }
 
-function FactForm(props: { fact: string; critical: boolean; noteMax: number; disabled: boolean; current: ReferralView['facts'][number] | undefined; onSubmit: (v: Tri, note: string, asOf: string | null) => void }) {
+function Progress({ documents }: { documents: ReferralView['documents'] }) {
+  const counted = documents.filter((d) => d.status !== 'not_applicable');
+  const done = counted.filter((d) => d.status !== 'uploaded').length;
+  return (
+    <Panel id="progress">
+      <Text role="status" fontSize="sm" fontWeight="500">Reading documents: {done} of {counted.length} done. The referral returns for review when they finish.</Text>
+      <ChakraProgress.Root mt="2" size="xs" max={Math.max(counted.length, 1)} value={done} aria-label="Documents read">
+        <ChakraProgress.Track><ChakraProgress.Range /></ChakraProgress.Track>
+      </ChakraProgress.Root>
+    </Panel>
+  );
+}
+
+function FactForm(props: { fact: string; noteMax: number; disabled: boolean; onSubmit: (v: Tri, note: string, asOf: string | null) => void }) {
   const [value, setValue] = useState<Tri>('unknown');
   const [note, setNote] = useState('');
   const [asOf, setAsOf] = useState('');
@@ -190,12 +210,9 @@ function FactForm(props: { fact: string; critical: boolean; noteMax: number; dis
   };
   const id = `fact-${props.fact}`;
   return (
-    <chakra.form onSubmit={submit} mb="3" borderWidth="1px" borderColor="line" borderRadius="l2" p="3" aria-labelledby={`${id}-legend`}>
+    <chakra.form onSubmit={submit} mt="2" bg="canvas" borderRadius="l2" p="3" aria-labelledby={`${id}-legend`}>
       <fieldset>
-        <chakra.legend id={`${id}-legend`} fontWeight="600" fontSize="sm">
-          {keyLabel(props.fact)} {props.critical && <Badge ml="1" size="xs" bg="infoSoft" color="info">critical</Badge>}
-        </chakra.legend>
-        <Text fontSize="xs" color="muted">Current: {props.current ? `${String(props.current.value.value)} (${props.current.source}${props.current.as_of_date ? `, as of ${props.current.as_of_date}` : ''})` : 'not entered'}</Text>
+        <chakra.legend id={`${id}-legend`} fontWeight="600" fontSize="sm">Enter or correct {keyLabel(props.fact)}</chakra.legend>
         <HStack mt="2" gap="4" fontSize="sm">
           {(['yes', 'no', 'unknown'] as const).map((v) => (
             <label key={v}><input type="radio" name={`${id}-value`} value={v} checked={value === v} onChange={() => setValue(v)} /> {v}</label>
@@ -214,46 +231,52 @@ function FactForm(props: { fact: string; critical: boolean; noteMax: number; dis
 function Recommendation({ view }: { view: ReferralView }) {
   const ev = view.evaluation;
   const look = ev ? OUTCOME_LOOK[ev.outcome]! : null;
-  const list = (title: string, keys: string[]) => keys.length > 0 && <Text mb="2" fontSize="sm"><chakra.span fontWeight="600">{title}:</chakra.span> {keys.map(keyLabel).join(', ')}</Text>;
+  const list = (title: string, keys: string[]) => keys.length > 0 && <Text mt="1" fontSize="sm"><chakra.span fontWeight="600">{title}:</chakra.span> {keys.map(keyLabel).join(', ')}</Text>;
+  if (!ev || !look) return <Panel id="rec" title="Recommendation"><Sub>No facts entered yet.</Sub></Panel>;
   return (
-    <Box aria-live="polite" minW="0">
-      <Panel id="rec" title="Recommendation">
-        {!ev && <Sub>No facts entered yet.</Sub>}
-        {ev && look && (
-          <>
-            <Box mb="3" bg={`${look.tone}Soft`} borderLeftWidth="4px" borderColor={look.tone} borderRadius="l2" p="3">
-              <Flex align="center" gap="2" color={look.tone}>
-                <look.icon size={24} weight="bold" aria-hidden="true" />
-                <Text fontSize="xl" fontWeight="700">{OUTCOME_LABEL[ev.outcome]}</Text>
-              </Flex>
-              {ev.sub_reasons.length > 0 && <Text fontSize="sm" fontWeight="500">{ev.sub_reasons.map((r) => REASON_LABEL[r] ?? r).join(' · ')}</Text>}
-              <Text fontSize="xs" color="muted">Clinical: {ev.clinical_outcome.replaceAll('_', ' ')} · Financial: {ev.financial_status}. Staff make the final decision.</Text>
-            </Box>
-            {ev.raw && <Box mb="2"><Callout tone="review" role="status">Preliminary: read by the AI from the documents. No person has confirmed these facts.</Callout></Box>}
-            {list('Documents disagree, state again', ev.trace.disagreements ?? [])}
-            {list('Missing critical information', ev.trace.missing)}
-            {list('Confirm first', ev.trace.blocking)}
-            {list('Conflicting', ev.trace.conflicts)}
-            {list('To confirm before a decision', ev.trace.confirmation_set ?? [])}
-            <Table.ScrollArea mt="3" tabIndex={0} position="relative">
-              <Table.Root size="sm">
-                <Table.Caption captionSide="top" textAlign="left" fontWeight="600" color="ink" mb="1">Why: every rule and what it read</Table.Caption>
-                <Table.Header><Table.Row bg="transparent"><Table.ColumnHeader>Rule</Table.ColumnHeader><Table.ColumnHeader>Kind</Table.ColumnHeader><Table.ColumnHeader>Result</Table.ColumnHeader><Table.ColumnHeader>Inputs</Table.ColumnHeader></Table.Row></Table.Header>
-                <Table.Body>
-                  {ev.trace.trace.map((t) => (
-                    <Table.Row key={t.rule_id} bg="transparent" verticalAlign="top">
-                      <Table.Cell fontFamily="mono" fontSize="xs" whiteSpace="normal" minW="14rem" wordBreak="break-word">{t.rule_id}{view.rule_explanations[t.rule_id] && <Text fontFamily="body" color="muted">{view.rule_explanations[t.rule_id]}</Text>}</Table.Cell>
-                      <Table.Cell>{t.kind.replaceAll('_', ' ')}</Table.Cell>
-                      <Table.Cell>{t.result === 'yes' ? 'fired' : t.result === 'no' ? 'did not fire' : 'unknown'}</Table.Cell>
-                      <Table.Cell fontSize="xs" whiteSpace="normal" minW="10rem">{t.inputs.map((i) => `${keyLabel(i.key)}: ${i.value ?? i.presence}`).join('; ')}</Table.Cell>
-                    </Table.Row>
-                  ))}
-                </Table.Body>
-              </Table.Root>
-            </Table.ScrollArea>
-          </>
-        )}
-      </Panel>
+    <Box as="section" aria-labelledby="rec" aria-live="polite" bg={`${look.tone}Soft`} borderLeftWidth="4px" borderColor={look.tone} borderRadius="l2" p="4">
+      <Flex wrap="wrap" align="center" gap="2.5">
+        <Heading id="rec" as="h2" size="xs" color="muted" fontWeight="600" w="full">Recommendation</Heading>
+        <Box color={look.tone}><look.icon size={28} weight="bold" aria-hidden="true" /></Box>
+        <Text fontSize="2xl" fontWeight="700" color={look.tone} lineHeight="1">{OUTCOME_LABEL[ev.outcome]}</Text>
+        {ev.sub_reasons.length > 0 && <Text fontSize="sm" fontWeight="500">{ev.sub_reasons.map((r) => REASON_LABEL[r] ?? r).join(' · ')}</Text>}
+      </Flex>
+      {ev.raw && <Text mt="2" fontSize="sm" fontWeight="600">Preliminary: read by the AI from the documents. No person has confirmed these facts.</Text>}
+      {list('Documents disagree, state again', ev.trace.disagreements ?? [])}
+      {list('Missing critical information', ev.trace.missing)}
+      {list('Confirm first', ev.trace.blocking)}
+      {list('Conflicting', ev.trace.conflicts)}
+      {list('To confirm before a decision', ev.trace.confirmation_set ?? [])}
+      <Text mt="1" fontSize="xs" color="muted">Clinical: {ev.clinical_outcome.replaceAll('_', ' ')} · Financial: {ev.financial_status}. Staff make the final decision.</Text>
     </Box>
+  );
+}
+
+function Why({ view }: { view: ReferralView }) {
+  const ev = view.evaluation;
+  if (!ev) return null;
+  return (
+    <Panel id="why">
+      <details>
+        <chakra.summary cursor="pointer" fontWeight="700" fontSize="sm">Why: every rule and what it read</chakra.summary>
+        <Table.ScrollArea mt="2" tabIndex={0} position="relative">
+          <Table.Root size="sm">
+            <Table.Header><Table.Row bg="transparent"><Table.ColumnHeader>Rule</Table.ColumnHeader><Table.ColumnHeader>Result</Table.ColumnHeader><Table.ColumnHeader>Inputs</Table.ColumnHeader></Table.Row></Table.Header>
+            <Table.Body>
+              {ev.trace.trace.map((t) => (
+                <Table.Row key={t.rule_id} bg="transparent" verticalAlign="top">
+                  <Table.Cell whiteSpace="normal" minW="12rem">
+                    <Text fontSize="xs" color="muted">{t.kind.replaceAll('_', ' ')}</Text>
+                    {view.rule_explanations[t.rule_id] ?? <chakra.span fontFamily="mono" fontSize="xs" wordBreak="break-word">{t.rule_id}</chakra.span>}
+                  </Table.Cell>
+                  <Table.Cell>{t.result === 'yes' ? 'fired' : t.result === 'no' ? 'did not fire' : 'unknown'}</Table.Cell>
+                  <Table.Cell fontSize="xs" whiteSpace="normal" minW="8rem">{t.inputs.map((i) => `${keyLabel(i.key)}: ${i.value ?? i.presence}`).join('; ')}</Table.Cell>
+                </Table.Row>
+              ))}
+            </Table.Body>
+          </Table.Root>
+        </Table.ScrollArea>
+      </details>
+    </Panel>
   );
 }
