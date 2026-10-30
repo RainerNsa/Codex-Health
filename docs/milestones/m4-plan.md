@@ -32,9 +32,8 @@ Not M4: fuzzy quote matching and page-coordinate highlights (M5). Usability sess
 
 - **Slice 6:** a referral stays in processing if the queue send fails after the commit (503 to the user); the watchdog
   re-sends (`enqueue.failed` is logged, with ids only). Measure cache reads: the system prompt may sit under the model's minimum cacheable size.
-- **Founder rulings needed:** does every `protected_input` key count as `specially_protected`? Today nothing sets the flag on
-  AI rows, so those keys appear in events. Should a person settling a hard-stop dispute need the co-sign, as a flip does?
-  Today it does not, because the worker stores only the Unknown.
+- **Waiting on counsel:** whether every `protected_input` key counts as `specially_protected`. Founder ruling 2026-10-30: leave
+  it as it is until then. Nothing sets the flag on AI rows, so those keys can appear in events.
 - **Sandbox only (F5):** XF-12, a link failing after its TTL: LocalStack enforces neither expiry nor signature.
 - **Design stage 4 or M5:** `evidence.viewed` counts the link issued, not the page seen; the queue's preliminary label goes
   after the first confirmation though other readings wait; no rate limit on the view route; hostile PDF behaviour in a

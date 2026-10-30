@@ -24,7 +24,8 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await check(page, `${colorScheme}-${size.name}-queue`);
 
       await page.getByRole('button', { name: 'New referral' }).click();
-      await expect(page.getByRole('heading', { name: 'Recommendation' })).toBeVisible();
+      await expect(page.getByRole('heading', { name: 'Recommendation', exact: true })).toBeVisible();
+      await page.getByRole('listitem').filter({ hasText: 'ventilator use' }).getByRole('button', { name: 'Enter' }).click();
       const form = page.getByRole('form', { name: /ventilator use/ });
       await form.getByRole('radio', { name: 'yes' }).check();
       await form.getByLabel('Note').fill('SYNTHETIC ZZTEST note');
@@ -56,7 +57,7 @@ test('evidence: quotes stay text, and what did not verify says so in words', asy
   });
   await page.goto('/');
   await page.getByRole('button', { name: 'New referral' }).click();
-  await expect(page.getByRole('heading', { name: 'What the documents say' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Facts the recommendation rests on' })).toBeVisible();
   await expect(page.getByText('Quote not found on the page')).toBeVisible();
   await expect(page.getByText('Low confidence')).toBeVisible();
   await expect(page.getByText('<img src=x onerror=alert(1)>', { exact: false }).first()).toBeVisible();
@@ -70,7 +71,7 @@ test('the queue is home: a referral replaces it, Back returns, and the facility 
   const page = await (await browser.newContext({ viewport: sizes[0] })).newPage();
   await page.goto('/');
   await page.getByRole('button', { name: 'New referral' }).click();
-  await expect(page.getByRole('heading', { name: 'Recommendation' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: 'Recommendation', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: /^Referral / })).toBeVisible();
   await expect(page.getByRole('button', { name: 'Needs staff' })).toHaveCount(0);
   await page.getByRole('button', { name: 'Back to referrals' }).click();
@@ -78,4 +79,29 @@ test('the queue is home: a referral replaces it, Back returns, and the facility 
   await page.getByLabel('Facility').selectOption({ label: 'ZZTEST Beta Facility 1' });
   await expect(page.getByText('Not a facility this user belongs to.')).toBeVisible();
   await expect(page.getByRole('button', { name: 'Open' })).toHaveCount(0);
+});
+
+test('while documents are read the screen shows progress, and it follows the referral to review', async ({ browser }) => {
+  const context = await browser.newContext({ viewport: sizes[0] });
+  const page = await context.newPage();
+  await page.clock.install();
+  const docs = [{ id: 'a', type: 'face_sheet', status: 'processed', pages: 2, not_applicable_reason: null, created_at: '2026-10-30T00:00:00Z' }, { id: 'b', type: 'face_sheet', status: 'uploaded', pages: null, not_applicable_reason: null, created_at: '2026-10-30T00:00:00Z' }];
+  let reads = 0;
+  await page.route('**/api/facilities/*/referrals*', async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    await route.fulfill({ response: res, json: route.request().method() === 'POST' ? { ...body, referral: { ...body.referral, status: 'processing' }, documents: docs } : body });
+  });
+  await page.route('**/api/facilities/*/referrals/*', async (route) => {
+    reads += 1;
+    const res = await route.fetch();
+    await route.fulfill({ response: res, json: await res.json() });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'New referral' }).click();
+  await expect(page.getByText('Reading documents: 1 of 2 done.')).toBeVisible();
+  await check(page, 'light-desktop-processing');
+  await page.clock.runFor(10_500);
+  await expect.poll(() => reads).toBeGreaterThan(0);
+  await expect(page.getByText('Reading documents')).toHaveCount(0); // the real referral is a draft: the poll brought the screen up to date
 });

@@ -21,6 +21,12 @@ const STATUS_LABEL: Record<string, string> = {
 };
 const STATUS_TONE: Partial<Record<string, Tone>> = { partial_failure: 'stop', on_hold: 'review', info_requested: 'review', escalated: 'review', ready_for_review: 'info', processing: 'info' };
 const EMPTY: Record<QueueFilter, string> = { open: 'Nothing needs staff right now.', processing: 'Nothing is being read right now.', closed: 'No decided referrals yet.' };
+
+export function StatusPill({ status }: { status: string }) {
+  const tone = STATUS_TONE[status];
+  return tone ? <Badge bg={`${tone}Soft`} color={tone}>{STATUS_LABEL[status]}</Badge> : <Badge bg="canvas" color="ink">{STATUS_LABEL[status] ?? status}</Badge>;
+}
+
 const OUTCOME_LABEL: Record<string, string> = { admit: 'Admit', needs_review: 'Needs Review', do_not_admit: 'Do Not Admit' };
 const OUTCOME_TONE: Record<string, string> = { admit: 'admit', needs_review: 'review', do_not_admit: 'stop' };
 
@@ -67,7 +73,7 @@ export function QueuePanel({ facility, user, onOpen }: { facility: string; user:
             <Table.Body>
               {rows.map((r) => (
                 <Table.Row key={r.id} bg="transparent">
-                  <Table.Cell>{STATUS_TONE[r.status] ? <Badge bg={`${STATUS_TONE[r.status]}Soft`} color={STATUS_TONE[r.status]}>{STATUS_LABEL[r.status]}</Badge> : <Text as="span">{STATUS_LABEL[r.status] ?? r.status}</Text>}{r.cosign_waiting ? ' · waiting for co-sign' : ''}</Table.Cell>
+                  <Table.Cell><StatusPill status={r.status} />{r.cosign_waiting ? ' · waiting for co-sign' : ''}</Table.Cell>
                   <Table.Cell>{r.outcome ? <Badge bg={`${OUTCOME_TONE[r.outcome]}Soft`} color={OUTCOME_TONE[r.outcome]}>{OUTCOME_LABEL[r.outcome]}{r.raw ? ', preliminary' : ''}</Badge> : <Text as="span" color="muted">No facts yet</Text>}</Table.Cell>
                   <Table.Cell>{r.documents}{r.failed_documents ? ` (${r.failed_documents} failed)` : ''}</Table.Cell>
                   <Table.Cell whiteSpace="nowrap" title={new Date(r.updated_at).toLocaleString()}>{filter === 'closed' ? new Date(r.updated_at).toLocaleString() : age(r.updated_at)}</Table.Cell>
