@@ -41,7 +41,18 @@ docker run -d --name codex-postgres --restart always \
 # over TCP, not the socket: during its init scripts the image runs a socket-only server that then restarts
 for i in $(seq 1 90); do docker exec codex-postgres pg_isready -h 127.0.0.1 -p 5432 -U postgres -d codex_health >/dev/null 2>&1 && break; sleep 2; done
 
-export DATABASE_URL=postgres://codex_migrator:migrator-local-only@127.0.0.1:5432/codex_health
+# The init script creates the roles with the repository's local-only passwords; replace each with a random one at
+# once, so no known password exists on this server. Only the two the server uses are kept, in root-only places.
+MIGRATOR_PW="$(openssl rand -hex 24)"
+APP_PW="$(openssl rand -hex 24)"
+docker exec -i codex-postgres psql -v ON_ERROR_STOP=1 -U postgres -d postgres <<SQL
+ALTER ROLE codex_migrator PASSWORD '$MIGRATOR_PW';
+ALTER ROLE codex_app PASSWORD '$APP_PW';
+ALTER ROLE codex_worker PASSWORD '$(openssl rand -hex 24)';
+ALTER ROLE codex_anchor PASSWORD '$(openssl rand -hex 24)';
+SQL
+
+export DATABASE_URL="postgres://codex_migrator:$${MIGRATOR_PW}@127.0.0.1:5432/codex_health"
 $AS_CODEX DATABASE_URL="$DATABASE_URL" node packages/db/migrate.mjs
 $AS_CODEX DATABASE_URL="$DATABASE_URL" node packages/db/check.mjs
 $AS_CODEX DATABASE_URL="$DATABASE_URL" node scripts/dev/seed-synthetic.mjs
@@ -57,7 +68,7 @@ cat > /etc/codex-api.env <<ENV
 CODEX_ENV=demo
 PORT=3000
 DEMO_ORIGIN_SECRET=${origin_secret}
-DATABASE_URL_APP=postgres://codex_app:app-local-only@127.0.0.1:5432/codex_health
+DATABASE_URL_APP=postgres://codex_app:$${APP_PW}@127.0.0.1:5432/codex_health
 S3_DOCUMENTS_BUCKET=${docs_bucket}
 S3_DOCUMENTS_KMS_KEY_ID=${docs_key_arn}
 AWS_REGION=${region}
