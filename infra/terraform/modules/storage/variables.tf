@@ -30,3 +30,14 @@ variable "principal_role_arns" {
   type        = list(string)
   default     = []
 }
+
+variable "upload_origins" {
+  description = "Exact origins of the web app (https://...) allowed to PUT uploads to quarantine/ on a signed URL. Empty: no CORS rule."
+  type        = list(string)
+  default     = []
+
+  validation {
+    condition     = alltrue([for o in var.upload_origins : can(regex("^https://[a-z0-9.-]+$", o))])
+    error_message = "Each upload origin is an exact https origin, no wildcard, no path."
+  }
+}

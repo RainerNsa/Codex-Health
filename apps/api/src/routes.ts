@@ -7,6 +7,7 @@ import { evaluate, ENGINE_VERSION, isRealDate, type Fact, type FactValue } from 
 import { bindFacility, bindOrganization, type Query, type Tx } from './db.ts';
 import { userFromHeaders } from './auth.ts';
 import { loadSettings as loadStored, NOT_SWITCHABLE, PROFILE_KEYS, RuleSetRefused, type RuleSet } from './ruleset.ts';
+import { MAX_DOCUMENT_BYTES, sniff, UPLOAD_TTL_SECONDS, type Storage } from './storage.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const WRITE_ROLES = new Set(['facility_admin', 'admissions_reviewer']);
@@ -25,7 +26,14 @@ const TRANSITIONS = {
   escalate: { t: 'T10', from: ['ready_for_review'], to: 'escalated', event: 'referral.escalated' },
   resume: { t: 'T11', from: ['on_hold', 'info_requested', 'escalated'], to: 'ready_for_review', event: 'review.started' },
   submit: { t: 'T14', from: ['draft'], to: 'ready_for_review', event: 'review.started' },
+  // T1: hand a referral with documents to the pipeline (the per-document referral.uploaded events fire on upload)
+  process: { t: 'T1', from: ['draft'], to: 'processing', event: null },
 } as const;
+// Where staff may still add a document (T1 from draft, T6 from the review states, T4 replacing a failed one)
+const UPLOAD_STATES = new Set(['draft', 'ready_for_review', 'on_hold', 'info_requested', 'escalated', 'partial_failure']);
+// Classification codes staff pick at upload; the pipeline's classify stage refines them at M4
+const DOCUMENT_TYPES = ['unclassified', 'face_sheet', 'discharge_summary', 'history_and_physical', 'medication_list', 'physician_orders', 'nursing_notes', 'therapy_notes', 'lab_results', 'insurance'] as const;
+const SHA256 = /^[0-9a-f]{64}$/;
 type Action = keyof typeof TRANSITIONS;
 
 class HttpError extends Error {
@@ -168,6 +176,12 @@ async function referralView(q: Query, facilityId: string, referralId: string, ru
      FROM decisions WHERE facility_id = $1 AND referral_id = $2 ORDER BY decided_at DESC`, [facilityId, referralId]);
   const closed = status === 'finalized' || status === 'amended';
   const canWrite = WRITE_ROLES.has(role);
+  // documents: what staff need to see, never the storage key
+  const docs = (await q<{ id: string; type: string; status: string; pages: number | null; not_applicable_reason: string | null; created_at: string }>(
+    `SELECT id, type, status, pages, not_applicable_reason, created_at FROM documents
+     WHERE facility_id = $1 AND referral_id = $2 ORDER BY created_at`, [facilityId, referralId])).rows;
+  const waiting = docs.some((d) => d.status === 'uploaded');
+  const failed = docs.some((d) => d.status === 'failed' || d.status === 'unreadable');
   // the evaluation was made under settings that have since changed: decide only after re-evaluating
   const outdated = !!ev && !!ruleSet && (ev.rule_set_version !== ruleSet.ruleSetVersion || ev.facility_profile_version !== ruleSet.profileVersion);
   const flipped = ruleSet ? await hardStopFlipped(q, facilityId, referralId, ruleSet) : false;
@@ -205,11 +219,17 @@ async function referralView(q: Query, facilityId: string, referralId: string, ru
     cosign: { admit: await hardStopEverFired(q, facilityId, referralId), any: flipped },
     pending_request: pendingRequest,
     transitions: history.rows,
+    documents: docs,
+    document_types: DOCUMENT_TYPES,
     decision: decisions.rows[0] ?? null,
     decisions: decisions.rows,
     // what this caller may do now; the API and the database check each again on the write
     actions: canWrite ? [
-      ...(Object.keys(TRANSITIONS) as Action[]).filter((a) => (TRANSITIONS[a].from as readonly string[]).includes(status)),
+      ...(Object.keys(TRANSITIONS) as Action[]).filter((a) => (TRANSITIONS[a].from as readonly string[]).includes(status)
+        // manual entry (T14) has no documents; processing (T1) needs one waiting
+        && (a !== 'submit' || docs.length === 0) && (a !== 'process' || waiting)),
+      ...(UPLOAD_STATES.has(status) ? ['upload'] : []),
+      ...(status === 'partial_failure' && failed ? ['resolve_failures'] : []),
       ...(outdated && OPEN_STATES.has(status) ? ['reevaluate'] : []),
       // finalize covers both paths: a decision that needs a co-sign is filed as a request instead
       ...(status === 'ready_for_review' && ev && !outdated ? ['finalize'] : []),
@@ -230,8 +250,8 @@ function parseValue(v: unknown, type: 'tri_state' | 'count' | 'enum'): FactValue
   return null;
 }
 
-export function registerRoutes(app: FastifyInstance, deps: { tx: Tx }): void {
-  const { tx } = deps;
+export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: Storage | null }): void {
+  const { tx, storage } = deps;
   const fail = (reply: FastifyReply, err: unknown) => {
     if (err instanceof HttpError) return reply.code(err.status).send({ error: err.code });
     // A database refusal (RLS, CHECK, trigger) is a rejected write; its message is never echoed (it can carry ids).
@@ -339,7 +359,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx }): void {
       if (!action) throw new HttpError(400, 'invalid_transition');
       const spec = TRANSITIONS[action];
       // a note on hold, escalate, resume (required) and request_info (optional); never on submit
-      const note = action !== 'submit' && typeof b.note === 'string' && b.note.trim() ? b.note.trim() : null;
+      const note = action !== 'submit' && action !== 'process' && typeof b.note === 'string' && b.note.trim() ? b.note.trim() : null;
       const department = action === 'escalate' && typeof b.department === 'string' && (DEPARTMENTS as readonly string[]).includes(b.department) ? b.department : null;
       const items = action === 'request_info' && Array.isArray(b.items) && b.items.every((i) => typeof i === 'string') ? [...new Set(b.items as string[])] : [];
       const needsNote = action === 'hold' || action === 'escalate' || action === 'resume';
@@ -361,11 +381,15 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx }): void {
           const docs = await q<{ n: string }>('SELECT count(*) AS n FROM documents WHERE facility_id = $1 AND referral_id = $2', [fid, rid]);
           if (!ev || Number(docs.rows[0]!.n) > 0) throw new HttpError(409, 'transition_not_allowed');
         }
+        if (action === 'process') {
+          const docs = await q<{ n: string }>("SELECT count(*) AS n FROM documents WHERE facility_id = $1 AND referral_id = $2 AND status = 'uploaded'", [fid, rid]);
+          if (Number(docs.rows[0]!.n) === 0) throw new HttpError(409, 'transition_not_allowed');
+        }
         await q(
           `INSERT INTO referral_transitions (facility_id, referral_id, transition, from_status, to_status, note, department, requested_items, created_by)
            VALUES ($1, $2, $3, $4, $5, $6, $7, $8, $9)`,
           [fid, rid, spec.t, from, spec.to, note, department, items, `user:${user}`]);
-        await emit(q, fid, rid, user, spec.event,
+        if (spec.event) await emit(q, fid, rid, user, spec.event,
           action === 'request_info' ? { items_requested: items.length } : action === 'escalate' ? { department } : spec.event === 'review.started' ? { screen: 'review' } : {});
         return referralView(q, fid, rid, ruleSet, who);
       });
@@ -556,6 +580,162 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx }): void {
           decision: r.decision, reason: r.override_reason, override, decidedBy: r.requested_by, request: r.id,
           amends: r.amends_decision_id, amendmentReason: r.amendment_reason, from: status,
         });
+        return referralView(q, fid, rid, ruleSet, who);
+      });
+      return reply.code(201).send(body);
+    } catch (err) { return fail(reply, err); }
+  });
+
+  // --- documents (M3 slice 5; SPEC §12.1): a signed upload into quarantine, checked bytes, then the record ------
+  const quarantineKey = (fid: string, rid: string, sha: string) => `quarantine/${fid}/${rid}/${sha}`;
+  const documentKey = (fid: string, rid: string, sha: string) => `documents/${fid}/${rid}/${sha}`;
+  const needStorage = () => { if (!storage) throw new HttpError(503, 'storage_unavailable'); return storage; };
+  // shortcut: an in-process limit (30 upload calls a minute per user); a shared limit (WAF or a store) when the API
+  // runs as more than one process
+  const recent = new Map<string, number[]>();
+  const limit = (user: string) => {
+    const now = Date.now();
+    const hits = (recent.get(user) ?? []).filter((t) => now - t < 60_000);
+    if (hits.length >= 30) throw new HttpError(429, 'rate_limited');
+    hits.push(now);
+    recent.set(user, hits);
+  };
+  /** Lock the referral and check staff may still add a document to it; returns its status. */
+  const lockForUpload = async (q: Query, fid: string, rid: string) => {
+    const ref = await q<{ status: string }>('SELECT status FROM referrals WHERE facility_id = $1 AND id = $2 FOR UPDATE', [fid, rid]);
+    if (!ref.rows[0]) throw new HttpError(404, 'not_found');
+    if (!UPLOAD_STATES.has(ref.rows[0].status)) throw new HttpError(409, 'referral_not_open');
+    return ref.rows[0].status;
+  };
+
+  // step 1: a URL for exactly this many bytes, valid for five minutes, into quarantine
+  app.post<{ Params: { fid: string; rid: string }; Body: unknown }>('/api/facilities/:fid/referrals/:rid/documents/uploads', async (req, reply) => {
+    try {
+      const user = caller(req.headers);
+      const { fid, rid } = ids(req.params);
+      const b = (req.body ?? {}) as { sha256?: unknown; bytes?: unknown };
+      if (typeof b.sha256 !== 'string' || !SHA256.test(b.sha256) || !Number.isInteger(b.bytes) || (b.bytes as number) < 1 || (b.bytes as number) > MAX_DOCUMENT_BYTES) {
+        throw new HttpError(400, 'invalid_document');
+      }
+      const s3 = needStorage();
+      limit(user);
+      const body = await tx(async (q) => {
+        const who = await enter(q, fid, user);
+        if (!WRITE_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
+        await lockForUpload(q, fid, rid);
+        const docs = await q<{ n: string; dup: boolean }>(
+          "SELECT count(*) AS n, bool_or(sha256 = decode($3, 'hex')) AS dup FROM documents WHERE facility_id = $1 AND referral_id = $2", [fid, rid, b.sha256]);
+        if (docs.rows[0]!.dup) throw new HttpError(409, 'document_duplicate');
+        if (Number(docs.rows[0]!.n) >= 20) throw new HttpError(409, 'document_limit');
+        return { url: await s3.presignPut(quarantineKey(fid, rid, b.sha256 as string), b.bytes as number), expires_in: UPLOAD_TTL_SECONDS };
+      });
+      return reply.code(201).send(body);
+    } catch (err) { return fail(reply, err); }
+  });
+
+  // step 2: the uploaded bytes are read back and checked; only then is there a document, and the referral moves.
+  // Storage I/O runs outside any transaction (a slow read never holds a connection or the referral lock); the
+  // transaction then re-checks everything it relies on.
+  app.post<{ Params: { fid: string; rid: string }; Body: unknown }>('/api/facilities/:fid/referrals/:rid/documents', async (req, reply) => {
+    try {
+      const user = caller(req.headers);
+      const { fid, rid } = ids(req.params);
+      const b = (req.body ?? {}) as { sha256?: unknown; type?: unknown; replaces?: unknown };
+      const type = b.type === undefined ? 'unclassified' : b.type;
+      if (typeof b.sha256 !== 'string' || !SHA256.test(b.sha256) || typeof type !== 'string' || !(DOCUMENT_TYPES as readonly string[]).includes(type)
+          || (b.replaces !== undefined && (typeof b.replaces !== 'string' || !UUID.test(b.replaces)))) {
+        throw new HttpError(400, 'invalid_document');
+      }
+      const sha = b.sha256;
+      const replaces = b.replaces as string | undefined;
+      const s3 = needStorage();
+      limit(user);
+      // 1. may this user add a document here at all (short transaction, no storage I/O)
+      const precheck = async (q: Query) => {
+        const who = await enter(q, fid, user);
+        if (!WRITE_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
+        const status = await lockForUpload(q, fid, rid);
+        // T4: on a partial failure, a new document replaces one that failed (and only then)
+        if ((status === 'partial_failure') !== (replaces !== undefined)) throw new HttpError(409, status === 'partial_failure' ? 'replace_required' : 'invalid_document');
+        if (replaces !== undefined) {
+          const old = await q<{ status: string }>('SELECT status FROM documents WHERE facility_id = $1 AND referral_id = $2 AND id = $3', [fid, rid, replaces]);
+          if (!old.rows[0] || (old.rows[0].status !== 'failed' && old.rows[0].status !== 'unreadable')) throw new HttpError(409, 'replace_not_failed');
+        }
+        const dup = await q("SELECT 1 FROM documents WHERE facility_id = $1 AND referral_id = $2 AND sha256 = decode($3, 'hex')", [fid, rid, sha]);
+        if (dup.rowCount) throw new HttpError(409, 'document_duplicate');
+        return { who, status };
+      };
+      await tx(precheck);
+      // 2. the declared hash, the size cap and the file signature, checked on the stored bytes themselves
+      const found = await s3.inspect(quarantineKey(fid, rid, sha));
+      if (!found) throw new HttpError(409, 'upload_missing');
+      const kind = found.sha256 === sha && found.bytes >= 1 ? sniff(found.head) : null;
+      if (!kind) {
+        await s3.remove(quarantineKey(fid, rid, sha), found.versionId);
+        throw new HttpError(422, 'document_rejected');
+      }
+      // 3. promote exactly the checked version (refused if it was replaced since); content-addressed, so a later
+      //    refusal below leaves at most an unreferenced copy of these same checked bytes
+      try {
+        await s3.move(quarantineKey(fid, rid, sha), documentKey(fid, rid, sha), found, kind);
+      } catch (err) {
+        if ((err as { name?: string }).name === 'PreconditionFailed') throw new HttpError(409, 'upload_changed');
+        throw err;
+      }
+      // 4. record it, re-checking state under the lock
+      const body = await tx(async (q) => {
+        const { who, status } = await precheck(q);
+        const ruleSet = await loadSettings(q, fid, who.organizationId);
+        if (replaces !== undefined) {
+          await q("UPDATE documents SET status = 'not_applicable', not_applicable_reason = 'Replaced by a new upload', updated_at = now() WHERE facility_id = $1 AND id = $2", [fid, replaces]);
+          await audit(q, fid, user, 'document.replaced', 'document', replaces);
+        }
+        const doc = await q<{ id: string }>(
+          `INSERT INTO documents (facility_id, referral_id, type, sha256, storage_key) VALUES ($1, $2, $3, decode($4, 'hex'), $5) RETURNING id`,
+          [fid, rid, type, sha, documentKey(fid, rid, sha)]);
+        const docId = doc.rows[0]!.id;
+        await audit(q, fid, user, 'document.uploaded', 'document', docId);
+        await emit(q, fid, rid, user, 'referral.uploaded', { document_id: docId, bytes: found.bytes });
+        // T6 from the review states, T4 from a partial failure; a draft waits for an explicit "process" (T1)
+        const t = status === 'partial_failure' ? 'T4' : status === 'draft' ? null : 'T6';
+        if (t) {
+          await q('INSERT INTO referral_transitions (facility_id, referral_id, transition, from_status, to_status, created_by) VALUES ($1, $2, $3, $4, $5, $6)',
+            [fid, rid, t, status, 'processing', `user:${user}`]);
+        }
+        return referralView(q, fid, rid, ruleSet, who);
+      });
+      return reply.code(201).send(body);
+    } catch (err) { return fail(reply, err); }
+  });
+
+  // T5: every failed or unreadable document is marked not applicable with a reason; the engine re-evaluates
+  app.post<{ Params: { fid: string; rid: string }; Body: unknown }>('/api/facilities/:fid/referrals/:rid/documents/resolve', async (req, reply) => {
+    try {
+      const user = caller(req.headers);
+      const { fid, rid } = ids(req.params);
+      const b = (req.body ?? {}) as { documents?: unknown };
+      const list = Array.isArray(b.documents) && b.documents.length <= 20 ? b.documents as { id?: unknown; reason?: unknown }[] : null;
+      if (!list || !list.every((d) => d && typeof d.id === 'string' && UUID.test(d.id) && typeof d.reason === 'string' && d.reason.trim() && d.reason.trim().length <= NOTE_MAX)) {
+        throw new HttpError(400, 'invalid_document');
+      }
+      const body = await tx(async (q) => {
+        const who = await enter(q, fid, user);
+        if (!WRITE_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
+        const ruleSet = await settingsOrRefuse(q, fid, who.organizationId);
+        const ref = await q<{ status: string }>('SELECT status FROM referrals WHERE facility_id = $1 AND id = $2 FOR UPDATE', [fid, rid]);
+        if (!ref.rows[0]) throw new HttpError(404, 'not_found');
+        if (ref.rows[0].status !== 'partial_failure') throw new HttpError(409, 'transition_not_allowed');
+        const bad = (await q<{ id: string }>("SELECT id FROM documents WHERE facility_id = $1 AND referral_id = $2 AND status IN ('failed', 'unreadable')", [fid, rid])).rows.map((r) => r.id);
+        // exactly the failed documents, each once
+        const named = new Set(list.map((d) => d.id as string));
+        if (named.size !== list.length || named.size !== bad.length || !bad.every((id) => named.has(id))) throw new HttpError(409, 'resolve_all_failed');
+        for (const d of list) {
+          await q("UPDATE documents SET status = 'not_applicable', not_applicable_reason = $3, updated_at = now() WHERE facility_id = $1 AND id = $2", [fid, d.id, (d.reason as string).trim()]);
+          await audit(q, fid, user, 'document.not_applicable', 'document', d.id as string);
+        }
+        await q("INSERT INTO referral_transitions (facility_id, referral_id, transition, from_status, to_status, created_by) VALUES ($1, $2, 'T5', 'partial_failure', 'ready_for_review', $3)",
+          [fid, rid, `user:${user}`]);
+        await reevaluate(q, fid, rid, ruleSet, user, 0); // T5: no OCR needed, the engine re-evaluates synchronously
         return referralView(q, fid, rid, ruleSet, who);
       });
       return reply.code(201).send(body);
