@@ -38,6 +38,8 @@ Not M4: fuzzy quote matching and page-coordinate highlights (M5). Usability sess
 - **Design stage 4 or M5:** `evidence.viewed` counts the link issued, not the page seen; the queue's preliminary label goes
   after the first confirmation though other readings wait; no rate limit on the view route; hostile PDF behaviour in a
   browser viewer is untested, and malware scanning stays a gate before real data.
+- **Small drifts:** a retry writes no product event (the transition's audit row records it), and a dead-lettered extraction
+  failure is recorded as stage `ocr`.
 - **Before real data:** a referral-level page cap, which needs a page count before OCR (documents over 300 pages fail after
   OCR, before the model). OCR repeats on each delivery of a job; keep its text or reuse its job id if the first real runs show
   the cost matters.

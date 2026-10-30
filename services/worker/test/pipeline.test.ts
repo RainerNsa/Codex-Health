@@ -547,6 +547,20 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
     assert.equal((await state(rid)).status, 'partial_failure');
   });
 
+  test('a retried document is a newer round: an old dead letter spares it, and a stale job cannot finish it', async () => {
+    const { rid, docs } = await referral('x1');
+    await asOwner();
+    await c.query("UPDATE documents SET updated_at = now() + interval '1 hour' WHERE id = $1", [docs[0]]);
+    await failReferral(tx, VERSIONS, job(rid), Date.now());
+    assert.equal((await state(rid)).status, 'processing');
+    // a job holding the same document id, from before the retry
+    const stale: Ports = { versions: VERSIONS, ocr: async () => [{ page: 1, text: PAGE }], extract: async () => {
+      await asOwner();
+      await c.query("UPDATE documents SET updated_at = now() + interval '2 hours' WHERE id = $1", [docs[0]]);
+      return []; } };
+    assert.equal(await processReferral(tx, stale, job(rid)), 'skipped');
+  });
+
   test('each queue does its own job: a dead letter reaches a person, stamped with the running versions', async () => {
     const { rid } = await referral('v7');
     const on = handlers(tx, ports(() => [{ page: 1, text: PAGE }], clean));

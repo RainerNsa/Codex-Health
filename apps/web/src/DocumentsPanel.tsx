@@ -2,7 +2,7 @@
 // Files go straight to storage on a signed URL; the API checks their bytes before they count. Text only, no HTML.
 import { useState } from 'react';
 import { Box, Button, Flex, Grid, Input, Table, Text, VisuallyHidden } from '@chakra-ui/react';
-import type { DocumentRow, ReferralView } from './api.ts';
+import { viewDocument, type DocumentRow, type ReferralView } from './api.ts';
 import { Field, Panel, Select, Sub } from './ui.tsx';
 
 const STATUS_TEXT: Record<DocumentRow['status'], string> = {
@@ -17,7 +17,8 @@ export interface DocumentHandlers {
   retry: () => Promise<boolean>;
 }
 
-export function DocumentsPanel({ view, busy, on }: { view: ReferralView; busy: boolean; on: DocumentHandlers }) {
+export function DocumentsPanel({ view, busy, on, facility, user }: { view: ReferralView; busy: boolean; on: DocumentHandlers; facility: string; user: string }) {
+  const [saved, setSaved] = useState<{ id: string; url: string } | null>(null);
   const [type, setType] = useState('unclassified');
   const [reasons, setReasons] = useState<Record<string, string>>({});
   const failed = view.documents.filter((d) => d.status === 'failed' || d.status === 'unreadable');
@@ -39,6 +40,8 @@ export function DocumentsPanel({ view, busy, on }: { view: ReferralView; busy: b
                   <Table.Cell>
                     {partial && (d.status === 'failed' || d.status === 'unreadable') && (
                       <Grid gap="1" fontSize="xs">
+                        <Button size="xs" variant="outline" onClick={() => void viewDocument(facility, view.referral.id, user, d.id).then(({ url }) => setSaved({ id: d.id, url }), () => {})}>Get a copy to read</Button>
+                        {saved?.id === d.id && <a href={saved.url} rel="noopener noreferrer" style={{ textDecoration: 'underline' }}>Save the file (link lasts two minutes)</a>}
                         <label>Replace with
                           <input type="file" accept="application/pdf,image/png,image/jpeg,image/tiff" disabled={busy} style={{ display: 'block' }}
                             onChange={(e) => { const f = e.target.files?.[0]; if (f) void on.upload([f], d.type, d.id); e.target.value = ''; }} />

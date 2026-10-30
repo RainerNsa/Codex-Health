@@ -48,6 +48,7 @@ const ERROR_TEXT: Record<string, string> = {
   evaluation_current: 'The recommendation is already up to date.',
   fact_changed: 'This reading changed since the screen loaded. Reload the referral and check it again.',
   evidence_not_viewed: 'Open the page before confirming this reading.',
+  retry_limit: 'This document has failed too many times. Replace it, or mark it not applicable.',
   cosign_required: 'This decision needs a second Admin to co-sign: file it for co-sign instead.',
   cosign_not_needed: 'This decision needs no co-sign: record it directly.',
   cosign_admin_only: 'Only an Admin can co-sign.',
@@ -159,7 +160,7 @@ export function App() {
                 onConfirm={(f) => void run(() => enterFact(facility, view.referral.id, user, { key: f.key, value: f.value as { type: 'tri_state'; value: Tri }, note: `Reading confirmed after opening page ${f.evidence?.page ?? '?'}`, as_of_date: null, confirms: f.id }))}
                 form={(k) => <FactForm key={k.key} fact={k.key} noteMax={view.form.note_max} disabled={busy}
                   onSubmit={(value, note, asOf) => run(() => enterFact(facility, view.referral.id, user, { key: k.key, value: { type: 'tri_state', value }, note, as_of_date: asOf }))} />} />
-              <DocumentsPanel view={view} busy={busy} on={{
+              <DocumentsPanel key={view.referral.id} view={view} facility={facility} user={user} busy={busy} on={{
                 upload: async (files, type, replaces) => {
                   let ok = true;
                   for (const f of files) ok = (await run(() => uploadDocument(facility, view.referral.id, user, f, type, replaces))) && ok;

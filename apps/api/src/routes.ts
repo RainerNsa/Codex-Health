@@ -11,6 +11,7 @@ import type { Enqueue } from './queue.ts';
 import { MAX_DOCUMENT_BYTES, sniff, UPLOAD_TTL_SECONDS, VIEW_TTL_SECONDS, type Storage } from './storage.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+const MAX_RETRIES = 3; // per document: past this it is not a passing fault, and a person replaces it or marks it not applicable
 const WRITE_ROLES = new Set(['facility_admin', 'admissions_reviewer']);
 // Patient-level reads: Reviewers and Admins only. A Viewer sees no referral (SPEC §6: engineering default "none"
 // for patient-level Viewer reads, pending founder item 8; aggregates arrive with the rollup table).
@@ -869,7 +870,9 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
       return reply.send(await tx(async (q) => {
         const who = await enter(q, fid, user);
         if (!READ_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
-        const doc = (await q<{ storage_key: string }>("SELECT storage_key FROM documents WHERE facility_id = $1 AND referral_id = $2 AND id = $3 AND status = 'processed'", [fid, rid, did])).rows[0];
+        // one that did not read cleanly can still be saved and read by a person before it is dismissed: a document must not hide
+        // its contents by failing, and it never opens inline, because a parser already choked on it
+        const doc = (await q<{ storage_key: string; status: string }>("SELECT storage_key, status FROM documents WHERE facility_id = $1 AND referral_id = $2 AND id = $3 AND status IN ('processed', 'failed', 'unreadable')", [fid, rid, did])).rows[0];
         if (!doc) throw new HttpError(404, 'not_found');
         await audit(q, fid, user, 'document.viewed', 'document', did);
         // opened from a fact: counted only when that fact really cites this document
@@ -878,7 +881,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
           const ever = await q<{ p: boolean }>('SELECT bool_or(specially_protected) AS p FROM facts WHERE facility_id = $1 AND referral_id = $2 AND key = $3', [fid, rid, fact.key]);
           await emit(q, fid, rid, user, 'evidence.viewed', { ...(ever.rows[0]?.p === true ? {} : { fact_key: fact.key }), document_id: did, page: fact.evidence.page, decisive: fact.is_critical });
         }
-        return { url: await s3.presignGet(doc.storage_key), expires_in: VIEW_TTL_SECONDS };
+        return { url: await s3.presignGet(doc.storage_key, doc.status === 'processed' ? 'inline' : 'attachment'), expires_in: VIEW_TTL_SECONDS };
       }));
     } catch (err) { return fail(reply, err); }
   });
@@ -888,6 +891,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
     try {
       const user = caller(req.headers);
       const { fid, rid } = ids(req.params);
+      limit(user);
       const body = await tx(async (q) => {
         const who = await enter(q, fid, user);
         if (!WRITE_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
@@ -895,6 +899,9 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
         const ref = await q<{ status: string }>('SELECT status FROM referrals WHERE facility_id = $1 AND id = $2 FOR UPDATE', [fid, rid]);
         if (!ref.rows[0]) throw new HttpError(404, 'not_found');
         if (ref.rows[0].status !== 'partial_failure') throw new HttpError(409, 'transition_not_allowed');
+        const worn = await q(`SELECT 1 FROM documents d WHERE d.facility_id = $1 AND d.referral_id = $2 AND d.status = 'failed'
+          AND (SELECT count(*) FROM audit_log a WHERE a.facility_id = d.facility_id AND a.action = 'document.retried' AND a.entity_id = d.id) >= $3 LIMIT 1`, [fid, rid, MAX_RETRIES]);
+        if (worn.rows.length > 0) throw new HttpError(409, 'retry_limit');
         const docs = await q<{ id: string }>("UPDATE documents SET status = 'uploaded', updated_at = now() WHERE facility_id = $1 AND referral_id = $2 AND status = 'failed' RETURNING id", [fid, rid]);
         if (docs.rows.length === 0) throw new HttpError(409, 'transition_not_allowed');
         for (const d of docs.rows) await audit(q, fid, user, 'document.retried', 'document', d.id);

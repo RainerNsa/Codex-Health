@@ -10,7 +10,7 @@ export type Query = <R = Record<string, unknown>>(sql: string, params?: unknown[
 export type Tx = <T>(fn: (q: Query) => Promise<T>) => Promise<T>;
 
 export interface Page { page: number; text: string }
-export interface DocumentRef { id: string; storage_key: string }
+export interface DocumentRef { id: string; storage_key: string; version?: string }
 export interface Extracted { key: string; value: FactValue; document_id: string; page: number; quote: string; confidence_band: 'high' | 'medium' | 'low' }
 export interface Ports {
   /** Page text of one document. Throws when it cannot be read; an empty result means nothing was legible. */
@@ -88,7 +88,7 @@ export async function processReferral(tx: Tx, ports: Ports, job: Job): Promise<'
     if (ref.status !== 'processing') return null;
     const set = await settings(q, fid, org);
     if (!set) throw new Error('facility has no rule set or profile');
-    const docs = (await q<DocumentRef>("SELECT id, storage_key FROM documents WHERE facility_id = $1 AND referral_id = $2 AND status = 'uploaded' ORDER BY created_at", [fid, rid])).rows;
+    const docs = (await q<DocumentRef>("SELECT id, storage_key, updated_at::text AS version FROM documents WHERE facility_id = $1 AND referral_id = $2 AND status = 'uploaded' ORDER BY created_at", [fid, rid])).rows;
     const enabled = set.rules.filter((r) => r.enabled);
     const keys = [...new Set(enabled.flatMap((r) => referencedKeys(parseExpression(r.expression))).filter((k) => !k.startsWith('facility.')))].sort();
     return { docs, keys, types: keyTypes(enabled.map((r) => r.expression)), hardKeys: new Set(enabled.filter((r) => r.kind === 'hard_stop').flatMap((r) => r.inputs)) };
@@ -124,8 +124,9 @@ export async function processReferral(tx: Tx, ports: Ports, job: Job): Promise<'
     const ref = (await q<{ status: string }>('SELECT status FROM referrals WHERE facility_id = $1 AND id = $2 FOR UPDATE', [fid, rid])).rows[0];
     if (ref?.status !== 'processing') return 'skipped'; // a duplicate delivery finished first
     // this job must still own exactly the documents it read: a stale job never finishes a newer round of work
-    const waiting = (await q<{ id: string }>("SELECT id FROM documents WHERE facility_id = $1 AND referral_id = $2 AND status = 'uploaded'", [fid, rid])).rows.map((d) => d.id).sort();
-    if (waiting.join() !== plan.docs.map((d) => d.id).sort().join()) return 'skipped';
+    // (by version too: a retried document keeps its id)
+    const waiting = (await q<{ v: string }>("SELECT id || ':' || updated_at::text AS v FROM documents WHERE facility_id = $1 AND referral_id = $2 AND status = 'uploaded'", [fid, rid])).rows.map((d) => d.v).sort();
+    if (waiting.join() !== plan.docs.map((d) => `${d.id}:${d.version}`).sort().join()) return 'skipped';
     const set = await settings(q, fid, org);
     if (!set) throw new Error('facility has no rule set or profile');
 
@@ -232,10 +233,10 @@ export async function processReferral(tx: Tx, ports: Ports, job: Job): Promise<'
 /** The way out for a job that used up its deliveries: the referral goes to a person as a partial failure (T3) instead of
  *  sitting in processing. Evaluated when it can be; with no usable settings there is nothing to evaluate against. */
 export async function failReferral(tx: Tx, versions: Ports['versions'], job: Job, sentAt: number): Promise<void> {
-  // a dead letter ends only its own round: a document that arrived after the job was sent has a job of its own coming
+  // a dead letter ends only its own round: a document that arrived or was retried after the job was sent has a job of its own coming
   const newest = await tx(async (q) => {
     await bind(q, job.facilityId);
-    return (await q<{ newest: Date | null }>("SELECT max(created_at) AS newest FROM documents WHERE facility_id = $1 AND referral_id = $2 AND status = 'uploaded'", [job.facilityId, job.referralId])).rows[0]?.newest;
+    return (await q<{ newest: Date | null }>("SELECT max(updated_at) AS newest FROM documents WHERE facility_id = $1 AND referral_id = $2 AND status = 'uploaded'", [job.facilityId, job.referralId])).rows[0]?.newest;
   });
   if (newest && newest.getTime() > sentAt + CLOCK_MARGIN_MS) return;
   const nothingRead: Ports = { versions, ocr: async () => { throw new Error('job dead-lettered'); }, extract: async () => [] };
