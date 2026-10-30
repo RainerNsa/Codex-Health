@@ -2,7 +2,8 @@
 // it is replaced by a Cognito session when a sandbox exists.
 export type Tri = 'yes' | 'no' | 'unknown';
 export interface FactKey { key: string; critical: boolean; read_by: string[] }
-export interface FactRow { id: string; key: string; value: { type: string; value: unknown }; source: 'ai' | 'user'; note: string | null; as_of_date: string | null }
+export interface Evidence { document_id: string; page: number; quote: string; verified: boolean }
+export interface FactRow { id: string; key: string; value: { type: string; value: unknown }; source: 'ai' | 'user'; note: string | null; as_of_date: string | null; evidence: Evidence | null; confidence_band: 'high' | 'medium' | 'low' | null; single_source: boolean }
 export interface TraceEntry { rule_id: string; kind: string; result: Tri; inputs: { key: string; presence: Tri; value?: string | number }[] }
 export interface Evaluation {
   id: string;
@@ -53,7 +54,7 @@ export const createReferral = (facility: string, user: string) =>
   call<ReferralView>(`/api/facilities/${facility}/referrals`, user, { method: 'POST', body: '{}' });
 export const getReferral = (facility: string, referral: string, user: string) =>
   call<ReferralView>(`/api/facilities/${facility}/referrals/${referral}`, user);
-export const enterFact = (facility: string, referral: string, user: string, fact: { key: string; value: { type: 'tri_state'; value: Tri }; note: string; as_of_date: string | null }) =>
+export const enterFact = (facility: string, referral: string, user: string, fact: { key: string; value: { type: 'tri_state'; value: Tri }; note: string; as_of_date: string | null; confirms?: string }) =>
   call<ReferralView>(`/api/facilities/${facility}/referrals/${referral}/facts`, user, { method: 'POST', body: JSON.stringify(fact) });
 
 export const reevaluateReferral = (facility: string, referral: string, user: string) =>
@@ -95,7 +96,9 @@ export async function uploadDocument(facility: string, referral: string, user: s
 export const resolveFailures = (facility: string, referral: string, user: string, documents: { id: string; reason: string }[]) =>
   call<ReferralView>(`/api/facilities/${facility}/referrals/${referral}/documents/resolve`, user, { method: 'POST', body: JSON.stringify({ documents }) });
 
-export interface QueueRow { id: string; status: string; referral_type: string; created_at: string; updated_at: string; outcome: Evaluation['outcome'] | null; sub_reasons: string[] | null; documents: number; failed_documents: number; cosign_waiting: boolean }
+export interface QueueRow { id: string; status: string; referral_type: string; created_at: string; updated_at: string; outcome: Evaluation['outcome'] | null; raw: boolean | null; sub_reasons: string[] | null; documents: number; failed_documents: number; cosign_waiting: boolean }
+export const viewDocument = (facility: string, referral: string, user: string, document: string, fact: string) =>
+  call<{ url: string; expires_in: number }>(`/api/facilities/${facility}/referrals/${referral}/documents/${document}/view?fact=${fact}`, user);
 export type QueueFilter = 'open' | 'processing' | 'closed';
 export const listReferrals = (facility: string, user: string, filter: QueueFilter, after?: string) =>
   call<{ filter: QueueFilter; referrals: QueueRow[]; next: string | null }>(`/api/facilities/${facility}/referrals?filter=${filter}${after ? `&after=${encodeURIComponent(after)}` : ''}`, user);

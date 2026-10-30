@@ -8,7 +8,7 @@ import { bindFacility, bindOrganization, type Query, type Tx } from './db.ts';
 import { userFromHeaders } from './auth.ts';
 import { loadSettings as loadStored, NOT_SWITCHABLE, PROFILE_KEYS, RuleSetRefused, type RuleSet } from './ruleset.ts';
 import type { Enqueue } from './queue.ts';
-import { MAX_DOCUMENT_BYTES, sniff, UPLOAD_TTL_SECONDS, type Storage } from './storage.ts';
+import { MAX_DOCUMENT_BYTES, sniff, UPLOAD_TTL_SECONDS, VIEW_TTL_SECONDS, type Storage } from './storage.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const WRITE_ROLES = new Set(['facility_admin', 'admissions_reviewer']);
@@ -220,7 +220,10 @@ async function referralView(q: Query, facilityId: string, referralId: string, ru
   const explanations = Object.fromEntries((ruleSet?.rules ?? []).map((r) => [r.id, (r as { explanation?: string }).explanation ?? null]));
   return {
     referral: ref.rows[0],
-    facts: facts.map((f) => ({ id: f.id, key: f.key, value: f.value, source: f.source, note: f.source === 'user' ? f.note : null, as_of_date: f.as_of_date })),
+    // the quote and where it is; the review screen renders it as text and labels what was not verified
+    facts: facts.map((f) => ({ id: f.id, key: f.key, value: f.value, source: f.source, note: f.source === 'user' ? f.note : null, as_of_date: f.as_of_date,
+      evidence: f.source === 'ai' && f.evidence ? { document_id: f.evidence.document_id, page: f.evidence.page, quote: f.evidence.quote, verified: f.evidence.verified === true } : null,
+      confidence_band: f.confidence_band, single_source: f.single_source })),
     form: { fact_keys: ruleSet?.factKeys ?? [], note_max: NOTE_MAX, configured: ruleSet !== null, departments: DEPARTMENTS },
     evaluation: ev ?? null,
     rule_explanations: explanations,
@@ -365,7 +368,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
              ORDER BY r.updated_at ${order}, r.id ${order}
              LIMIT ${QUEUE_LIMIT + 1})
            SELECT r.id, r.status, r.referral_type, r.created_at, r.updated_at, r.updated_at::text AS cursor_at,
-                  e.outcome, e.sub_reasons,
+                  e.outcome, e.sub_reasons, e.raw,
                   (SELECT count(*)::int FROM documents d WHERE d.facility_id = r.facility_id AND d.referral_id = r.id AND d.status <> 'not_applicable') AS documents,
                   (SELECT count(*)::int FROM documents d WHERE d.facility_id = r.facility_id AND d.referral_id = r.id AND d.status IN ('failed', 'unreadable')) AS failed_documents,
                   -- a filed decision waits for a co-sign: the latest request, newer than any decision, on the latest evaluation
@@ -374,7 +377,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
                             AND dr.created_at > coalesce((SELECT max(dd.decided_at) FROM decisions dd WHERE dd.facility_id = r.facility_id AND dd.referral_id = r.id), '-infinity')
                             AND NOT EXISTS (SELECT 1 FROM decision_requests n WHERE n.facility_id = dr.facility_id AND n.referral_id = dr.referral_id AND n.created_at > dr.created_at)) AS cosign_waiting
            FROM page r
-           LEFT JOIN LATERAL (SELECT id, outcome, sub_reasons FROM evaluations ev
+           LEFT JOIN LATERAL (SELECT id, outcome, sub_reasons, raw FROM evaluations ev
                               WHERE ev.facility_id = r.facility_id AND ev.referral_id = r.id ORDER BY ev.evaluated_at DESC LIMIT 1) e ON true
            ORDER BY r.updated_at ${order}, r.id ${order}`, [fid, states, cursorAt ?? null, cursorId ?? null]);
         // I4: a list of a facility's referrals is a read of referral data, audited like opening one
@@ -410,7 +413,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
     try {
       const user = caller(req.headers);
       const { fid, rid } = ids(req.params);
-      const b = (req.body ?? {}) as { key?: unknown; value?: unknown; note?: unknown; as_of_date?: unknown };
+      const b = (req.body ?? {}) as { key?: unknown; value?: unknown; note?: unknown; as_of_date?: unknown; confirms?: unknown };
       const body = await tx(async (q) => {
         const who = await enter(q, fid, user);
         if (!WRITE_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
@@ -434,17 +437,27 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
         const current = before.filter((f) => f.key === spec.key);
         if (current.length > 1) throw new HttpError(409, 'fact_lineage_forked'); // only reachable from data written before 0007
         const previous = current[0];
+        // Confirm names the reading on the person's screen: it must still be the current one, say the same, and its page
+        // must have been opened by this person. Typing a value with a note of their own stays a plain entry or correction.
+        const confirming = b.confirms !== undefined;
+        if (confirming) {
+          if (!previous || previous.id !== b.confirms || previous.source !== 'ai' || !previous.evidence || JSON.stringify(previous.value) !== JSON.stringify(value)) throw new HttpError(409, 'fact_changed');
+          const viewed = await q(`SELECT 1 FROM product_events WHERE facility_id = $1 AND referral_id = $2 AND event = 'evidence.viewed' AND actor = $3
+            AND attrs->>'document_id' = $4 AND attrs->>'page' = $5 LIMIT 1`, [fid, rid, `user:${user}`, previous.evidence.document_id, String(previous.evidence.page)]);
+          if (viewed.rows.length === 0) throw new HttpError(409, 'evidence_not_viewed');
+        }
+        const kind = confirming ? 'fact.confirmed' : previous ? 'fact.corrected' : 'fact.entered';
         // A key that was ever specially protected stays protected: the flag carries to every correction, and the
         // key never appears in an event (§14.1).
         const everProtected = await q<{ p: boolean }>('SELECT bool_or(specially_protected) AS p FROM facts WHERE facility_id = $1 AND referral_id = $2 AND key = $3', [fid, rid, spec.key]);
         const protectedKey = everProtected.rows[0]?.p === true;
         const { rows } = await q<{ id: string }>(
-          `INSERT INTO facts (facility_id, referral_id, key, value, source, note, as_of_date, is_critical, specially_protected, supersedes, created_by)
-           VALUES ($1, $2, $3, $4, 'user', $5, $6, $7, $8, $9, $10) RETURNING id`,
-          [fid, rid, spec.key, value, note, asOf, spec.critical, protectedKey, previous?.id ?? null, `user:${user}`]);
+          `INSERT INTO facts (facility_id, referral_id, key, value, source, note, as_of_date, is_critical, specially_protected, supersedes, created_by, single_source)
+           VALUES ($1, $2, $3, $4, 'user', $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+          [fid, rid, spec.key, value, note, asOf, spec.critical, protectedKey, previous?.id ?? null, `user:${user}`, confirming && previous?.single_source === true]);
         const factId = rows[0]!.id;
-        await audit(q, fid, user, previous ? 'fact.corrected' : 'fact.entered', 'fact', factId);
-        await emit(q, fid, rid, user, previous ? 'fact.corrected' : 'fact.entered', { ...(protectedKey ? {} : { fact_key: spec.key }), decisive: spec.critical });
+        await audit(q, fid, user, kind, 'fact', factId);
+        await emit(q, fid, rid, user, kind, { ...(protectedKey ? {} : { fact_key: spec.key }), decisive: spec.critical });
 
         // Re-evaluate on the current fact set (§14.2: every fact change produces a new immutable snapshot).
         await reevaluate(q, fid, rid, ruleSet, user, 1, spec.key);
@@ -814,6 +827,31 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
       });
       if (body.referral.status === 'processing') await enqueue(fid, rid);
       return reply.code(201).send(body);
+    } catch (err) { return fail(reply, err); }
+  });
+
+  // a short-lived link to one document on this referral (SPEC §12.1, XF-11, I4): a read of the record, audited; never the key
+  app.get<{ Params: { fid: string; rid: string; did: string }; Querystring: { fact?: string } }>('/api/facilities/:fid/referrals/:rid/documents/:did/view', async (req, reply) => {
+    try {
+      const user = caller(req.headers);
+      const { fid, rid } = ids(req.params);
+      const did = req.params.did;
+      if (!UUID.test(did)) throw new HttpError(404, 'not_found');
+      const s3 = needStorage();
+      return reply.send(await tx(async (q) => {
+        const who = await enter(q, fid, user);
+        if (!READ_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
+        const doc = (await q<{ storage_key: string }>("SELECT storage_key FROM documents WHERE facility_id = $1 AND referral_id = $2 AND id = $3 AND status = 'processed'", [fid, rid, did])).rows[0];
+        if (!doc) throw new HttpError(404, 'not_found');
+        await audit(q, fid, user, 'document.viewed', 'document', did);
+        // opened from a fact: counted only when that fact really cites this document
+        const fact = (await currentFacts(q, fid, rid)).find((f) => f.id === req.query.fact && f.evidence?.document_id === did);
+        if (fact?.evidence) {
+          const ever = await q<{ p: boolean }>('SELECT bool_or(specially_protected) AS p FROM facts WHERE facility_id = $1 AND referral_id = $2 AND key = $3', [fid, rid, fact.key]);
+          await emit(q, fid, rid, user, 'evidence.viewed', { ...(ever.rows[0]?.p === true ? {} : { fact_key: fact.key }), document_id: did, page: fact.evidence.page, decisive: fact.is_critical });
+        }
+        return { url: await s3.presignGet(doc.storage_key), expires_in: VIEW_TTL_SECONDS };
+      }));
     } catch (err) { return fail(reply, err); }
   });
 

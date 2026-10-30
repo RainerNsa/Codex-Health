@@ -7,6 +7,7 @@ import { createHash } from 'node:crypto';
 
 export const MAX_DOCUMENT_BYTES = 25 * 1024 * 1024;
 export const UPLOAD_TTL_SECONDS = 300;
+export const VIEW_TTL_SECONDS = 120;
 const S3_TIMEOUT_MS = 30_000;
 
 /** What was checked: the bytes are identified by ETag (and VersionId on a versioned bucket), so only they move. */
@@ -22,6 +23,8 @@ export interface Storage {
    *  checked file type and served as an attachment; then delete that quarantine version. */
   move(from: string, to: string, checked: Inspected, kind: keyof typeof CONTENT_TYPE): Promise<void>;
   remove(key: string, versionId?: string): Promise<void>;
+  /** A short-lived URL to read one stored document, shown in the browser. */
+  presignGet(key: string): Promise<string>;
 }
 
 /** PDF, PNG, JPEG or TIFF, by their first bytes: the declared type and the file name are never trusted. */
@@ -79,6 +82,8 @@ export function s3Storage(bucket: string, kmsKeyId?: string): Storage {
       }), { abortSignal: AbortSignal.timeout(S3_TIMEOUT_MS) });
       await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: from, ...(checked.versionId ? { VersionId: checked.versionId } : {}) }));
     },
+    // inline, on the storage host: a hostile file opens on S3's origin, never this app's
+    presignGet: (key) => getSignedUrl(s3, new GetObjectCommand({ Bucket: bucket, Key: key, ResponseContentDisposition: 'inline', ResponseCacheControl: 'no-store' }), { expiresIn: VIEW_TTL_SECONDS }),
     async remove(key, versionId) {
       await s3.send(new DeleteObjectCommand({ Bucket: bucket, Key: key, ...(versionId ? { VersionId: versionId } : {}) }));
     },
