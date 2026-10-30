@@ -11,3 +11,9 @@ variable "alert_email" {
   description = "Where budget alerts go. A founder or finance mailbox, never a personal address committed to git."
   type        = string
 }
+
+variable "include_credits" {
+  description = "Whether credits reduce the measured cost. false for an account running on credits, so the alerts track real usage."
+  type        = bool
+  default     = true
+}

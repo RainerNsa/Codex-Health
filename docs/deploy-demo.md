@@ -16,7 +16,7 @@ starts once you can run `aws sts get-caller-identity` and see your account.
 | Security group | Port 3000 from CloudFront's address ranges only; no SSH | The server answers only CloudFront, and the API also refuses any request without CloudFront's secret header |
 | Documents bucket | The hardened storage module: KMS, versioning, quarantine expiry, browser uploads from the demo address only | Same rules as production |
 | Web bucket | Private; only CloudFront reads it | |
-| Budget | Email alerts at the monthly amount you set | So credits never run out silently |
+| Budget | Email alerts at the monthly amount you set, measured before credits | So usage shows while credits pay the bill |
 
 Inside, the app is unchanged: row-level security, the audit chain, the co-sign rules. Sign-in is the local
 stand-in (pick a ZZTEST user), allowed only because the password gate and the origin secret stand in front of it;
@@ -33,10 +33,15 @@ real sign-in (Cognito) replaces both before any real data (decision log 2026-10-
 | S3, CloudFront, Budgets at demo volume | cents (CloudFront has a free monthly allowance; Budgets alerts are free) |
 | **Idle total** | **about $18–20** |
 
-Bedrock and Textract are paid per use (M4); a demo run costs cents. Stop the server between demos to save most of
-the EC2 cost (`aws ec2 stop-instances --instance-ids <id>`); the disk and address still bill.
+Bedrock and Textract are paid per use once M4 calls them; a demo run then costs cents. To save most of the cost
+between demos, stop the server (`aws ec2 stop-instances --instance-ids <id>`): while stopped only the disk bills
+(about $1.60 a month). **After starting it again, run `terraform apply -var-file=demo.tfvars` once**: a restarted
+server gets a new address, and the apply points CloudFront at it (until then the app shows an error).
 
 ## Deploy
+
+Run Terraform as an IAM user (the setup guide's `codex-admin`), not through single sign-on: the plan refuses
+otherwise, because the documents bucket could not be emptied on teardown.
 
 ```sh
 cd infra/terraform/envs/demo

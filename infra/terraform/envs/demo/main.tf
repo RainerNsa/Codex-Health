@@ -188,8 +188,9 @@ resource "aws_instance" "server" {
   associate_public_ip_address = true
 
   metadata_options {
-    http_tokens   = "required"
-    http_endpoint = "enabled"
+    http_tokens                 = "required"
+    http_endpoint               = "enabled"
+    http_put_response_hop_limit = 1 # the Postgres container never reaches the instance role
   }
 
   root_block_device {
@@ -213,6 +214,12 @@ resource "aws_instance" "server" {
 
   lifecycle {
     ignore_changes = [ami] # a newer AMI does not rebuild the demo; change repo_ref to redeploy
+    # the documents bucket admits only listed principals by aws:PrincipalArn; an assumed role (SSO) never matches
+    # its session ARN, so `destroy` could not empty the bucket. The setup guide uses an IAM admin user.
+    precondition {
+      condition     = can(regex(":user/", data.aws_caller_identity.current.arn))
+      error_message = "Run Terraform as an IAM user (the setup guide's codex-admin), not an assumed role or SSO session."
+    }
   }
 }
 
@@ -228,6 +235,9 @@ resource "aws_cloudfront_function" "gate" {
       if (!auth || auth.value !== 'Basic ${local.gate_b64}') {
         return { statusCode: 401, statusDescription: 'Unauthorized', headers: { 'www-authenticate': { value: 'Basic realm="Codex Health demo"' } } };
       }
+      // CloudFront forwards Authorization to the origin on writes whatever the policy says: never send the gate
+      // password on to the server
+      delete event.request.headers.authorization;
       return event.request;
     }
   JS
@@ -325,4 +335,5 @@ module "budgets" {
   environment        = "demo"
   monthly_amount_usd = var.monthly_budget_usd
   alert_email        = var.budget_alert_email
+  include_credits    = false # the account runs on credits: alert on usage, not on what is left to pay
 }
