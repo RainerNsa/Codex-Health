@@ -15,7 +15,8 @@ locals {
   account_id   = data.aws_caller_identity.current.account_id
   docs_bucket  = "codex-health-demo-docs-${local.account_id}"
   web_bucket   = "codex-health-demo-web-${local.account_id}"
-  demo_origin  = "https://${aws_cloudfront_distribution.demo.domain_name}"
+  demo_host    = "${var.demo_subdomain}.${var.domain_name}"
+  demo_origin  = "https://${local.demo_host}"
   gate_b64     = base64encode("${var.gate_username}:${var.gate_password}")
   origin_value = random_password.origin_secret.result
 }
@@ -223,6 +224,51 @@ resource "aws_instance" "server" {
   }
 }
 
+# --- the demo's own name and certificate: TLS 1.2+ only (the default *.cloudfront.net certificate cannot refuse
+# TLS 1.0/1.1). The domain lives in Route 53 in this account, so validation and the record are automatic. --------
+data "aws_route53_zone" "domain" {
+  name         = var.domain_name
+  private_zone = false
+}
+
+resource "aws_acm_certificate" "demo" {
+  domain_name       = local.demo_host
+  validation_method = "DNS"
+
+  lifecycle {
+    create_before_destroy = true
+  }
+}
+
+resource "aws_route53_record" "cert_validation" {
+  for_each = { for o in aws_acm_certificate.demo.domain_validation_options : o.domain_name => o }
+
+  zone_id = data.aws_route53_zone.domain.zone_id
+  name    = each.value.resource_record_name
+  type    = each.value.resource_record_type
+  records = [each.value.resource_record_value]
+  ttl     = 300
+}
+
+resource "aws_acm_certificate_validation" "demo" {
+  certificate_arn         = aws_acm_certificate.demo.arn
+  validation_record_fqdns = [for r in aws_route53_record.cert_validation : r.fqdn]
+}
+
+resource "aws_route53_record" "demo" {
+  for_each = toset(["A", "AAAA"])
+
+  zone_id = data.aws_route53_zone.domain.zone_id
+  name    = local.demo_host
+  type    = each.key
+
+  alias {
+    name                   = aws_cloudfront_distribution.demo.domain_name
+    zone_id                = aws_cloudfront_distribution.demo.hosted_zone_id
+    evaluate_target_health = false
+  }
+}
+
 # --- CloudFront: HTTPS, the password gate, the web app and /api/* ------------------------------------------------
 resource "aws_cloudfront_function" "gate" {
   name    = "codex-health-demo-gate"
@@ -267,6 +313,8 @@ resource "aws_cloudfront_distribution" "demo" {
   comment             = "Codex Health demo (synthetic data only)"
   default_root_object = "index.html"
   price_class         = "PriceClass_100"
+  aliases             = [local.demo_host]
+  is_ipv6_enabled     = true
 
   origin {
     origin_id                = "web"
@@ -324,7 +372,9 @@ resource "aws_cloudfront_distribution" "demo" {
   }
 
   viewer_certificate {
-    cloudfront_default_certificate = true
+    acm_certificate_arn      = aws_acm_certificate_validation.demo.certificate_arn
+    ssl_support_method       = "sni-only"
+    minimum_protocol_version = "TLSv1.2_2021"
   }
 }
 

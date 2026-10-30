@@ -1,7 +1,12 @@
 variable "region" {
-  description = "Region for everything. Bedrock and Textract are both offered in us-east-1."
+  description = "Region for everything: us-east-1, where CloudFront's certificate must live and Bedrock and Textract are offered."
   type        = string
   default     = "us-east-1"
+
+  validation {
+    condition     = var.region == "us-east-1"
+    error_message = "The demo runs in us-east-1 (CloudFront certificates must be issued there)."
+  }
 }
 
 variable "repo_ref" {
@@ -52,4 +57,20 @@ variable "node_version" {
   description = "Node.js 24 release the server installs from nodejs.org, checked against its published SHA-256."
   type        = string
   default     = "24.11.0"
+}
+
+variable "domain_name" {
+  description = "Your domain, registered in (or delegated to) Route 53 in this account, e.g. example.com. The demo is served at demo_subdomain.domain_name with TLS 1.2 or newer only."
+  type        = string
+
+  validation {
+    condition     = can(regex("^[a-z0-9-]+(\\.[a-z0-9-]+)+$", var.domain_name))
+    error_message = "domain_name is a bare domain like example.com (lower case, no https://, no trailing dot)."
+  }
+}
+
+variable "demo_subdomain" {
+  description = "The demo's host name under domain_name."
+  type        = string
+  default     = "demo"
 }

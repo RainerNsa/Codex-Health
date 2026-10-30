@@ -12,7 +12,8 @@ starts once you can run `aws sts get-caller-identity` and see your account.
 | Part | What | Why |
 | --- | --- | --- |
 | One server (EC2 `t4g.small`, ARM) | Postgres 16, the API, the web build | Same stack as local development; no RDS cost |
-| CloudFront | HTTPS on an `…cloudfront.net` address, a password gate, the web app and `/api/*` | No domain needed; nobody reaches the app without the password |
+| CloudFront | HTTPS at `demo.<your domain>`, TLS 1.2 or newer only, a password gate, the web app and `/api/*` | Nobody reaches the app without the password |
+| Route 53 and ACM | The `demo` record and its certificate, validated automatically | Your own name refuses old TLS (the default `cloudfront.net` certificate cannot) |
 | Security group | Port 3000 from CloudFront's address ranges only; no SSH | The server answers only CloudFront, and the API also refuses any request without CloudFront's secret header |
 | Documents bucket | The hardened storage module: KMS, versioning, quarantine expiry, browser uploads from the demo address only | Same rules as production |
 | Web bucket | Private; only CloudFront reads it | |
@@ -30,8 +31,10 @@ real sign-in (Cognito) replaces both before any real data (decision log 2026-10-
 | Public IPv4 address | about $3.60 |
 | 20 GB gp3 disk | about $1.60 |
 | KMS key | $1 |
+| Route 53 hosted zone for your domain | $0.50 |
+| The domain itself (yearly, e.g. a `.com`) | about $15 a year |
 | S3, CloudFront, Budgets at demo volume | cents (CloudFront has a free monthly allowance; Budgets alerts are free) |
-| **Idle total** | **about $18–20** |
+| **Idle total** | **about $19–21 a month, plus the domain** |
 
 Bedrock and Textract are paid per use once M4 calls them; a demo run then costs cents. To save most of the cost
 between demos, stop the server (`aws ec2 stop-instances --instance-ids <id>`): while stopped only the disk bills
@@ -39,6 +42,10 @@ between demos, stop the server (`aws ec2 stop-instances --instance-ids <id>`): w
 server gets a new address, and the apply points CloudFront at it (until then the app shows an error).
 
 ## Deploy
+
+Before the first deploy, register a domain in Route 53 in the same account (Route 53 → Registered domains →
+Register domain); Route 53 creates its hosted zone. The demo is served at `demo.<domain>`. The same domain can carry
+the company website and email that AWS Activate asks for.
 
 Run Terraform as an IAM user (the setup guide's `codex-admin`), not through single sign-on: the plan refuses
 otherwise, because the documents bucket could not be emptied on teardown.
@@ -52,6 +59,8 @@ terraform plan -var-file=demo.tfvars      # read it: about 30 resources, all nam
 terraform apply -var-file=demo.tfvars
 terraform output demo_url
 ```
+
+The first apply waits a few minutes for the certificate to validate (automatic, through Route 53).
 
 The server builds itself after `apply` finishes: allow about 10 minutes. Watch it with Session Manager:
 
