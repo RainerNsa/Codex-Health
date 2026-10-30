@@ -5,6 +5,7 @@ import { useState, type FormEvent } from 'react';
 import { amendReferral, ApiError, resolveFailures, uploadDocument, cosignRequest, createReferral, enterFact, finalizeReferral, getReferral, moveReferral, reevaluateReferral, requestCosign, type ReferralView, type Tri } from './api.ts';
 import { ReviewPanel } from './ReviewPanel.tsx';
 import { DocumentsPanel } from './DocumentsPanel.tsx';
+import { QueuePanel } from './QueuePanel.tsx';
 import { SettingsPanel } from './SettingsPanel.tsx';
 
 const SEED_FACILITY = '00000000-0000-4000-8000-00000000f0a1';
@@ -100,6 +101,9 @@ export function App() {
           <button type="button" disabled={busy || !referralId} className="rounded border border-gray-900 px-3 py-1 disabled:opacity-50" onClick={() => run(() => getReferral(facility, referralId, user))}>Open referral</button>
         </div>
       </section>
+
+      {/* a new facility or user starts an empty list: one person's queue never shows under another's name */}
+      <QueuePanel key={`${facility}:${user}`} facility={facility} user={user} onOpen={(id) => void run(() => getReferral(facility, id, user))} />
 
       <SettingsPanel facility={facility} user={user} />
 
