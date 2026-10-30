@@ -124,11 +124,11 @@ No code exists at M0, so there are no values yet. Each row records the milestone
 
 ## 7. Exceptions
 
-None. An exception needs an id, the rule it suspends, the exact path, a reason, an owner and an expiry no more than 90 days out, and is added only through a `constraints-change` PR (section 0).
+An exception needs an id, the rule it suspends, the exact path, a reason, an owner and an expiry no more than 90 days out, and is added only through a `constraints-change` PR (section 0).
 
 | ID | Rule | Path | Reason | Owner | Expires |
 | --- | --- | --- | --- | --- | --- |
-| — | — | — | — | — | — |
+| EX-1 | Semgrep `terraform.aws.security.aws-ec2-has-public-ip.aws-ec2-has-public-ip` | `infra/terraform/envs/demo/main.tf` only (the scan of every other file keeps the rule) | The synthetic-data demo (decision log 2026-10-30) gives its one server a public address so it can install packages without a paid NAT gateway while there is no funding (F5). Compensating controls: the security group admits only CloudFront's origin-facing ranges on one port and no SSH; the API refuses every request without CloudFront's origin secret; a password gate stands in front; IMDSv2 with hop limit 1. Never for real data: the production design (`envs/dev\|test\|prod`) stays private-only | Rainer | 2027-01-28 |
 
 ## 8. Guarding the bar
 
