@@ -61,5 +61,7 @@ test('evidence: quotes stay text, and what did not verify says so in words', asy
   await expect(page.getByText('Low confidence')).toBeVisible();
   await expect(page.getByText('<img src=x onerror=alert(1)>', { exact: false }).first()).toBeVisible();
   expect(await page.locator('img[src="x"]').count()).toBe(0);
+  await expect(page.getByRole('button', { name: 'Confirm this reading' })).toHaveCount(0); // nothing is confirmable until its page is opened
+  await expect(page.getByText('Open the page to confirm this reading.').first()).toBeVisible();
   await check(page, 'light-desktop-evidence');
 });

@@ -17,7 +17,8 @@ export function trust(f: FactRow): { tone: Tone; text: string } {
 }
 
 export function EvidencePanel({ view, facility, user, busy, onConfirm }: { view: ReferralView; facility: string; user: string; busy: boolean; onConfirm: (f: FactRow) => void }) {
-  const [link, setLink] = useState<{ key: string; url: string } | null>(null);
+  const [link, setLink] = useState<{ id: string; url: string } | null>(null);
+  const [opened, setOpened] = useState<string[]>([]); // readings this person has opened: only those can be confirmed
   const [msg, setMsg] = useState<string | null>(null);
   const read = view.facts.filter((f) => f.source === 'ai');
   const canConfirm = OPEN.has(view.referral.status) && view.actions.length > 0;
@@ -26,10 +27,10 @@ export function EvidencePanel({ view, facility, user, busy, onConfirm }: { view:
     setMsg(null);
     if (!f.evidence) return;
     try {
-      const { url } = await viewDocument(facility, view.referral.id, user, f.evidence.document_id, f.key, f.evidence.page);
-      setLink({ key: f.key, url: `${url}#page=${f.evidence.page}` });
+      const { url } = await viewDocument(facility, view.referral.id, user, f.evidence.document_id, f.id);
+      setLink({ id: f.id, url: `${url}#page=${f.evidence.page}` });
     } catch (err) {
-      setMsg(err instanceof ApiError && err.code === 'storage_unavailable' ? 'Document storage is not configured on this server.' : 'Could not open the document.');
+      setMsg(err instanceof ApiError && err.code === 'storage_unavailable' ? 'Document storage is not configured on this server.' : err instanceof ApiError && err.code === 'not_found' ? 'This document cannot be opened: it was not read successfully.' : 'Could not open the document.');
     }
   };
   if (read.length === 0) return null;
@@ -58,8 +59,10 @@ export function EvidencePanel({ view, facility, user, busy, onConfirm }: { view:
               {!f.evidence && <Text mt="1" fontSize="xs" color="muted">State this fact below, after checking the documents.</Text>}
               <Flex mt="1.5" wrap="wrap" align="center" gap="2">
                 {f.evidence && <Button size="xs" variant="outline" disabled={busy} onClick={() => void open(f)}>View document</Button>}
-                {link?.key === f.key && <a href={link.url} target="_blank" rel="noopener noreferrer" style={{ textDecoration: 'underline', fontSize: '0.875rem' }}>Open page {f.evidence?.page} (link lasts two minutes)</a>}
-                {canConfirm && known && <Button size="xs" disabled={busy} onClick={() => onConfirm(f)}>Confirm this reading</Button>}
+                {link?.id === f.id && <a href={link.url} target="_blank" rel="noopener noreferrer" onClick={() => setOpened([...opened, f.id])} style={{ textDecoration: 'underline', fontSize: '0.875rem' }}>Open page {f.evidence?.page} (link lasts two minutes)</a>}
+                {canConfirm && known && (opened.includes(f.id)
+                  ? <Button size="xs" disabled={busy} onClick={() => onConfirm(f)}>Confirm this reading</Button>
+                  : <Text fontSize="xs" color="muted">Open the page to confirm this reading.</Text>)}
               </Flex>
             </Box>
           );

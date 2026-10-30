@@ -39,6 +39,8 @@ const ERROR_TEXT: Record<string, string> = {
   evaluation_stale: 'The recommendation or the facility settings changed since this screen loaded. Reload, re-evaluate if asked, and decide again.',
   confirmation_incomplete: 'State every fact the decision rests on before deciding; Admit also needs known values, not unknown.',
   evaluation_current: 'The recommendation is already up to date.',
+  fact_changed: 'This reading changed since the screen loaded. Reload the referral and check it again.',
+  evidence_not_viewed: 'Open the page before confirming this reading.',
   cosign_required: 'This decision needs a second Admin to co-sign: file it for co-sign instead.',
   cosign_not_needed: 'This decision needs no co-sign: record it directly.',
   cosign_admin_only: 'Only an Admin can co-sign.',
@@ -146,8 +148,9 @@ export function App() {
         {screen === 'referrals' && view && (
           <Grid gap="4" templateColumns={{ base: 'minmax(0, 1fr)', xl: 'repeat(2, minmax(0, 1fr))' }} alignItems="start">
             <Grid gap="4" minW="0">
-            <EvidencePanel view={view} facility={facility} user={user} busy={busy}
-              onConfirm={(f) => void run(() => enterFact(facility, view.referral.id, user, { key: f.key, value: f.value as { type: 'tri_state'; value: Tri }, note: `Confirmed against ${f.evidence ? `page ${f.evidence.page}` : 'the documents'}`, as_of_date: null }))} />
+            {/* one per referral: a link to one patient's document never survives into another's screen */}
+            <EvidencePanel key={view.referral.id} view={view} facility={facility} user={user} busy={busy}
+              onConfirm={(f) => void run(() => enterFact(facility, view.referral.id, user, { key: f.key, value: f.value as { type: 'tri_state'; value: Tri }, note: `Reading confirmed after opening page ${f.evidence?.page ?? '?'}`, as_of_date: null, confirms: f.id }))} />
             <Panel id="enter" title="Enter or correct a fact">
               <Box mb="3"><Sub>Status: {view.referral.status}. Each entry needs a note saying where the information came from. A correction keeps the earlier value on record.</Sub></Box>
               {view.form.fact_keys.map((k) => (

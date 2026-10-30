@@ -700,51 +700,126 @@ describe.skipIf(!url)('manual fact entry API', () => {
       expect(bodies[0]!['jobId']).not.toBe(bodies[1]!['jobId']);
     });
 
-    it('evidence: the view carries the quote; a link is audited, counted only for a cited page, and stays inside its referral', async () => {
+    /** A referral with one processed document and one AI reading of it. */
+    const withReading = async (n: number, key = 'ventilator_use', value: 'yes' | 'no' = 'no', verified = true) => {
       const rid = await newReferral();
-      const docId = (await upload(rid, PDF(51))).json().documents[0].id as string;
+      const docId = (await upload(rid, PDF(n))).json().documents[0].id as string;
       await asOwner(FAC.a);
-      await c.query(`INSERT INTO facts (facility_id, referral_id, key, value, source, evidence, confidence_band, single_source, created_by) VALUES ($1, $2, 'ventilator_use', $3, 'ai', $4, 'high', true, 'worker:zz')`,
-        [FAC.a, rid, { type: 'tri_state', value: 'no' }, { document_id: docId, page: 2, quote: 'SYNTHETIC not on a ventilator', verified: true, span: null, coordinates: null }]);
+      await c.query("UPDATE documents SET status = 'processed' WHERE id = $1", [docId]);
+      const factId = (await c.query(`INSERT INTO facts (facility_id, referral_id, key, value, source, evidence, confidence_band, single_source, created_by) VALUES ($1, $2, $3, $4, 'ai', $5, 'high', true, 'worker:zz') RETURNING id`,
+        [FAC.a, rid, key, { type: 'tri_state', value }, { document_id: docId, page: 2, quote: 'SYNTHETIC not on a ventilator', verified, span: null, coordinates: null }])).rows[0].id as string;
       await c.query("SELECT set_config('app.facility_id', '', true)");
-      const view = async (user: string, url = `${refUrl(rid)}/documents/${docId}/view?fact=ventilator_use&page=2`) => docApp.inject({ method: 'GET', url, headers: as(user) });
+      return { rid, docId, factId };
+    };
+    const open = (rid: string, docId: string, factId = '', user = U.reviewer) => docApp.inject({ method: 'GET', url: `${refUrl(rid)}/documents/${docId}/view${factId ? `?fact=${factId}` : ''}`, headers: as(user) });
+
+    it('evidence: the view carries the quote; a link is audited, counted only when the fact cites it, and stays inside its referral', async () => {
+      const { rid, docId, factId } = await withReading(51);
       const fact = (await get(refUrl(rid), U.reviewer)).json().facts.find((f: { key: string }) => f.key === 'ventilator_use');
       expect([fact.source, fact.evidence, fact.confidence_band, fact.single_source]).toEqual(['ai', { document_id: docId, page: 2, quote: 'SYNTHETIC not on a ventilator', verified: true }, 'high', true]);
 
-      const res = await view(U.reviewer);
+      const res = await open(rid, docId, factId);
       expect(res.statusCode).toBe(200);
       expect(res.json().url).toContain('X-Amz-Expires=120');
-      expect(res.json().expires_in).toBe(120);
+      expect(res.json().url).toContain('response-content-disposition=inline');
+      expect(res.json().url).toContain('response-cache-control=no-store');
       await asOwner(FAC.a);
       expect(await count("SELECT count(*) AS n FROM audit_log WHERE action = 'document.viewed' AND entity_id = $1", [docId])).toBe(1);
       const seen = async () => (await c.query("SELECT attrs FROM product_events WHERE referral_id = $1 AND event = 'evidence.viewed'", [rid])).rows.map((r) => r.attrs);
-      expect(await seen()).toEqual([{ fact_key: 'ventilator_use', document_id: docId, page: 2, decisive: expect.any(Boolean) }]);
+      expect(await seen()).toEqual([{ fact_key: 'ventilator_use', document_id: docId, page: 2, decisive: false }]);
       await c.query("SELECT set_config('app.facility_id', '', true)");
 
-      await view(U.reviewer, `${refUrl(rid)}/documents/${docId}/view?fact=ventilator_use&page=9`); // a page the fact does not cite
+      await open(rid, docId); // opened without a fact
       await asOwner(FAC.a);
       expect(await seen()).toHaveLength(1);
       await c.query("SELECT set_config('app.facility_id', '', true)");
 
       const other = await newReferral();
-      expect((await view(U.reviewer, `${refUrl(other)}/documents/${docId}/view`)).statusCode).toBe(404);
-      expect((await view(U.reviewer, `${refUrl(rid)}/documents/not-a-uuid/view`)).statusCode).toBe(404);
-      expect((await view(U.viewer)).statusCode).toBe(403); // a Viewer sees no referral, and so no document
+      expect((await open(other, docId)).statusCode).toBe(404);
+      expect((await open(rid, 'not-a-uuid')).statusCode).toBe(404);
+      expect((await open(rid, docId, '', U.viewer)).statusCode).toBe(403); // a Viewer sees no referral, and so no document
+      let n = 60;
+      for (const status of ['uploaded', 'failed', 'unreadable']) { // only a document that was read opens inline
+        const fresh = await newReferral();
+        const id = (await upload(fresh, PDF((n += 1)))).json().documents[0].id as string;
+        await asOwner(FAC.a);
+        await c.query('UPDATE documents SET status = $2 WHERE id = $1', [id, status]);
+        await c.query("SELECT set_config('app.facility_id', '', true)");
+        expect((await open(fresh, id)).statusCode).toBe(404);
+      }
     });
 
-    it('stating the value the AI read is a confirmation; a different value is a correction', async () => {
-      const rid = await newReferral();
+    it('the trust signals survive the trip: an unverified quote stays unverified, a protected key stays out, a foreign fact counts nothing', async () => {
+      const { rid, docId } = await withReading(55, 'ventilator_use', 'no', false);
+      expect((await get(refUrl(rid), U.reviewer)).json().facts[0].evidence.verified).toBe(false);
+      const other = await withReading(56);
+      await open(rid, docId, other.factId); // a fact of another referral opens nothing in the count
+      await open(rid, docId, '00000000-0000-4000-8000-000000000000');
       await asOwner(FAC.a);
-      const ai = (key: string) => c.query(`INSERT INTO facts (facility_id, referral_id, key, value, source, evidence, confidence_band, created_by) VALUES ($1, $2, $3, $4, 'ai', $5, 'high', 'worker:zz')`,
-        [FAC.a, rid, key, { type: 'tri_state', value: 'no' }, { document_id: 'zz', page: 1, quote: 'SYNTHETIC', verified: true }]);
-      await ai('ventilator_use');
-      await ai('recent_aggression');
+      const events = async (id: string) => (await c.query("SELECT attrs FROM product_events WHERE referral_id = $1 AND event = 'evidence.viewed'", [id])).rows.map((r) => r.attrs);
+      expect(await events(rid)).toEqual([]);
       await c.query("SELECT set_config('app.facility_id', '', true)");
+    });
+
+    it('the queue reports a raw recommendation as raw', async () => {
+      const rid = await newReferral();
       await post(factsUrl(rid), U.reviewer, fact('ventilator_use', 'no'));
-      await post(factsUrl(rid), U.reviewer, fact('recent_aggression', 'yes'));
       await asOwner(FAC.a);
-      const kinds = (await c.query("SELECT event, attrs->>'fact_key' AS key FROM product_events WHERE referral_id = $1 AND event LIKE 'fact.%' ORDER BY attrs->>'fact_key'", [rid])).rows;
-      expect(kinds).toEqual([{ event: 'fact.corrected', key: 'recent_aggression' }, { event: 'fact.confirmed', key: 'ventilator_use' }]);
+      await c.query(`INSERT INTO evaluations (facility_id, referral_id, previous_evaluation_id, raw, outcome, clinical_outcome, financial_status, sub_reasons, trace, criteria_document_ref, rule_set_version, facility_profile_version, model_id, prompt_version, extractor_version, ocr_engine_version, engine_version, evaluated_at)
+        SELECT facility_id, referral_id, id, true, outcome, clinical_outcome, financial_status, sub_reasons, trace, criteria_document_ref, rule_set_version, facility_profile_version, model_id, prompt_version, extractor_version, ocr_engine_version, engine_version, now() + interval '1 second'
+        FROM evaluations WHERE facility_id = $1 AND referral_id = $2 ORDER BY evaluated_at DESC LIMIT 1`, [FAC.a, rid]);
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      const list = (await docApp.inject({ method: 'GET', url: `/api/facilities/${FAC.a}/referrals`, headers: as(U.reviewer) })).json().referrals;
+      expect(list.find((r: { id: string }) => r.id === rid).raw).toBe(true);
+    });
+
+    it('evidence.viewed never names a specially protected key', async () => {
+      const rid = await newReferral();
+      const docId = (await upload(rid, PDF(57))).json().documents[0].id as string;
+      await asOwner(FAC.a);
+      await c.query("UPDATE documents SET status = 'processed' WHERE id = $1", [docId]);
+      const id = (await c.query(`INSERT INTO facts (facility_id, referral_id, key, value, source, evidence, confidence_band, specially_protected, created_by) VALUES ($1, $2, 'ventilator_use', $3, 'ai', $4, 'high', true, 'worker:zz') RETURNING id`,
+        [FAC.a, rid, { type: 'tri_state', value: 'no' }, { document_id: docId, page: 2, quote: 'SYNTHETIC', verified: true }])).rows[0].id as string;
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      expect((await open(rid, docId, id)).statusCode).toBe(200);
+      await asOwner(FAC.a);
+      const attrs = (await c.query("SELECT attrs FROM product_events WHERE referral_id = $1 AND event = 'evidence.viewed'", [rid])).rows;
+      expect(attrs).toEqual([{ attrs: { document_id: docId, page: 2, decisive: false } }]);
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+    });
+
+    it('confirming needs the page opened by this person, on the current reading, and keeps the flag', async () => {
+      const { rid, docId, factId } = await withReading(52);
+      const confirm = (over = {}, user = U.reviewer) => post(factsUrl(rid), user, { ...fact('ventilator_use', 'no'), confirms: factId, ...over });
+      expect((await confirm()).json().error).toBe('evidence_not_viewed');
+      await open(rid, docId, factId, U.admin);
+      expect((await confirm()).json().error).toBe('evidence_not_viewed'); // someone else opening it does not count
+      await open(rid, docId, factId);
+      expect((await confirm({ value: { type: 'tri_state', value: 'yes' } })).json().error).toBe('fact_changed');
+      const done = await confirm();
+      expect(done.statusCode).toBe(201);
+      const now = done.json().facts.find((f: { key: string }) => f.key === 'ventilator_use');
+      expect([now.source, now.single_source]).toEqual(['user', true]);
+      await asOwner(FAC.a);
+      expect((await c.query("SELECT event FROM product_events WHERE referral_id = $1 AND event LIKE 'fact.%'", [rid])).rows).toEqual([{ event: 'fact.confirmed' }]);
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      expect((await confirm()).json().error).toBe('fact_changed'); // the reading is no longer the current fact
+    });
+
+    it('a Confirm from a stale screen cannot clear a disagreement', async () => {
+      const { rid, docId, factId } = await withReading(53);
+      await open(rid, docId, factId);
+      await asOwner(FAC.a);
+      await c.query(`INSERT INTO facts (facility_id, referral_id, key, value, source, is_critical, supersedes, created_by) VALUES ($1, $2, 'ventilator_use', $3, 'ai', true, $4, 'worker:zz')`, [FAC.a, rid, { type: 'tri_state', value: 'unknown' }, factId]);
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      expect((await post(factsUrl(rid), U.reviewer, { ...fact('ventilator_use', 'no'), confirms: factId })).json().error).toBe('fact_changed');
+    });
+
+    it('typing the same value with a note of your own is a correction, not a confirmation', async () => {
+      const { rid } = await withReading(54);
+      await post(factsUrl(rid), U.reviewer, fact('ventilator_use', 'no'));
+      await asOwner(FAC.a);
+      expect((await c.query("SELECT event FROM product_events WHERE referral_id = $1 AND event LIKE 'fact.%'", [rid])).rows).toEqual([{ event: 'fact.corrected' }]);
       await c.query("SELECT set_config('app.facility_id', '', true)");
     });
 

@@ -413,7 +413,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
     try {
       const user = caller(req.headers);
       const { fid, rid } = ids(req.params);
-      const b = (req.body ?? {}) as { key?: unknown; value?: unknown; note?: unknown; as_of_date?: unknown };
+      const b = (req.body ?? {}) as { key?: unknown; value?: unknown; note?: unknown; as_of_date?: unknown; confirms?: unknown };
       const body = await tx(async (q) => {
         const who = await enter(q, fid, user);
         if (!WRITE_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
@@ -437,17 +437,25 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
         const current = before.filter((f) => f.key === spec.key);
         if (current.length > 1) throw new HttpError(409, 'fact_lineage_forked'); // only reachable from data written before 0007
         const previous = current[0];
+        // Confirm names the reading on the person's screen: it must still be the current one, say the same, and its page
+        // must have been opened by this person. Typing a value with a note of their own stays a plain entry or correction.
+        const confirming = b.confirms !== undefined;
+        if (confirming) {
+          if (!previous || previous.id !== b.confirms || previous.source !== 'ai' || !previous.evidence || JSON.stringify(previous.value) !== JSON.stringify(value)) throw new HttpError(409, 'fact_changed');
+          const viewed = await q(`SELECT 1 FROM product_events WHERE facility_id = $1 AND referral_id = $2 AND event = 'evidence.viewed' AND actor = $3
+            AND attrs->>'document_id' = $4 AND attrs->>'page' = $5 LIMIT 1`, [fid, rid, `user:${user}`, previous.evidence.document_id, String(previous.evidence.page)]);
+          if (viewed.rows.length === 0) throw new HttpError(409, 'evidence_not_viewed');
+        }
+        const kind = confirming ? 'fact.confirmed' : previous ? 'fact.corrected' : 'fact.entered';
         // A key that was ever specially protected stays protected: the flag carries to every correction, and the
         // key never appears in an event (§14.1).
         const everProtected = await q<{ p: boolean }>('SELECT bool_or(specially_protected) AS p FROM facts WHERE facility_id = $1 AND referral_id = $2 AND key = $3', [fid, rid, spec.key]);
         const protectedKey = everProtected.rows[0]?.p === true;
         const { rows } = await q<{ id: string }>(
-          `INSERT INTO facts (facility_id, referral_id, key, value, source, note, as_of_date, is_critical, specially_protected, supersedes, created_by)
-           VALUES ($1, $2, $3, $4, 'user', $5, $6, $7, $8, $9, $10) RETURNING id`,
-          [fid, rid, spec.key, value, note, asOf, spec.critical, protectedKey, previous?.id ?? null, `user:${user}`]);
+          `INSERT INTO facts (facility_id, referral_id, key, value, source, note, as_of_date, is_critical, specially_protected, supersedes, created_by, single_source)
+           VALUES ($1, $2, $3, $4, 'user', $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
+          [fid, rid, spec.key, value, note, asOf, spec.critical, protectedKey, previous?.id ?? null, `user:${user}`, confirming && previous?.single_source === true]);
         const factId = rows[0]!.id;
-        // a person stating the value the AI read is a confirmation of it (§14.1), not a correction
-        const kind = !previous ? 'fact.entered' : previous.source === 'ai' && JSON.stringify(previous.value) === JSON.stringify(value) ? 'fact.confirmed' : 'fact.corrected';
         await audit(q, fid, user, kind, 'fact', factId);
         await emit(q, fid, rid, user, kind, { ...(protectedKey ? {} : { fact_key: spec.key }), decisive: spec.critical });
 
@@ -823,7 +831,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
   });
 
   // a short-lived link to one document on this referral (SPEC §12.1, XF-11, I4): a read of the record, audited; never the key
-  app.get<{ Params: { fid: string; rid: string; did: string }; Querystring: { fact?: string; page?: string } }>('/api/facilities/:fid/referrals/:rid/documents/:did/view', async (req, reply) => {
+  app.get<{ Params: { fid: string; rid: string; did: string }; Querystring: { fact?: string } }>('/api/facilities/:fid/referrals/:rid/documents/:did/view', async (req, reply) => {
     try {
       const user = caller(req.headers);
       const { fid, rid } = ids(req.params);
@@ -833,13 +841,14 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
       return reply.send(await tx(async (q) => {
         const who = await enter(q, fid, user);
         if (!READ_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
-        const doc = (await q<{ storage_key: string }>('SELECT storage_key FROM documents WHERE facility_id = $1 AND referral_id = $2 AND id = $3', [fid, rid, did])).rows[0];
+        const doc = (await q<{ storage_key: string }>("SELECT storage_key FROM documents WHERE facility_id = $1 AND referral_id = $2 AND id = $3 AND status = 'processed'", [fid, rid, did])).rows[0];
         if (!doc) throw new HttpError(404, 'not_found');
         await audit(q, fid, user, 'document.viewed', 'document', did);
-        // opened from a fact: counted only when that fact really cites this page of this document
-        const fact = (await currentFacts(q, fid, rid)).find((f) => f.key === req.query.fact && f.evidence?.document_id === did && String(f.evidence.page) === req.query.page);
+        // opened from a fact: counted only when that fact really cites this document
+        const fact = (await currentFacts(q, fid, rid)).find((f) => f.id === req.query.fact && f.evidence?.document_id === did);
         if (fact?.evidence) {
-          await emit(q, fid, rid, user, 'evidence.viewed', { ...(fact.specially_protected ? {} : { fact_key: fact.key }), document_id: did, page: fact.evidence.page, decisive: fact.is_critical });
+          const ever = await q<{ p: boolean }>('SELECT bool_or(specially_protected) AS p FROM facts WHERE facility_id = $1 AND referral_id = $2 AND key = $3', [fid, rid, fact.key]);
+          await emit(q, fid, rid, user, 'evidence.viewed', { ...(ever.rows[0]?.p === true ? {} : { fact_key: fact.key }), document_id: did, page: fact.evidence.page, decisive: fact.is_critical });
         }
         return { url: await s3.presignGet(doc.storage_key), expires_in: VIEW_TTL_SECONDS };
       }));
