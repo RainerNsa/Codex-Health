@@ -2,8 +2,8 @@
 // returns is rendered as text (no HTML injection anywhere, CONSTRAINTS Floor). Defaults are the synthetic seed
 // (scripts/dev/seed-synthetic.mjs): ZZTEST Alpha Facility 1 and its Reviewer.
 import { useEffect, useState, type FormEvent } from 'react';
-import { Badge, Box, Button, Flex, Grid, Heading, HStack, Input, SimpleGrid, Table, Text, Textarea, VisuallyHidden, chakra } from '@chakra-ui/react';
-import { CheckCircleIcon, PlusIcon, ProhibitIcon, WarningCircleIcon, type Icon } from '@phosphor-icons/react';
+import { Badge, Box, Button, Flex, Grid, Heading, HStack, Input, Table, Text, Textarea, chakra } from '@chakra-ui/react';
+import { ArrowLeftIcon, CheckCircleIcon, PlusIcon, ProhibitIcon, WarningCircleIcon, type Icon } from '@phosphor-icons/react';
 import { amendReferral, ApiError, resolveFailures, uploadDocument, cosignRequest, createReferral, enterFact, finalizeReferral, getReferral, moveReferral, reevaluateReferral, requestCosign, type ReferralView, type Tri } from './api.ts';
 import { ReviewPanel } from './ReviewPanel.tsx';
 import { DocumentsPanel } from './DocumentsPanel.tsx';
@@ -15,7 +15,13 @@ import { Nav, Placeholder, SCREENS, type Screen } from './Placeholders.tsx';
 import { SettingsPanel } from './SettingsPanel.tsx';
 import { Callout, Field, Panel, Select, Sub, type Tone } from './ui.tsx';
 
-const SEED_FACILITY = '00000000-0000-4000-8000-00000000f0a1';
+// shortcut: the seeded facilities; a user's own list comes with real sign-in (M6), since listing them needs a new read policy
+const SEED_FACILITIES = [
+  { id: '00000000-0000-4000-8000-00000000f0a1', label: 'ZZTEST Alpha Facility 1' },
+  { id: '00000000-0000-4000-8000-00000000f0a2', label: 'ZZTEST Alpha Facility 2' },
+  { id: '00000000-0000-4000-8000-00000000f0b1', label: 'ZZTEST Beta Facility 1' },
+  { id: '00000000-0000-4000-8000-00000000f0b2', label: 'ZZTEST Beta Facility 2' },
+];
 const SEED_USERS = [
   { id: '00000000-0000-4000-8000-0000000000e2', label: 'ZZTEST Reviewer' },
   { id: '00000000-0000-4000-8000-0000000000e1', label: 'ZZTEST Admin' },
@@ -64,8 +70,7 @@ const keyLabel = (k: string) => k.replaceAll('_', ' ');
 
 export function App() {
   const [user, setUser] = useState(SEED_USERS[0]!.id);
-  const [facility, setFacility] = useState(SEED_FACILITY);
-  const [referralId, setReferralId] = useState('');
+  const [facility, setFacility] = useState(SEED_FACILITIES[0]!.id);
   const [view, setView] = useState<ReferralView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -81,7 +86,6 @@ export function App() {
     try {
       const v = await fn();
       setView(v);
-      setReferralId(v.referral.id);
       setScreen('referrals');
       return true;
     } catch (err) {
@@ -92,6 +96,7 @@ export function App() {
     }
   };
 
+  const inReferral = screen === 'referrals' && view !== null;
   return (
     <Grid colorPalette="brand" minH="100dvh" templateColumns={{ base: 'minmax(0, 1fr)', lg: '15rem minmax(0, 1fr)' }}>
       {/* the rail is navy in both themes, so its focus ring uses the signal colour */}
@@ -99,31 +104,27 @@ export function App() {
       <Flex direction="column" gap="6" p="4" position={{ lg: 'sticky' }} top="0" h={{ lg: '100dvh' }}>
         <Logo />
         <Nav screen={screen} onSelect={setScreen} />
-        <Box mt={{ lg: 'auto' }}>
+        <Grid mt={{ lg: 'auto' }} gap="3">
+          <Field label="Facility">
+            <Select value={facility} onChange={setFacility}>{SEED_FACILITIES.map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}</Select>
+          </Field>
           <Field label="Signed in as">
             <Select value={user} onChange={setUser}>{SEED_USERS.map((u) => <option key={u.id} value={u.id}>{u.label}</option>)}</Select>
           </Field>
-        </Box>
+        </Grid>
       </Flex>
       </Box>
 
       <Grid as="main" templateColumns="minmax(0, 1fr)" gap="4" p={{ base: '4', lg: '6' }} alignContent="start" minW="0">
-        <Box>
-          <Heading as="h1" size="lg" fontWeight="700">{SCREENS.find((s) => s.id === screen)?.label}</Heading>
-          <Sub>Internal build. Synthetic data only. Local sign-in stub: no real accounts.</Sub>
-        </Box>
-
-        <Panel id="ctx">
-          <VisuallyHidden as="h2">Which facility and referral</VisuallyHidden>
-          <SimpleGrid columns={{ base: 1, sm: 2 }} gap="3">
-            <Field label="Facility id"><Input size="sm" fontFamily="mono" value={facility} onChange={(e) => setFacility(e.target.value.trim())} /></Field>
-            <Field label="Referral id"><Input size="sm" fontFamily="mono" value={referralId} onChange={(e) => setReferralId(e.target.value.trim())} /></Field>
-          </SimpleGrid>
-          <HStack mt="3" gap="2">
-            <Button size="sm" disabled={busy} onClick={() => run(() => createReferral(facility, user))}><PlusIcon aria-hidden="true" /> New referral</Button>
-            <Button size="sm" variant="outline" disabled={busy || !referralId} onClick={() => run(() => getReferral(facility, referralId, user))}>Open referral</Button>
-          </HStack>
-        </Panel>
+        <Flex wrap="wrap" align="start" justify="space-between" gap="3">
+          <Box>
+            <Heading as="h1" size="lg" fontWeight="700">{inReferral ? <>Referral <chakra.span fontFamily="mono" fontWeight="400">{view.referral.id.slice(0, 8)}</chakra.span></> : SCREENS.find((s) => s.id === screen)?.label}</Heading>
+            <Sub>Internal build. Synthetic data only. Local sign-in stub: no real accounts.</Sub>
+          </Box>
+          {inReferral
+            ? <Button size="sm" variant="outline" onClick={() => setView(null)}><ArrowLeftIcon aria-hidden="true" /> Back to referrals</Button>
+            : screen === 'referrals' && <Button size="sm" disabled={busy} onClick={() => run(() => createReferral(facility, user))}><PlusIcon aria-hidden="true" /> New referral</Button>}
+        </Flex>
 
         {error && <Callout tone="stop" role="alert">{error}</Callout>}
 
@@ -131,7 +132,7 @@ export function App() {
         <Placeholder screen={screen} />
 
         {/* a new facility or user starts an empty list: one person's queue never shows under another's name */}
-        {screen === 'referrals' && <QueuePanel key={`${facility}:${user}`} facility={facility} user={user} onOpen={(id) => void run(() => getReferral(facility, id, user))} />}
+        {screen === 'referrals' && !view && <QueuePanel key={`${facility}:${user}`} facility={facility} user={user} onOpen={(id) => void run(() => getReferral(facility, id, user))} />}
 
         {screen === 'referrals' && view && (
           <DocumentsPanel view={view} busy={busy} on={{

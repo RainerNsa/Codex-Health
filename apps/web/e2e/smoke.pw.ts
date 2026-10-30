@@ -65,3 +65,17 @@ test('evidence: quotes stay text, and what did not verify says so in words', asy
   await expect(page.getByText('Open the page to confirm this reading.').first()).toBeVisible();
   await check(page, 'light-desktop-evidence');
 });
+
+test('the queue is home: a referral replaces it, Back returns, and the facility picker never shows another facility list', async ({ browser }) => {
+  const page = await (await browser.newContext({ viewport: sizes[0] })).newPage();
+  await page.goto('/');
+  await page.getByRole('button', { name: 'New referral' }).click();
+  await expect(page.getByRole('heading', { name: 'Recommendation' })).toBeVisible();
+  await expect(page.getByRole('heading', { name: /^Referral / })).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Needs staff' })).toHaveCount(0);
+  await page.getByRole('button', { name: 'Back to referrals' }).click();
+  await expect(page.getByRole('button', { name: 'Needs staff' })).toBeVisible();
+  await page.getByLabel('Facility').selectOption({ label: 'ZZTEST Beta Facility 1' });
+  await expect(page.getByText('Not a facility this user belongs to.')).toBeVisible();
+  await expect(page.getByRole('button', { name: 'Open' })).toHaveCount(0);
+});
