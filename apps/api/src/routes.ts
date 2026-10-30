@@ -3,7 +3,7 @@
 // Every write runs in one transaction as codex_app under RLS, writes its audit row and product events, and
 // re-evaluates. Responses carry ids, codes and the reviewer's own entries; errors never echo request content.
 import type { FastifyInstance, FastifyReply } from 'fastify';
-import { evaluate, ENGINE_VERSION, isRealDate, type Fact, type FactValue } from '@codex-health/rules-engine';
+import { evaluate, ENGINE_VERSION, isRealDate, parseFactValue, type Fact, type FactValue } from '@codex-health/rules-engine';
 import { bindFacility, bindOrganization, type Query, type Tx } from './db.ts';
 import { userFromHeaders } from './auth.ts';
 import { loadSettings as loadStored, NOT_SWITCHABLE, PROFILE_KEYS, RuleSetRefused, type RuleSet } from './ruleset.ts';
@@ -247,17 +247,6 @@ async function referralView(q: Query, facilityId: string, referralId: string, ru
   };
 }
 
-/** Parse a manual fact value of the type the rule set reads the key as; anything else is refused. */
-function parseValue(v: unknown, type: 'tri_state' | 'count' | 'enum'): FactValue | null {
-  if (!v || typeof v !== 'object') return null;
-  const o = v as { type?: unknown; value?: unknown };
-  if (o.type !== type) return null;
-  if (type === 'tri_state' && (o.value === 'yes' || o.value === 'no' || o.value === 'unknown')) return { type: 'tri_state', value: o.value };
-  if (type === 'count' && (o.value === null || (Number.isInteger(o.value) && (o.value as number) >= 0 && (o.value as number) <= 100000))) return { type: 'count', value: o.value as number | null };
-  if (type === 'enum' && (o.value === null || (typeof o.value === 'string' && /^[a-z][a-z0-9_]{0,63}$/.test(o.value)))) return { type: 'enum', value: o.value as string | null };
-  return null;
-}
-
 export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: Storage | null }): void {
   const { tx, storage } = deps;
   const fail = (reply: FastifyReply, err: unknown) => {
@@ -415,7 +404,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
         if (!WRITE_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
         const ruleSet = await settingsOrRefuse(q, fid, who.organizationId);
         const spec = ruleSet.factKeys.find((k) => k.key === b.key);
-        const value = spec ? parseValue(b.value, spec.type) : null;
+        const value = spec ? parseFactValue(b.value, spec.type) : null;
         const note = typeof b.note === 'string' ? b.note.trim() : '';
         const asOf = b.as_of_date === undefined || b.as_of_date === null ? null : b.as_of_date;
         const referralDate = todayIso();

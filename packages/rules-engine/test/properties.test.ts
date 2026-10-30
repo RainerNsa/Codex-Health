@@ -53,7 +53,7 @@ function independent(i: Input) {
   const byKey = new Map<string, Fact[]>();
   for (const f of i.facts) byKey.set(f.key, [...(byKey.get(f.key) ?? []), f]);
   // trusted and well-formed, exactly as I2/§3 define it; a key with zero or several distinct known values is unknown
-  const trusted = (f: Fact) => f.source === 'user' || (f.evidence?.verified === true && f.confidence_band !== 'low');
+  const trusted = (f: Fact) => f.source === 'user' || (f.evidence?.verified === true && (f.confidence_band === 'high' || f.confidence_band === 'medium'));
   const knownValues = (list: Fact[]) => new Set(list.filter((f) => trusted(f) && f.value.value !== null && f.value.value !== 'unknown').map((f) => `${f.value.type}|${String(f.value.value)}`));
   const unknown = (k: string) => { const l = byKey.get(k) ?? []; const v = knownValues(l); return v.size !== 1; };
   // F8 part 2: payer-only keys never block the overall answer; hard-stop inputs and flagged keys do

@@ -68,7 +68,7 @@ export interface Fact {
  * values at M2.
  */
 export function presence(fact: Pick<Fact, 'value' | 'source' | 'evidence' | 'confidence_band'>): TriState {
-  if (fact.source !== 'user' && (!fact.evidence?.verified || fact.confidence_band === 'low')) return 'unknown';
+  if (fact.source !== 'user' && (!fact.evidence?.verified || (fact.confidence_band !== 'high' && fact.confidence_band !== 'medium'))) return 'unknown';
   const v = fact.value;
   switch (v.type) {
     case 'tri_state':

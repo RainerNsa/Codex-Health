@@ -2,8 +2,8 @@
 // nothing; then one transaction writes every result. A crash anywhere leaves no half-written facts, and a redelivered
 // job repeats cleanly (4.3). The model never sees the rules or emits an outcome: the engine decides from verified facts.
 // shortcut: one write per run, so no document-level partial results yet; slice 4 (4.1) splits this per document.
-import { ENGINE_VERSION, evaluate, referencedKeys, parseExpression, type Fact, type FactValue, type Rule } from '@codex-health/rules-engine';
-import { verifyQuote } from './verify.ts';
+import { ENGINE_VERSION, evaluate, keyTypes, parseExpression, parseFactValue, referencedKeys, type Fact, type FactValue, type KeyType, type Rule } from '@codex-health/rules-engine';
+import { isNegative, verifyEvidence } from './verify.ts';
 
 export type Query = <R = Record<string, unknown>>(sql: string, params?: unknown[]) => Promise<{ rows: R[]; rowCount: number | null }>;
 export type Tx = <T>(fn: (q: Query) => Promise<T>) => Promise<T>;
@@ -23,6 +23,18 @@ export interface Job { facilityId: string; referralId: string; jobId: string }
 type Outcome = { doc: DocumentRef; status: 'processed'; pages: Page[]; ms: number } | { doc: DocumentRef; status: 'failed' | 'unreadable'; pages: []; ms: number };
 
 const isKnown = (v: FactValue) => v.value !== null && v.value !== 'unknown';
+const JOB_ID = /^[a-z0-9-]{1,64}$/;
+const QUOTE_MAX = 1000;
+
+/** Extractor output is hostile input (a packet can carry prompt injection). An entry that is not exactly valid is
+ *  dropped, never stored, so one bad entry cannot stop the referral. */
+function clean(e: Extracted, types: Map<string, KeyType>, keys: Set<string>, docs: Set<string>): (Omit<Extracted, 'value'> & { value: FactValue }) | null {
+  if (!e || !keys.has(e.key) || !docs.has(e.document_id) || !Number.isInteger(e.page) || e.page < 1 || typeof e.quote !== 'string') return null;
+  const value = parseFactValue(e.value, types.get(e.key) ?? 'tri_state');
+  const quote = e.quote.replace(/[\p{Cs}\u0000]/gu, '').trim();
+  if (!value || !isKnown(value) || !quote || quote.length > QUOTE_MAX) return null;
+  return { key: e.key, value, document_id: e.document_id, page: e.page, quote, confidence_band: e.confidence_band === 'high' || e.confidence_band === 'medium' ? e.confidence_band : 'low' };
+}
 
 async function bind(q: Query, facilityId: string): Promise<string> {
   await q("SELECT set_config('app.facility_id', $1, true)", [facilityId]);
@@ -51,6 +63,7 @@ const currentFacts = async (q: Query, fid: string, rid: string) => (await q<Fact
 /** Process one referral. Safe to repeat: anything but a referral in processing is left alone. */
 export async function processReferral(tx: Tx, ports: Ports, job: Job): Promise<'done' | 'skipped'> {
   const { facilityId: fid, referralId: rid } = job;
+  if (!JOB_ID.test(job.jobId)) throw new Error('job id is malformed'); // before any OCR or model spend
   const actor = `worker:${job.jobId}`;
 
   const plan = await tx(async (q) => {
@@ -60,8 +73,9 @@ export async function processReferral(tx: Tx, ports: Ports, job: Job): Promise<'
     const set = await settings(q, fid, org);
     if (!set) throw new Error('facility has no rule set or profile');
     const docs = (await q<DocumentRef>("SELECT id, storage_key FROM documents WHERE facility_id = $1 AND referral_id = $2 AND status = 'uploaded' ORDER BY created_at", [fid, rid])).rows;
-    const keys = [...new Set(set.rules.filter((r) => r.enabled).flatMap((r) => referencedKeys(parseExpression(r.expression))).filter((k) => !k.startsWith('facility.')))].sort();
-    return { docs, keys };
+    const enabled = set.rules.filter((r) => r.enabled);
+    const keys = [...new Set(enabled.flatMap((r) => referencedKeys(parseExpression(r.expression))).filter((k) => !k.startsWith('facility.')))].sort();
+    return { docs, keys, types: keyTypes(enabled.map((r) => r.expression)), hardKeys: new Set(enabled.filter((r) => r.kind === 'hard_stop').flatMap((r) => r.inputs)) };
   });
   if (!plan) return 'skipped';
 
@@ -82,6 +96,9 @@ export async function processReferral(tx: Tx, ports: Ports, job: Job): Promise<'
     const org = await bind(q, fid);
     const ref = (await q<{ status: string }>('SELECT status FROM referrals WHERE facility_id = $1 AND id = $2 FOR UPDATE', [fid, rid])).rows[0];
     if (ref?.status !== 'processing') return 'skipped'; // a duplicate delivery finished first
+    // this job must still own exactly the documents it read: a stale job never finishes a newer round of work
+    const waiting = (await q<{ id: string }>("SELECT id FROM documents WHERE facility_id = $1 AND referral_id = $2 AND status = 'uploaded'", [fid, rid])).rows.map((d) => d.id).sort();
+    if (waiting.join() !== plan.docs.map((d) => d.id).sort().join()) return 'skipped';
     const set = await settings(q, fid, org);
     if (!set) throw new Error('facility has no rule set or profile');
 
@@ -94,28 +111,54 @@ export async function processReferral(tx: Tx, ports: Ports, job: Job): Promise<'
 
     const pageText = new Map(read.flatMap((r) => r.pages.map((p) => [`${r.doc.id}:${p.page}`, p.text] as const)));
     const before = new Map((await currentFacts(q, fid, rid)).map((f) => [f.key, f]));
-    let changed = 0;
-    for (const key of plan.keys) {
-      const found = extracted.filter((e) => e.key === key && isKnown(e.value));
-      if (found.length === 0) continue; // silence stays silence: it never becomes a No (I1)
-      const current = before.get(key);
-      if (current?.source === 'user') continue; // what a person stated is never overwritten
-      const distinct = new Set(found.map((e) => JSON.stringify(e.value)));
-      // documents that disagree are for a person to settle: the fact stays unknown, with no evidence to lean on
-      const chosen = distinct.size === 1 ? found[0]! : null;
-      const value: FactValue = chosen ? chosen.value : { type: found[0]!.value.type, value: found[0]!.value.type === 'tri_state' ? 'unknown' : null } as FactValue;
-      if (current && JSON.stringify(current.value) === JSON.stringify(value)) continue;
-      const evidence = chosen ? { document_id: chosen.document_id, page: chosen.page, quote: chosen.quote, verified: verifyQuote(chosen.quote, pageText.get(`${chosen.document_id}:${chosen.page}`) ?? ''), span: null, coordinates: null } : null;
+    const keySet = new Set(plan.keys);
+    const docSet = new Set(read.map((r) => r.doc.id));
+    const entries = extracted.flatMap((e) => clean(e, plan.types, keySet, docSet) ?? []).map((e) => ({ ...e, verified: verifyEvidence(e.value, e.quote, pageText.get(`${e.document_id}:${e.page}`) ?? '') }));
+    const unknownOf = (t: FactValue['type']) => ({ type: t, value: t === 'tri_state' ? 'unknown' : null }) as FactValue;
+    const insert = async (key: string, value: FactValue, e: (typeof entries)[number] | null, singleSource: boolean, supersedes: string | null) => {
       const f = await q<{ id: string }>(
-        `INSERT INTO facts (facility_id, referral_id, key, value, source, evidence, confidence_band, is_critical, supersedes, created_by)
-         VALUES ($1, $2, $3, $4, 'ai', $5, $6, false, $7, $8) RETURNING id`,
-        [fid, rid, key, value, evidence, chosen ? chosen.confidence_band : null, current?.id ?? null, actor]);
+        `INSERT INTO facts (facility_id, referral_id, key, value, source, evidence, confidence_band, is_critical, single_source, supersedes, created_by)
+         VALUES ($1, $2, $3, $4, 'ai', $5, $6, false, $7, $8, $9) RETURNING id`,
+        [fid, rid, key, value, e ? { document_id: e.document_id, page: e.page, quote: e.quote, verified: e.verified, span: null, coordinates: null } : null, e?.confidence_band ?? null, singleSource, supersedes, actor]);
       await q('INSERT INTO audit_log (facility_id, actor, action, entity_type, entity_id) VALUES ($1, $2, $3, $4, $5)', [fid, actor, 'fact.extracted', 'fact', f.rows[0]!.id]);
+    };
+    let changed = 0;
+    const disagreements: string[] = [];
+    for (const key of plan.keys) {
+      const found = entries.filter((e) => e.key === key);
+      const current = before.get(key);
+      if (found.length === 0 || current?.source === 'user') continue; // silence stays silence (I1); a person's statement stands
+      // the pipeline writes an Unknown only for a disagreement, which stands until a person states the fact (§3)
+      if (current && !isKnown(current.value)) { disagreements.push(key); continue; }
+      const usable = found.filter((e) => e.verified && e.confidence_band !== 'low');
+      if (usable.length === 0) {
+        // nothing trustworthy: keep a first sighting on record (it reads as Unknown), never replace anything with it
+        if (!current) { await insert(key, found[0]!.value, found[0]!, false, null); changed += 1; }
+        continue;
+      }
+      // every trustworthy value on record for this key: a later document cannot quietly overturn an earlier one
+      const earlier = (await q<{ value: FactValue }>(
+        `SELECT value FROM facts WHERE facility_id = $1 AND referral_id = $2 AND key = $3 AND source = 'ai' AND (evidence->>'verified')::boolean AND confidence_band IN ('high', 'medium')`, [fid, rid, key])).rows.map((r) => r.value);
+      const values = new Set([...earlier, ...usable.map((e) => e.value)].map((v) => JSON.stringify(v)));
+      if (values.size > 1) {
+        disagreements.push(key);
+        const unknown = unknownOf(usable[0]!.value.type);
+        if (JSON.stringify(current?.value) !== JSON.stringify(unknown)) { await insert(key, unknown, null, false, current?.id ?? null); changed += 1; }
+        continue;
+      }
+      const chosen = usable[0]!;
+      if (current && JSON.stringify(current.value) === JSON.stringify(chosen.value) && current.evidence?.verified) continue;
+      // a hard-stop No resting on one document is flagged for confirmation against the page (§5.1 T12, XF-7b)
+      const single = plan.hardKeys.has(key) && isNegative(chosen.value) && new Set(usable.map((e) => e.document_id)).size === 1;
+      await insert(key, chosen.value, chosen, single, current?.id ?? null);
       changed += 1;
     }
 
-    const anyFailed = results.some((r) => r.status !== 'processed');
+    // every document of the referral counts, not only this run's: one that failed earlier still holds the outcome
+    const open = (await q<{ n: string }>("SELECT count(*) AS n FROM documents WHERE facility_id = $1 AND referral_id = $2 AND status NOT IN ('processed', 'not_applicable')", [fid, rid])).rows[0]!.n;
+    const anyFailed = open !== '0';
     const facts = await currentFacts(q, fid, rid);
+    const raw = !facts.some((f) => f.source === 'user'); // §14.2: raw is the AI-only snapshot, before any person touched a fact
     const referralDate = new Date().toISOString().slice(0, 10);
     const result = evaluate({ facts, profile: set.profile, rules: set.rules, referral_date: referralDate, processing_complete: !anyFailed });
     const prev = (await q<{ id: string }>('SELECT id FROM evaluations WHERE facility_id = $1 AND referral_id = $2 ORDER BY evaluated_at DESC LIMIT 1', [fid, rid])).rows[0]?.id ?? null;
@@ -124,13 +167,13 @@ export async function processReferral(tx: Tx, ports: Ports, job: Job): Promise<'
     const ev = (await q<{ id: string }>(
       `INSERT INTO evaluations (facility_id, referral_id, previous_evaluation_id, raw, outcome, clinical_outcome, financial_status, sub_reasons, trace,
          criteria_document_ref, rule_set_version, facility_profile_version, model_id, prompt_version, extractor_version, ocr_engine_version, engine_version)
-       VALUES ($1, $2, $3, true, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id`,
+       VALUES ($1, $2, $3, $17, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16) RETURNING id`,
       [fid, rid, prev, result.outcome, result.clinical_outcome, result.financial_status, result.sub_reasons,
-        { resolution_step, trace, missing, conflicts, blocking, empty_profile_keys, confirmation_set, inputs: { referral_date: referralDate, processing_complete: !anyFailed, fact_ids: facts.map((f) => (f as { id: string }).id) } },
-        set.criteriaRef, set.ruleSetVersion, set.profileVersion, v.model_id, v.prompt_version, v.extractor_version, v.ocr_engine_version, ENGINE_VERSION])).rows[0]!.id;
+        { resolution_step, trace, missing, conflicts, disagreements, blocking, empty_profile_keys, confirmation_set, inputs: { referral_date: referralDate, processing_complete: !anyFailed, fact_ids: facts.map((f) => (f as { id: string }).id) } },
+        set.criteriaRef, set.ruleSetVersion, set.profileVersion, v.model_id, v.prompt_version, v.extractor_version, v.ocr_engine_version, ENGINE_VERSION, raw])).rows[0]!.id;
     await q('INSERT INTO audit_log (facility_id, actor, action, entity_type, entity_id) VALUES ($1, $2, $3, $4, $5)', [fid, actor, 'evaluation.created', 'evaluation', ev]);
     await q('INSERT INTO product_events (facility_id, referral_id, actor, event, attrs) VALUES ($1, $2, $3, $4, $5)', [fid, rid, actor, 'evaluation.created',
-      { evaluation_id: ev, ...(prev ? { previous_evaluation_id: prev } : {}), raw: true, outcome: result.outcome, changed_fact_count: changed }]);
+      { evaluation_id: ev, ...(prev ? { previous_evaluation_id: prev } : {}), raw, outcome: result.outcome, changed_fact_count: changed }]);
 
     // T3 on any unreadable or failed document, otherwise T2
     await q('UPDATE referrals SET status = $3, updated_at = now() WHERE facility_id = $1 AND id = $2', [fid, rid, anyFailed ? 'partial_failure' : 'ready_for_review']);
