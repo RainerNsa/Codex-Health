@@ -8,7 +8,7 @@ import { createServer, type AddressInfo } from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { buildPacket, loadSettings, plan } from '../../../packages/packets/src/generate.mjs';
 import { RenderRefused } from '../src/pipeline.ts';
-import { renderPages } from '../src/render.ts';
+import { renderCheck, renderPages } from '../src/render.ts';
 
 const { createCanvas, loadImage } = createRequire(import.meta.url)('@napi-rs/canvas');
 const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
@@ -108,6 +108,13 @@ test('limits on time and on output stop a child that will not', async () => {
   assert.ok(Date.now() - start < 5000);
   await assert.rejects(collect(Buffer.from('two'), { child: STUB, maxOutput: 10 }), RenderRefused);
 });
+
+test('a slow store does not use up the document\'s time', async () => {
+  const slow = async () => { await new Promise((done) => setTimeout(done, 400)); };
+  assert.equal(await renderPages(Buffer.from('two'), slow, { child: STUB, timeoutMs: 500 }), 2);
+});
+
+test('the start-up check passes where the sandbox works', async () => { await renderCheck(); });
 
 test('a storage fault is not the document\'s fault: it passes through and the child is stopped', async () => {
   const fault = new Error('throttled');

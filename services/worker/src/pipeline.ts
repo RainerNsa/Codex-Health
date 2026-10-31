@@ -115,6 +115,7 @@ export async function processReferral(tx: Tx, ports: Ports, job: Job): Promise<'
     }
     try {
       const pages = (await ports.ocr(doc)).filter((p) => p.text.trim() !== '');
+      if (images > 0 && pages.some((p) => p.page > images)) throw new RenderRefused(); // a page was read that no image shows
       results.push(pages.length ? { doc, status: 'processed', pages, images, ms: Date.now() - start } : { doc, status: 'unreadable', pages: [], ms: Date.now() - start, stage: 'ocr' });
     } catch {
       results.push({ doc, status: 'failed', pages: [], ms: Date.now() - start, stage: 'ocr' }); // never the error text: it can quote the document

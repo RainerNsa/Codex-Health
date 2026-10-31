@@ -9,6 +9,7 @@ import { bedrockExtract, s3PageImages, textractOcr, VERSIONS, type Send } from '
 import { poolTx } from './db.ts';
 import { drain, handlers } from './loop.ts';
 import type { Ports } from './pipeline.ts';
+import { renderCheck } from './render.ts';
 
 const queue = requireEnv('SQS_PROCESSING_QUEUE_URL');
 const deadLetters = requireEnv('SQS_PROCESSING_DLQ_URL');
@@ -33,6 +34,7 @@ const forever = async (url: string, label: string, handle: Parameters<typeof dra
   for (;;) await drain(clientSend(sqs), url, label, handle);
 };
 const on = handlers(tx, ports);
+await renderCheck();
 console.log('worker listening');
 await Promise.all([
   forever(queue, 'processing', on.processing),

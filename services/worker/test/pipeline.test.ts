@@ -57,7 +57,7 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
   };
   const ports = (ocr: (id: string) => Page[], extract: (docId: string) => Extracted[]): Ports & { ocrCalls: number } => {
     const p = {
-      ocrCalls: 0, versions: VERSIONS, render: async () => 1,
+      ocrCalls: 0, versions: VERSIONS, render: async () => 0,
       async ocr(d: { id: string }) { p.ocrCalls += 1; return ocr(d.id); },
       async extract(pages: { document_id: string }[]) { return pages.flatMap((x) => extract(x.document_id)); },
     };
@@ -157,6 +157,14 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
     assert.equal(s.facts.length, 0);
     assert.notEqual(s.evals[0].outcome, 'admit');
     assert.equal((await c.query('SELECT page_images FROM documents WHERE referral_id = $1', [rid])).rows[0].page_images, null);
+  });
+
+  test('a page OCR read that has no image fails the document: its facts could not be checked', async () => {
+    const { rid } = await referral('img5');
+    await processReferral(tx, { ...ports(() => [{ page: 2, text: PAGE }], clean), render: async () => 1 }, job(rid));
+    const s = await state(rid);
+    assert.equal(s.status, 'partial_failure');
+    assert.equal(s.facts.length, 0);
   });
 
   test('a storage outage while rendering is no fault of the document: the job throws and writes nothing', async () => {
