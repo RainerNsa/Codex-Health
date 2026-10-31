@@ -137,8 +137,8 @@ test('a long job keeps renewing its message, and stops when it ends', async () =
   const send: Send = async (c) => { calls.push(c); return c instanceof ReceiveMessageCommand ? { Messages: [{ Body: JSON.stringify(job), ReceiptHandle: 'h-2' }] } : {}; };
   const renewed = () => calls.filter((c) => c instanceof ChangeMessageVisibilityCommand) as ChangeMessageVisibilityCommand[];
   // the job runs until it has seen two renewals, or the limit: a fixed wall-clock job lost the race on a busy machine
-  const job = async () => { for (const limit = Date.now() + 2000; renewed().length < 2 && Date.now() < limit;) await new Promise((done) => setTimeout(done, 1)); };
-  await drain(send, 'q', 'processing', job, 5);
+  const longJob = async () => { for (const limit = Date.now() + 2000; renewed().length < 2 && Date.now() < limit;) await new Promise((done) => setTimeout(done, 1)); };
+  await drain(send, 'q', 'processing', longJob, 5);
   const renewals = renewed();
   assert.ok(renewals.length >= 2);
   assert.deepEqual([renewals[0]!.input.ReceiptHandle, renewals[0]!.input.VisibilityTimeout], ['h-2', 900]);
