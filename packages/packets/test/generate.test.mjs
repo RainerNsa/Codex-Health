@@ -63,6 +63,12 @@ test('every labelled quote would pass the pipeline, except the bare near misses,
   }
 });
 
+test('a bare near miss expects what the product will answer: Unknown keeps it out of Admit', () => {
+  const bare = packets.filter((p) => FACTS.ventilator_use.bare.includes(p.label.fields[0].quote));
+  assert.equal(bare.length, FACTS.ventilator_use.bare.length);
+  for (const p of bare) assert.notEqual(p.label.expected.outcome, 'admit', p.label.packet_id);
+});
+
 test('the hard-stop field meets the fixture floor in distinct wordings', () => {
   const vent = (polarity) => new Set(packets.flatMap((p) => p.label.fields.filter((f) => f.key === 'ventilator_use' && f.polarity === polarity).map((f) => f.quote)));
   assert.ok(vent('positive').size >= 30);

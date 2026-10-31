@@ -61,7 +61,7 @@
     "clinical_outcome": "needs_review",
     "financial_status": "clear",
     "sub_reasons": [
-      "leadership"
+      "missing_info"
     ],
     "triggered_rules": [
       {

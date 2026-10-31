@@ -57,10 +57,12 @@
   "facility_profile_ref": "examples/profiles/zztest-facility.json@1",
   "rule_set_ref": "examples/rules@seed",
   "expected": {
-    "outcome": "admit",
-    "clinical_outcome": "admit",
+    "outcome": "needs_review",
+    "clinical_outcome": "needs_review",
     "financial_status": "clear",
-    "sub_reasons": [],
+    "sub_reasons": [
+      "missing_info"
+    ],
     "triggered_rules": [
       {
         "rule_id": "seed.favorable.skilled_need_documented",

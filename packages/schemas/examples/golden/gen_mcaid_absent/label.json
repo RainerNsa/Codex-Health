@@ -98,10 +98,10 @@
       },
       "document_id": "doc_discharge_summary",
       "page": 4,
-      "quote": "no history of chronic ventilator dependence",
+      "quote": "breathing without a ventilator since yesterday",
       "span": {
         "start": 522,
-        "end": 565
+        "end": 568
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",

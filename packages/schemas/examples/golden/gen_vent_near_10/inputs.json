@@ -5,7 +5,7 @@
     "id": "gen_vent_near_10",
     "focus": "ventilator_use",
     "value": "no",
-    "phrase": "denies any ventilator use at home"
+    "phrase": "not on any ventilator at time of transfer"
   },
   "degrade": {
     "rotate": 0,

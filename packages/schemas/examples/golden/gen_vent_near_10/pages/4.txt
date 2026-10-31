@@ -6,7 +6,7 @@ HOSPITAL COURSE AND PLAN
 ------------------------
 Vitals: BP 128/76, HR 82, temp 36.8, SpO2 96 percent
 Allergies: none recorded in this synthetic chart
-Respiratory: denies any ventilator use at home.
+Respiratory: not on any ventilator at time of transfer.
 Diet: regular, thin liquids
 
 Electronically signed: ZZTEST, Physician

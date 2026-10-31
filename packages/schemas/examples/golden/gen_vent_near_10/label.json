@@ -93,10 +93,10 @@
       },
       "document_id": "doc_discharge_summary",
       "page": 4,
-      "quote": "denies any ventilator use at home",
+      "quote": "not on any ventilator at time of transfer",
       "span": {
         "start": 436,
-        "end": 469
+        "end": 477
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",

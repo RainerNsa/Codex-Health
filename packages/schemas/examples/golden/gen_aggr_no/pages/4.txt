@@ -5,7 +5,7 @@ Patient: ZZTEST CANARY-ALPHA   MRN: MRN-ZZCANARY-0000001   DOB: 1899-02-30
 HOSPITAL COURSE AND PLAN
 ------------------------
 Allergies: none recorded in this synthetic chart
-Respiratory: denies any ventilator use at home.
+Respiratory: not on any ventilator at time of transfer.
 Vitals: BP 128/76, HR 82, temp 36.8, SpO2 96 percent
 Diet: regular, thin liquids
 

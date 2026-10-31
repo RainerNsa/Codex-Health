@@ -5,7 +5,7 @@
     "id": "gen_vent_near_20",
     "focus": "ventilator_use",
     "value": "no",
-    "phrase": "no history of chronic ventilator dependence"
+    "phrase": "breathing without a ventilator since yesterday"
   },
   "degrade": {
     "rotate": 0,

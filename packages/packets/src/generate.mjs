@@ -33,10 +33,10 @@ const FACTS = {
     no: [
       'weaned from the ventilator on day 4 and not on a ventilator now', 'decannulated and not on a ventilator at discharge', 'no longer ventilator dependent and stable on room air',
       'not on a ventilator, nasal cannula 2 liters only', 'intubated briefly in the OR, no ventilator since surgery', 'CPAP at night for sleep apnea, no ventilator use', 'BiPAP was stopped and patient is not ventilated',
-      'never required mechanical ventilation this admission', 'tracheostomy capped, not ventilated at any time now', 'denies any ventilator use at home', 'no ventilator or tracheostomy needs at discharge',
+      'never required mechanical ventilation this admission', 'tracheostomy capped, not ventilated at any time now', 'not on any ventilator at time of transfer', 'no ventilator or tracheostomy needs at discharge',
       'vent discontinued in the ICU, none needed since', 'without ventilator support for two weeks', 'no mechanical ventilation required at this time', 'off the vent and no longer needs trach care',
       'extubated on day 2 with no further ventilator need', 'ventilator not needed, breathing well on room air', 'respiratory therapy signed off, no vent required', 'liberated from the ventilator and not reintubated',
-      'no history of chronic ventilator dependence', 'ventilator was not used after the first night', 'oxygen by mask only, not on mechanical ventilation', 'tolerating room air, no vent support needed', 'prior vent use resolved, none at present',
+      'breathing without a ventilator since yesterday', 'ventilator was not used after the first night', 'oxygen by mask only, not on mechanical ventilation', 'tolerating room air, no vent support needed', 'prior vent use resolved, none at present',
     ],
     // near misses with no negation word: the words mean No, but §8 only takes a No from an explicit negation, so these must end Unknown
     bare: [
@@ -190,7 +190,9 @@ export function buildPacket(spec, settings) {
     };
   });
 
-  const facts = fields.map((f) => ({ key: f.key, value: f.value, source: 'user', evidence: null, note: 'SYNTHETIC label', as_of_date: f.as_of_date, is_critical: f.is_critical, specially_protected: false, single_source: false, confidence_band: null }));
+  // the truth stays in the label, but `expected` is what the product should answer: a bare near miss cannot verify, so it reads Unknown
+  const asRead = (f) => (FACTS[f.key].bare?.includes(f.quote) ? { type: 'tri_state', value: 'unknown' } : f.value);
+  const facts = fields.map((f) => ({ key: f.key, value: asRead(f), source: 'user', evidence: null, note: 'SYNTHETIC label', as_of_date: f.as_of_date, is_critical: f.is_critical, specially_protected: false, single_source: false, confidence_band: null }));
   const result = evaluate({ facts, profile: settings.profile, rules: settings.rules, referral_date: REFERRAL_DATE, processing_complete: true });
   const conflicts = spec.value === 'conflict' ? [{
     fact_key: spec.focus,

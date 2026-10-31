@@ -8,6 +8,6 @@ Allergies: none recorded in this synthetic chart
 Vitals: BP 128/76, HR 82, temp 36.8, SpO2 96 percent
 Diet: regular, thin liquids
 Plan: requires daily skilled therapy for gait retraining.
-Respiratory: no history of chronic ventilator dependence.
+Respiratory: breathing without a ventilator since yesterday.
 
 Electronically signed: ZZTEST, Physician
