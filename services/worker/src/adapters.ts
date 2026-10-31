@@ -45,17 +45,14 @@ export function textractOcr(send: Send, bucket: string, pollMs = 2000, timeoutMs
   };
 }
 
-/** Renders the stored file and keeps each page beside it. The names come from the file's hash, so a repeated job rewrites the
- *  same objects. kmsKeyId: the bucket refuses any write that does not ask for SSE-KMS; LocalStack runs without one. */
+/** Renders the stored file and keeps each page beside it as it arrives. The names come from the file's hash, so a repeated job
+ *  rewrites the same objects, and images of a job that stopped part-way are never referenced (the bucket's lifecycle expires them). kmsKeyId: the bucket refuses any write that does not ask for SSE-KMS; LocalStack runs without one. */
 export function s3PageImages(send: Send, bucket: string, kmsKeyId?: string, render = renderPages): Ports['render'] {
   const sse = kmsKeyId ? { ServerSideEncryption: 'aws:kms' as const, SSEKMSKeyId: kmsKeyId } : {};
   return async (doc: DocumentRef): Promise<number> => {
     const r = await send(new GetObjectCommand({ Bucket: bucket, Key: doc.storage_key }));
-    const pages = await render(await (r['Body'] as { transformToByteArray(): Promise<Uint8Array> }).transformToByteArray());
-    for (const [i, png] of pages.entries()) {
-      await send(new PutObjectCommand({ Bucket: bucket, Key: pageImageKey(doc.storage_key, i + 1), Body: png, ContentType: 'image/png', ...sse }));
-    }
-    return pages.length;
+    const bytes = await (r['Body'] as { transformToByteArray(): Promise<Uint8Array> }).transformToByteArray();
+    return render(bytes, (page, png) => send(new PutObjectCommand({ Bucket: bucket, Key: pageImageKey(doc.storage_key, page), Body: png, ContentType: 'image/png', ...sse })));
   };
 }
 

@@ -15,11 +15,15 @@ export interface Extracted { key: string; value: FactValue; document_id: string;
 export interface Ports {
   /** Page text of one document. Throws when it cannot be read; an empty result means nothing was legible. */
   ocr(doc: DocumentRef): Promise<Page[]>;
-  /** Stores an image of each page for a person to check facts against; returns how many. Throws when the file cannot be rendered. */
+  /** Stores an image of each page for a person to check facts against; returns how many. RenderRefused: this file cannot be
+   *  rendered. Any other throw is an outage, so the job retries rather than blaming the document. */
   render(doc: DocumentRef): Promise<number>;
   /** Facts found in the pages, for these keys only. Silence on a key is simply no entry. */
   extract(pages: { document_id: string; pages: Page[] }[], keys: string[], types: Map<string, KeyType>): Promise<Extracted[]>;
   versions: { model_id: string; prompt_version: string; extractor_version: string; ocr_engine_version: string };
+}
+export class RenderRefused extends Error {
+  constructor() { super('document could not be rendered'); }
 }
 export interface Job { facilityId: string; referralId: string; jobId: string }
 
@@ -100,8 +104,16 @@ export async function processReferral(tx: Tx, ports: Ports, job: Job): Promise<'
   const results: Outcome[] = [];
   for (const doc of plan.docs) {
     const start = Date.now();
+    let images: number;
     try {
-      const images = await ports.render(doc); // first: a hostile file dies in the renderer, before any OCR or model spend (XF-8)
+      images = await ports.render(doc); // first: a hostile file dies in the renderer, before any OCR or model spend (XF-8)
+    } catch (err) {
+      if (!(err instanceof RenderRefused)) throw err;
+      console.log(JSON.stringify({ event: 'document.render_refused', document_id: doc.id }));
+      results.push({ doc, status: 'failed', pages: [], ms: Date.now() - start, stage: 'ocr' });
+      continue;
+    }
+    try {
       const pages = (await ports.ocr(doc)).filter((p) => p.text.trim() !== '');
       results.push(pages.length ? { doc, status: 'processed', pages, images, ms: Date.now() - start } : { doc, status: 'unreadable', pages: [], ms: Date.now() - start, stage: 'ocr' });
     } catch {

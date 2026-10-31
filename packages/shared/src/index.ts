@@ -8,7 +8,11 @@ export function requireEnv(name: string): string {
 }
 
 /** Where a stored document's page image lives: under the document's own facility prefix, named by the file's hash. */
-export const pageImageKey = (storageKey: string, page: number): string => storageKey.replace(/\/([^/]+)$/, `/pages/$1/${page}.png`);
+export function pageImageKey(storageKey: string, page: number): string {
+  const key = storageKey.replace(/\/([^/]+)$/, `/pages/$1/${page}.png`);
+  if (key === storageKey) throw new Error('storage key has no folder'); // the write would replace the document itself
+  return key;
+}
 
 /** Bedrock regions the product may call (CONSTRAINTS I7: US regions, under the AWS BAA). */
 export const BEDROCK_REGIONS = ['us-east-1', 'us-west-2'] as const;

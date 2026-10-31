@@ -41,6 +41,8 @@ jobs:
           node-version: ${{ env.NODE_VERSION }}
           cache: npm
       - run: npm ci
+      - name: Let the renderer's sandbox create its namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - run: npm run lint --if-present
       - run: npm run typecheck --if-present
       - run: npm test
@@ -232,6 +234,8 @@ jobs:
             -c 'ALTER DATABASE codex_ci OWNER TO codex_migrator' \
             -c 'REVOKE CONNECT ON DATABASE codex_ci FROM PUBLIC' \
             -c 'GRANT CONNECT ON DATABASE codex_ci TO codex_app, codex_worker, codex_anchor'
+      - name: Let the renderer's sandbox create its namespaces
+        run: sudo sysctl -w kernel.apparmor_restrict_unprivileged_userns=0
       - name: Apply migrations as codex_migrator
         run: node packages/db/migrate.mjs
       - name: Database tests (cross-facility isolation, audit immutability, checks return zero rows)

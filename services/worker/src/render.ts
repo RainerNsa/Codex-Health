@@ -1,44 +1,63 @@
-// Page images for a person to check a fact against (I2, XF-7b). The sender's file is parsed only in render-child.mjs, in a
-// process with an empty environment, no write access and limits on time, memory and output. No error carries document text.
+// Page images for a person to check a fact against (I2, XF-7b). The sender's file is parsed only in render-child.mjs. Node's
+// permission flags are not a security boundary, so on Linux the operating system holds the child: new user, network and process
+// namespaces (no network, no signals to the worker), and limits on memory and files, with an empty environment. A
+// document that cannot be rendered is refused; anything onPage throws, a storage fault, passes through for the job to retry.
 import { spawn } from 'node:child_process';
 import { dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { RenderRefused } from './pipeline.ts';
 
-const TIMEOUT_MS = 120_000;
-const MAX_HEAP_MB = 1024;
-const MAX_OUTPUT_BYTES = 512 * 1024 * 1024;
+const TIMEOUT_MS = 300_000;
+const MAX_DATA_KB = 2_000_000; // all of the child's memory, unlike a heap flag: decoded images and native canvases count
+const MAX_OUTPUT_BYTES = 1024 * 1024 * 1024;
+const MAX_FRAME_BYTES = 32 * 1024 * 1024; // what the worker ever holds; the child's largest page is well below it
+const MAX_PAGES = 300;
+const PNG = Buffer.from([0x89, 0x50, 0x4e, 0x47, 0x0d, 0x0a, 0x1a, 0x0a]);
 const CHILD = fileURLToPath(new URL('./render-child.mjs', import.meta.url));
-const modulesDir = resolve(dirname(fileURLToPath(import.meta.resolve('pdfjs-dist/package.json'))), '..');
+const pdfjs = dirname(fileURLToPath(import.meta.resolve('pdfjs-dist/package.json')));
+const canvasPackages = resolve(pdfjs, '../@napi-rs');
 
-export const CHILD_FLAGS = ['--permission', '--allow-addons', `--allow-fs-read=${CHILD}`, `--allow-fs-read=${modulesDir}`];
+export const NODE_FLAGS = (child: string) => ['--permission', '--allow-addons', `--allow-fs-read=${child}`, `--allow-fs-read=${pdfjs}`, `--allow-fs-read=${canvasPackages}`];
 
-/** Each page of the file as a PNG, in order. Throws if the file cannot be rendered within the limits. */
-export function renderPages(bytes: Uint8Array, timeoutMs = TIMEOUT_MS): Promise<Buffer[]> {
-  return new Promise((done, fail) => {
-    const child = spawn(process.execPath, [...CHILD_FLAGS, `--max-old-space-size=${MAX_HEAP_MB}`, CHILD], { env: {}, stdio: ['pipe', 'pipe', 'ignore'] });
-    const timer = setTimeout(() => child.kill('SIGKILL'), timeoutMs);
-    const chunks: Buffer[] = [];
-    let size = 0;
-    child.stdout.on('data', (chunk: Buffer) => {
+function command(child: string): [string, string[]] {
+  const node = [process.execPath, ...NODE_FLAGS(child), child];
+  if (process.platform !== 'linux') return [node[0]!, node.slice(1)]; // a developer's machine; synthetic files only
+  const jail = ['/usr/bin/unshare', '--user', '--map-root-user', '--net', '--pid', '--fork', '--kill-child'];
+  return ['/bin/sh', ['-c', `ulimit -c 0; ulimit -f 0; ulimit -d ${MAX_DATA_KB}; exec "$@"`, 'sh', ...jail, ...node]];
+}
+
+/** Hands each page to onPage as a PNG, in order, one at a time, and returns how many. Output from the child is hostile too. */
+export async function renderPages(bytes: Uint8Array, onPage: (page: number, png: Buffer) => Promise<unknown>,
+  { child = CHILD, timeoutMs = TIMEOUT_MS, maxOutput = MAX_OUTPUT_BYTES } = {}): Promise<number> {
+  const [file, args] = command(child);
+  const proc = spawn(file, args, { env: {}, stdio: ['pipe', 'pipe', 'ignore'] });
+  const timer = setTimeout(() => proc.kill('SIGKILL'), timeoutMs);
+  const closed = new Promise<number | null>((done) => { proc.on('close', done); proc.on('error', () => done(null)); });
+  proc.stdin.on('error', () => {}); // a child that died early closes the pipe; its exit code reports the failure
+  proc.stdin.end(bytes);
+  let held: Buffer = Buffer.alloc(0);
+  let size = 0;
+  let pages = 0;
+  try {
+    for await (const chunk of proc.stdout as AsyncIterable<Buffer>) {
       size += chunk.length;
-      if (size > MAX_OUTPUT_BYTES) child.kill('SIGKILL');
-      else chunks.push(chunk);
-    });
-    child.stdin.on('error', () => {}); // a child that died early closes the pipe; its exit code reports the failure
-    child.on('error', () => { clearTimeout(timer); fail(new Error('renderer did not start')); });
-    child.on('close', (code) => {
-      clearTimeout(timer);
-      if (code !== 0) return fail(new Error('document could not be rendered'));
-      const out = Buffer.concat(chunks);
-      const pages: Buffer[] = [];
-      for (let at = 0; at < out.length;) {
-        const end = at + 4 + out.readUInt32BE(at);
-        if (end > out.length) return fail(new Error('document could not be rendered'));
-        pages.push(out.subarray(at + 4, end));
-        at = end;
+      if (size > maxOutput) throw new RenderRefused();
+      held = Buffer.concat([held, chunk]);
+      while (held.length >= 4) {
+        const length = held.readUInt32BE(0);
+        if (length > MAX_FRAME_BYTES) throw new RenderRefused();
+        if (held.length < 4 + length) break;
+        const png = held.subarray(4, 4 + length);
+        pages += 1;
+        if (pages > MAX_PAGES || !png.subarray(0, PNG.length).equals(PNG)) throw new RenderRefused();
+        await onPage(pages, png);
+        held = held.subarray(4 + length);
       }
-      done(pages);
-    });
-    child.stdin.end(bytes);
-  });
+    }
+    if (held.length > 0 || await closed !== 0) throw new RenderRefused();
+    return pages;
+  } finally {
+    clearTimeout(timer);
+    proc.kill('SIGKILL');
+  }
 }

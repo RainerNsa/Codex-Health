@@ -8,7 +8,7 @@ import { fileURLToPath } from 'node:url';
 import pg from 'pg';
 import { ENGINE_VERSION } from '@codex-health/rules-engine';
 import { handlers } from '../src/loop.ts';
-import { failReferral, processReferral, type Extracted, type Page, type Ports, type Query, type Tx } from '../src/pipeline.ts';
+import { failReferral, processReferral, RenderRefused, type Extracted, type Page, type Ports, type Query, type Tx } from '../src/pipeline.ts';
 
 const url = process.env['DATABASE_URL'];
 if (!url && process.env['REQUIRE_DATABASE']) throw new Error('DATABASE_URL must be set here: the pipeline suite may not be skipped in the db-checks job');
@@ -143,11 +143,12 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
     const { rid: tiff } = await referral('img2');
     await processReferral(tx, { ...ports(() => [{ page: 1, text: PAGE }], clean), render: async () => 0 }, job(tiff));
     assert.equal((await state(tiff)).status, 'ready_for_review');
+    assert.equal((await c.query('SELECT page_images FROM documents WHERE referral_id = $1', [tiff])).rows[0].page_images, 0);
   });
 
   test('a file the renderer refuses fails alone, before any OCR, and leaves no facts (XF-8)', async () => {
     const { rid } = await referral('img3');
-    const p = { ...ports(() => [{ page: 1, text: PAGE }], clean), render: async () => { throw new Error('hostile'); } };
+    const p = { ...ports(() => [{ page: 1, text: PAGE }], clean), render: async () => { throw new RenderRefused(); } };
     let read = 0;
     await processReferral(tx, { ...p, ocr: async () => { read += 1; return []; } }, job(rid));
     const s = await state(rid);
@@ -155,6 +156,16 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
     assert.equal(s.status, 'partial_failure');
     assert.equal(s.facts.length, 0);
     assert.notEqual(s.evals[0].outcome, 'admit');
+    assert.equal((await c.query('SELECT page_images FROM documents WHERE referral_id = $1', [rid])).rows[0].page_images, null);
+  });
+
+  test('a storage outage while rendering is no fault of the document: the job throws and writes nothing', async () => {
+    const { rid } = await referral('img4');
+    const p = { ...ports(() => [{ page: 1, text: PAGE }], clean), render: async () => { throw new Error('throttled'); } };
+    await assert.rejects(processReferral(tx, p, job(rid)), /throttled/);
+    const s = await state(rid);
+    assert.equal(s.status, 'processing');
+    assert.deepEqual(s.docs, [{ status: 'uploaded', pages: null }]);
   });
 
   test('a quote found only in another document does not verify', async () => {

@@ -1,4 +1,4 @@
-// The only code that parses a sender's file, run by render.ts in a process with no credentials and no write access. Reads one
+// The only code that parses a sender's file, run by render.ts inside its sandbox. Reads one
 // file on stdin and writes each page to stdout as a 4-byte length and a PNG. Any failure exits non-zero, with no document text.
 import { createRequire } from 'node:module';
 import { dirname, join } from 'node:path';
@@ -12,12 +12,21 @@ const { createCanvas, loadImage } = require('@napi-rs/canvas');
 const { getDocument } = await import('pdfjs-dist/legacy/build/pdf.mjs');
 const root = `${dirname(require.resolve('pdfjs-dist/package.json'))}/`;
 
+// pdf.js only warns about an image it cannot decode, and the page would come out with a hole in it
+console.warn = (message) => { if (String(message).includes('Unable to decode image')) process.exit(1); };
+
 const send = (png) => {
   const size = Buffer.alloc(4);
   size.writeUInt32BE(png.length);
   return new Promise((done) => { process.stdout.write(size); process.stdout.write(png, done); });
 };
 const fit = (width, height) => Math.min(SCALE, Math.sqrt(MAX_PIXELS / (width * height)));
+/** A very thin page has a small area but rounds up to a huge canvas, so the size is checked after rounding. */
+function canvasFor(width, height) {
+  const [w, h] = [Math.ceil(width), Math.ceil(height)];
+  if (w * h > 2 * MAX_PIXELS) throw new Error('page too large');
+  return createCanvas(w, h);
+}
 
 async function pdf(bytes) {
   const doc = await getDocument({
@@ -29,7 +38,7 @@ async function pdf(bytes) {
     const page = await doc.getPage(n);
     const { width, height } = page.getViewport({ scale: 1 });
     const viewport = page.getViewport({ scale: fit(width, height) });
-    const canvas = createCanvas(Math.ceil(viewport.width), Math.ceil(viewport.height));
+    const canvas = canvasFor(viewport.width, viewport.height);
     await page.render({ canvas, canvasContext: canvas.getContext('2d'), viewport }).promise;
     await send(canvas.toBuffer('image/png'));
     page.cleanup();
@@ -39,7 +48,7 @@ async function pdf(bytes) {
 async function image(bytes) {
   const picture = await loadImage(bytes);
   const scale = Math.min(1, fit(picture.width, picture.height));
-  const canvas = createCanvas(Math.ceil(picture.width * scale), Math.ceil(picture.height * scale));
+  const canvas = canvasFor(picture.width * scale, picture.height * scale);
   canvas.getContext('2d').drawImage(picture, 0, 0, canvas.width, canvas.height);
   await send(canvas.toBuffer('image/png')); // re-encoded: nothing of the sender's file reaches the browser
 }
@@ -52,4 +61,5 @@ const jpegHead = Buffer.from([0xff, 0xd8, 0xff]);
 if (bytes.subarray(0, 5).toString('latin1') === '%PDF-') await pdf(bytes);
 else if (bytes.subarray(0, 4).equals(pngHead) || bytes.subarray(0, 3).equals(jpegHead)) await image(bytes);
 // shortcut: TIFF gives no pages, so its facts are stated by a person; add a decoder if real packets arrive as TIFF
+else if (!['II*\u0000', 'MM\u0000*'].includes(bytes.subarray(0, 4).toString('latin1'))) process.exit(1);
 process.exit(0);

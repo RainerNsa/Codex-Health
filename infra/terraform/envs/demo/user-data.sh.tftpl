@@ -98,7 +98,7 @@ Wants=network-online.target
 User=codex
 WorkingDirectory=/srv/codex/app/apps/api
 EnvironmentFile=/etc/codex-api.env
-ExecStart=/usr/local/bin/node src/server.ts
+ExecStart=/usr/local/bin/node --disable-sigusr1 src/server.ts
 Restart=always
 NoNewPrivileges=true
 ProtectSystem=strict
@@ -108,7 +108,7 @@ PrivateTmp=true
 [Install]
 WantedBy=multi-user.target
 UNIT
-sed -e 's/Codex Health API/Codex Health worker/' -e 's#apps/api#services/worker#' -e 's/codex-api.env/codex-worker.env/' -e 's/server.ts/index.ts/' \
+sed -e 's/Codex Health API/Codex Health worker/' -e 's#apps/api#services/worker#' -e 's/codex-api.env/codex-worker.env/' -e 's/server.ts/index.ts/' -e 's/^Restart=always/Restart=always\nMemoryMax=1700M\nMemorySwapMax=0/' \
   /etc/systemd/system/codex-api.service > /etc/systemd/system/codex-worker.service
 systemctl daemon-reload
 systemctl enable --now codex-api codex-worker

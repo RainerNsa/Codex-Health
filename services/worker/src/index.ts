@@ -25,7 +25,7 @@ const clientSend = (c: { send: (x: never) => Promise<unknown> }): Send => (cmd) 
 const ports: Ports = {
   versions: { ...VERSIONS, model_id: modelId },
   ocr: textractOcr(clientSend(textract), bucket),
-  render: s3PageImages(clientSend(s3), bucket, process.env['S3_DOCUMENTS_KMS_KEY_ID']),
+  render: s3PageImages(clientSend(s3), bucket, requireEnv('S3_DOCUMENTS_KMS_KEY_ID')),
   extract: bedrockExtract(clientSend(bedrock), modelId, (usage) => console.log(JSON.stringify({ event: 'extract.usage', usage }))),
 };
 
