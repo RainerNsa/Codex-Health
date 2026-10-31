@@ -63,5 +63,5 @@ anything. M5 adds key-aware checks and the page-image confirmation that reads `s
 ## Open from the stage 3 persona reviews
 
 With sign-in (M6): the 15-minute idle timeout (§4.2); hiding Save settings from Reviewers and New referral from Viewers, which
-the API already refuses. Accepted until a page image shows in the app: `evidence.viewed` is recorded when the link is issued,
-not when the page loads.
+the API already refuses. `evidence.viewed` is recorded when the link is issued, not when the page loads. Accepted on synthetic
+data only, and it must end before any real patient data (founder ruling 2026-10-31); `m5-plan.md` step 2 delivers it.
