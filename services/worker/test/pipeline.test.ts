@@ -57,7 +57,7 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
   };
   const ports = (ocr: (id: string) => Page[], extract: (docId: string) => Extracted[]): Ports & { ocrCalls: number } => {
     const p = {
-      ocrCalls: 0, versions: VERSIONS,
+      ocrCalls: 0, versions: VERSIONS, render: async () => 1,
       async ocr(d: { id: string }) { p.ocrCalls += 1; return ocr(d.id); },
       async extract(pages: { document_id: string }[]) { return pages.flatMap((x) => extract(x.document_id)); },
     };
@@ -132,6 +132,28 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
     await processReferral(tx, ports(() => pages, (d) => clean(d).map((e) => (e.key === 'ventilator_use' ? { ...e, page: 2 } : e))), job(rid));
     const s = await state(rid);
     assert.equal(s.facts.find((f) => f.key === 'ventilator_use').evidence.verified, false);
+    assert.notEqual(s.evals[0].outcome, 'admit');
+  });
+
+  test('the page images a document got are recorded, and a file with none still reads', async () => {
+    const { rid } = await referral('img1');
+    await processReferral(tx, { ...ports(() => [{ page: 1, text: PAGE }], clean), render: async () => 6 }, job(rid));
+    await asOwner();
+    assert.equal((await c.query('SELECT page_images FROM documents WHERE referral_id = $1', [rid])).rows[0].page_images, 6);
+    const { rid: tiff } = await referral('img2');
+    await processReferral(tx, { ...ports(() => [{ page: 1, text: PAGE }], clean), render: async () => 0 }, job(tiff));
+    assert.equal((await state(tiff)).status, 'ready_for_review');
+  });
+
+  test('a file the renderer refuses fails alone, before any OCR, and leaves no facts (XF-8)', async () => {
+    const { rid } = await referral('img3');
+    const p = { ...ports(() => [{ page: 1, text: PAGE }], clean), render: async () => { throw new Error('hostile'); } };
+    let read = 0;
+    await processReferral(tx, { ...p, ocr: async () => { read += 1; return []; } }, job(rid));
+    const s = await state(rid);
+    assert.equal(read, 0);
+    assert.equal(s.status, 'partial_failure');
+    assert.equal(s.facts.length, 0);
     assert.notEqual(s.evals[0].outcome, 'admit');
   });
 
@@ -360,7 +382,7 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
   test('a stale job cannot finish a newer round of work; a duplicate during extraction writes nothing', async () => {
     const { rid } = await referral('n1');
     // while this job extracts, a duplicate finishes and a new document arrives
-    const outer: Ports = { versions: VERSIONS, ocr: async () => [{ page: 1, text: PAGE }], extract: async () => {
+    const outer: Ports = { versions: VERSIONS, render: async () => 1, ocr: async () => [{ page: 1, text: PAGE }], extract: async () => {
       await processReferral(tx, ports(() => [{ page: 1, text: PAGE }], clean), job(rid));
       await addDocument(rid, 'n2');
       return []; } };
@@ -369,7 +391,7 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
     assert.deepEqual([s.status, s.evals.length, s.facts.length], ['processing', 1, 3]);
     assert.ok(s.docs.some((d) => d.status === 'uploaded')); // the new document still waits for its own job
     const { rid: r2 } = await referral('n3');
-    const dup: Ports = { versions: VERSIONS, ocr: async () => [{ page: 1, text: PAGE }], extract: async () => {
+    const dup: Ports = { versions: VERSIONS, render: async () => 1, ocr: async () => [{ page: 1, text: PAGE }], extract: async () => {
       await processReferral(tx, ports(() => [{ page: 1, text: PAGE }], clean), job(r2)); return []; } };
     assert.equal(await processReferral(tx, dup, job(r2)), 'skipped');
     s = await state(r2);
@@ -378,7 +400,7 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
 
   test('switched-off rules are not extracted; the evaluation pins the profile version', async () => {
     const seen: string[][] = [];
-    const spy = (): Ports => ({ versions: VERSIONS, ocr: async () => [{ page: 1, text: PAGE }], extract: async (p, keys) => { seen.push(keys); return p.flatMap((x) => clean(x.document_id)); } });
+    const spy = (): Ports => ({ versions: VERSIONS, render: async () => 1, ocr: async () => [{ page: 1, text: PAGE }], extract: async (p, keys) => { seen.push(keys); return p.flatMap((x) => clean(x.document_id)); } });
     const a = await referral('o1');
     await processReferral(tx, spy(), job(a.rid));
     assert.deepEqual(seen[0], ['daily_skilled_need', 'recent_aggression', 'ventilator_use']);
@@ -441,7 +463,7 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
     const { rid, docs } = await referral('w1', 'w2');
     const bad = docs[0]!;
     const seen: string[][] = [];
-    const p: Ports = { versions: VERSIONS, ocr: async () => [{ page: 1, text: PAGE }], extract: async (pages) => {
+    const p: Ports = { versions: VERSIONS, render: async () => 1, ocr: async () => [{ page: 1, text: PAGE }], extract: async (pages) => {
       seen.push(pages.map((x) => x.document_id));
       if (pages[0]!.document_id === bad) throw new Error('SYNTHETIC-CANARY refused');
       return pages.flatMap((x) => clean(x.document_id));
@@ -461,7 +483,7 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
   test('a retried document is read on its own: earlier facts stay, and the referral goes to review', async () => {
     const { rid, docs } = await referral('w5', 'w6');
     const bad = docs[0]!;
-    const onlyGood: Ports = { versions: VERSIONS, ocr: async () => [{ page: 1, text: PAGE }], extract: async (p) => { if (p[0]!.document_id === bad) throw new Error('x'); return p.flatMap((d) => clean(d.document_id)); } };
+    const onlyGood: Ports = { versions: VERSIONS, render: async () => 1, ocr: async () => [{ page: 1, text: PAGE }], extract: async (p) => { if (p[0]!.document_id === bad) throw new Error('x'); return p.flatMap((d) => clean(d.document_id)); } };
     await processReferral(tx, onlyGood, job(rid));
     assert.equal((await state(rid)).status, 'partial_failure');
     await asOwner();
@@ -477,14 +499,14 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
 
   test('an unreadable document with an extraction outage on the rest is still an outage', async () => {
     const { rid, docs } = await referral('w3', 'w4');
-    const p: Ports = { versions: VERSIONS, ocr: async (d) => (d.id === docs[0] ? [] : [{ page: 1, text: PAGE }]), extract: async () => { throw new Error('down'); } };
+    const p: Ports = { versions: VERSIONS, render: async () => 1, ocr: async (d) => (d.id === docs[0] ? [] : [{ page: 1, text: PAGE }]), extract: async () => { throw new Error('down'); } };
     await assert.rejects(processReferral(tx, p, job(rid)), /no document could be extracted/);
     assert.equal((await state(rid)).status, 'processing');
   });
 
   test('a crash in extraction leaves nothing written, and the job can run again', async () => {
     const { rid } = await referral('i');
-    const crash: Ports = { versions: VERSIONS, ocr: async () => [{ page: 1, text: PAGE }], extract: async () => { throw new Error('boom'); } };
+    const crash: Ports = { versions: VERSIONS, render: async () => 1, ocr: async () => [{ page: 1, text: PAGE }], extract: async () => { throw new Error('boom'); } };
     await assert.rejects(processReferral(tx, crash, job(rid)), /no document could be extracted/);
     let s = await state(rid);
     assert.deepEqual([s.status, s.docs[0].status, s.facts, s.evals], ['processing', 'uploaded', [], []]);
@@ -554,7 +576,7 @@ describe('pipeline', { skip: !url && 'DATABASE_URL not set' }, () => {
     await failReferral(tx, VERSIONS, job(rid), Date.now());
     assert.equal((await state(rid)).status, 'processing');
     // a job holding the same document id, from before the retry
-    const stale: Ports = { versions: VERSIONS, ocr: async () => [{ page: 1, text: PAGE }], extract: async () => {
+    const stale: Ports = { versions: VERSIONS, render: async () => 1, ocr: async () => [{ page: 1, text: PAGE }], extract: async () => {
       await asOwner();
       await c.query("UPDATE documents SET updated_at = now() + interval '2 hours' WHERE id = $1", [docs[0]]);
       return []; } };

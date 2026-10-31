@@ -15,13 +15,15 @@ export interface Extracted { key: string; value: FactValue; document_id: string;
 export interface Ports {
   /** Page text of one document. Throws when it cannot be read; an empty result means nothing was legible. */
   ocr(doc: DocumentRef): Promise<Page[]>;
+  /** Stores an image of each page for a person to check facts against; returns how many. Throws when the file cannot be rendered. */
+  render(doc: DocumentRef): Promise<number>;
   /** Facts found in the pages, for these keys only. Silence on a key is simply no entry. */
   extract(pages: { document_id: string; pages: Page[] }[], keys: string[], types: Map<string, KeyType>): Promise<Extracted[]>;
   versions: { model_id: string; prompt_version: string; extractor_version: string; ocr_engine_version: string };
 }
 export interface Job { facilityId: string; referralId: string; jobId: string }
 
-type Outcome = { doc: DocumentRef; status: 'processed'; pages: Page[]; ms: number } | { doc: DocumentRef; status: 'failed' | 'unreadable'; pages: []; ms: number; stage: 'ocr' | 'extract' };
+type Outcome = { doc: DocumentRef; status: 'processed'; pages: Page[]; images: number; ms: number } | { doc: DocumentRef; status: 'failed' | 'unreadable'; pages: []; ms: number; stage: 'ocr' | 'extract' };
 
 const isKnown = (v: FactValue) => v.value !== null && v.value !== 'unknown';
 const JOB_ID = /^[a-z0-9-]{1,64}$/;
@@ -99,8 +101,9 @@ export async function processReferral(tx: Tx, ports: Ports, job: Job): Promise<'
   for (const doc of plan.docs) {
     const start = Date.now();
     try {
+      const images = await ports.render(doc); // first: a hostile file dies in the renderer, before any OCR or model spend (XF-8)
       const pages = (await ports.ocr(doc)).filter((p) => p.text.trim() !== '');
-      results.push(pages.length ? { doc, status: 'processed', pages, ms: Date.now() - start } : { doc, status: 'unreadable', pages: [], ms: Date.now() - start, stage: 'ocr' });
+      results.push(pages.length ? { doc, status: 'processed', pages, images, ms: Date.now() - start } : { doc, status: 'unreadable', pages: [], ms: Date.now() - start, stage: 'ocr' });
     } catch {
       results.push({ doc, status: 'failed', pages: [], ms: Date.now() - start, stage: 'ocr' }); // never the error text: it can quote the document
     }
@@ -131,7 +134,7 @@ export async function processReferral(tx: Tx, ports: Ports, job: Job): Promise<'
     if (!set) throw new Error('facility has no rule set or profile');
 
     for (const r of results) {
-      await q('UPDATE documents SET status = $3, pages = $4, updated_at = now() WHERE facility_id = $1 AND id = $2', [fid, r.doc.id, r.status, r.pages.length || null]);
+      await q('UPDATE documents SET status = $3, pages = $4, page_images = $5, updated_at = now() WHERE facility_id = $1 AND id = $2', [fid, r.doc.id, r.status, r.pages.length || null, r.status === 'processed' ? r.images : null]);
       await q('INSERT INTO audit_log (facility_id, actor, action, entity_type, entity_id) VALUES ($1, $2, $3, $4, $5)', [fid, actor, `document.${r.status}`, 'document', r.doc.id]);
       await q('INSERT INTO product_events (facility_id, referral_id, actor, event, attrs) VALUES ($1, $2, $3, $4, $5)', [fid, rid, actor, r.status === 'processed' ? 'document.processed' : 'document.failed',
         r.status === 'processed' ? { document_id: r.doc.id, pages_ocr: r.pages.length, duration_ms: r.ms } : { document_id: r.doc.id, pages_ocr: 0, stage: r.stage, duration_ms: r.ms }]);
@@ -239,7 +242,7 @@ export async function failReferral(tx: Tx, versions: Ports['versions'], job: Job
     return (await q<{ newest: Date | null }>("SELECT max(updated_at) AS newest FROM documents WHERE facility_id = $1 AND referral_id = $2 AND status = 'uploaded'", [job.facilityId, job.referralId])).rows[0]?.newest;
   });
   if (newest && newest.getTime() > sentAt + CLOCK_MARGIN_MS) return;
-  const nothingRead: Ports = { versions, ocr: async () => { throw new Error('job dead-lettered'); }, extract: async () => [] };
+  const nothingRead: Ports = { versions, render: async () => 0, ocr: async () => { throw new Error('job dead-lettered'); }, extract: async () => [] };
   try {
     await processReferral(tx, nothingRead, job);
   } catch {

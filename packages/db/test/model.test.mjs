@@ -76,6 +76,7 @@ test('referral data model', { skip: !url && 'DATABASE_URL not set' }, async (t) 
     await sub('documents: not_applicable needs a reason and nothing else may carry one; duplicates are per referral; the storage key is derived', async () => {
       await bind(c, FAC.a);
       await insertDoc(FAC.a, refs.a, 'one');
+      await rejects(c, () => c.query("INSERT INTO documents (facility_id, referral_id, type, sha256, storage_key, page_images) VALUES ($1, $2, 'other', decode($3, 'hex'), $4, 1)", [FAC.a, refs.a, 'ab'.repeat(32), docKey(FAC.a, refs.a, 'ab'.repeat(32))]), /page images are reported by the pipeline/);
       await rejects(c, () => insertDoc(FAC.a, refs.a, 'two', { status: 'not_applicable', reason: '  ' }), /"documents_check1"/);
       await rejects(c, () => insertDoc(FAC.a, refs.a, 'three', { status: 'uploaded', reason: 'SYNTHETIC reason' }), /"documents_check1"/);
       await insertDoc(FAC.a, refs.a, 'four', { status: 'not_applicable', reason: 'SYNTHETIC: fax cover sheet' });

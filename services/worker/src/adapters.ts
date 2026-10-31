@@ -2,8 +2,11 @@
 // never calls Textract or Bedrock. No error raised here carries document text: a provider's message can quote the page.
 import { GetDocumentTextDetectionCommand, StartDocumentTextDetectionCommand, type Block } from '@aws-sdk/client-textract';
 import { InvokeModelCommand } from '@aws-sdk/client-bedrock-runtime';
+import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
+import { pageImageKey } from '@codex-health/shared';
 import type { KeyType } from '@codex-health/rules-engine';
 import type { DocumentRef, Extracted, Page, Ports } from './pipeline.ts';
+import { renderPages } from './render.ts';
 
 export type Send = (command: object) => Promise<Record<string, unknown>>;
 
@@ -39,6 +42,20 @@ export function textractOcr(send: Send, bucket: string, pollMs = 2000, timeoutMs
     }
     if (pages.size > MAX_PAGES) throw new Error('document has too many pages');
     return [...pages].sort(([a], [b]) => a - b).map(([page, lines]) => ({ page, text: lines.join('\n') }));
+  };
+}
+
+/** Renders the stored file and keeps each page beside it. The names come from the file's hash, so a repeated job rewrites the
+ *  same objects. kmsKeyId: the bucket refuses any write that does not ask for SSE-KMS; LocalStack runs without one. */
+export function s3PageImages(send: Send, bucket: string, kmsKeyId?: string, render = renderPages): Ports['render'] {
+  const sse = kmsKeyId ? { ServerSideEncryption: 'aws:kms' as const, SSEKMSKeyId: kmsKeyId } : {};
+  return async (doc: DocumentRef): Promise<number> => {
+    const r = await send(new GetObjectCommand({ Bucket: bucket, Key: doc.storage_key }));
+    const pages = await render(await (r['Body'] as { transformToByteArray(): Promise<Uint8Array> }).transformToByteArray());
+    for (const [i, png] of pages.entries()) {
+      await send(new PutObjectCommand({ Bucket: bucket, Key: pageImageKey(doc.storage_key, i + 1), Body: png, ContentType: 'image/png', ...sse }));
+    }
+    return pages.length;
   };
 }
 

@@ -82,6 +82,7 @@ DATABASE_URL_WORKER=postgres://codex_worker:$${WORKER_PW}@127.0.0.1:5432/codex_h
 SQS_PROCESSING_QUEUE_URL=${queue_url}
 SQS_PROCESSING_DLQ_URL=${dlq_url}
 S3_DOCUMENTS_BUCKET=${docs_bucket}
+S3_DOCUMENTS_KMS_KEY_ID=${docs_key_arn}
 BEDROCK_MODEL_ID=${model_id}
 AWS_REGION=${region}
 ENV

@@ -2,11 +2,29 @@
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { GetDocumentTextDetectionCommand, StartDocumentTextDetectionCommand } from '@aws-sdk/client-textract';
+import { GetObjectCommand, PutObjectCommand } from '@aws-sdk/client-s3';
 import { ChangeMessageVisibilityCommand, DeleteMessageCommand, ReceiveMessageCommand } from '@aws-sdk/client-sqs';
-import { bedrockExtract, textractOcr, type Send } from '../src/adapters.ts';
+import { bedrockExtract, s3PageImages, textractOcr, type Send } from '../src/adapters.ts';
 import { drain } from '../src/loop.ts';
 
 const doc = { id: 'd1', storage_key: 'documents/f/r/abc' };
+test('page images are stored encrypted beside the file, named by page, under its own prefix', async () => {
+  const sent: object[] = [];
+  const send: Send = async (cmd) => { sent.push(cmd); return cmd instanceof GetObjectCommand ? { Body: { transformToByteArray: async () => new Uint8Array([1]) } } : {}; };
+  const render = s3PageImages(send, 'bucket', 'key-arn', async () => [Buffer.from('a'), Buffer.from('b')]);
+  assert.equal(await render(doc), 2);
+  const puts = sent.filter((c): c is PutObjectCommand => c instanceof PutObjectCommand).map((c) => c.input);
+  assert.deepEqual(puts.map((p) => p.Key), ['documents/f/r/pages/abc/1.png', 'documents/f/r/pages/abc/2.png']);
+  assert.ok(puts.every((p) => p.ServerSideEncryption === 'aws:kms' && p.SSEKMSKeyId === 'key-arn' && p.ContentType === 'image/png'));
+});
+
+test('a file that cannot be rendered stores nothing', async () => {
+  const sent: object[] = [];
+  const send: Send = async (cmd) => { sent.push(cmd); return { Body: { transformToByteArray: async () => new Uint8Array([1]) } }; };
+  await assert.rejects(s3PageImages(send, 'bucket', undefined, async () => { throw new Error('no'); })(doc));
+  assert.equal(sent.filter((c) => c instanceof PutObjectCommand).length, 0);
+});
+
 const line = (Page: number, Text: string) => ({ BlockType: 'LINE', Page, Text });
 
 test('OCR waits for the job, follows every result page, and returns pages in order', async () => {

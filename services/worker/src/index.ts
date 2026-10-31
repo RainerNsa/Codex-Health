@@ -1,10 +1,11 @@
 // The worker: reads the processing queue, and the dead-letter queue so that a job which used up its deliveries reaches a
 // person. If the queue itself cannot be read, it exits and the service manager restarts it.
 import { BedrockRuntimeClient } from '@aws-sdk/client-bedrock-runtime';
+import { S3Client } from '@aws-sdk/client-s3';
 import { SQSClient } from '@aws-sdk/client-sqs';
 import { TextractClient } from '@aws-sdk/client-textract';
 import { bedrockClientConfig, requireEnv } from '@codex-health/shared';
-import { bedrockExtract, textractOcr, VERSIONS, type Send } from './adapters.ts';
+import { bedrockExtract, s3PageImages, textractOcr, VERSIONS, type Send } from './adapters.ts';
 import { poolTx } from './db.ts';
 import { drain, handlers } from './loop.ts';
 import type { Ports } from './pipeline.ts';
@@ -17,12 +18,14 @@ const { region, modelId } = bedrockClientConfig({ region: requireEnv('AWS_REGION
 
 const sqs = new SQSClient({ region });
 const textract = new TextractClient({ region });
+const s3 = new S3Client({ region });
 const bedrock = new BedrockRuntimeClient({ region, requestHandler: { requestTimeout: 300_000 } });
 const clientSend = (c: { send: (x: never) => Promise<unknown> }): Send => (cmd) => c.send(cmd as never) as Promise<Record<string, unknown>>;
 
 const ports: Ports = {
   versions: { ...VERSIONS, model_id: modelId },
   ocr: textractOcr(clientSend(textract), bucket),
+  render: s3PageImages(clientSend(s3), bucket, process.env['S3_DOCUMENTS_KMS_KEY_ID']),
   extract: bedrockExtract(clientSend(bedrock), modelId, (usage) => console.log(JSON.stringify({ event: 'extract.usage', usage }))),
 };
 
