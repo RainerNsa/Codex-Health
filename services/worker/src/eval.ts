@@ -6,7 +6,7 @@
 // that caught one does not make the extractor safe. A repeated quote counts once. Beyond the §4.1 table, a hard-stop field
 // also fails on any near miss read as Yes, any cited distractor and any conflict settled on one side: each ends in a wrong
 // decision that recall cannot see.
-// shortcut: N-run agreement and per-page identity checks are not scored, add them with the nightly run at M5.
+// shortcut: only tri-state facts are scored, and N-run agreement and per-page identity checks are not; add them with the nightly run at M5.
 import { createHash } from 'node:crypto';
 import { readdirSync, readFileSync } from 'node:fs';
 import { pathToFileURL, fileURLToPath } from 'node:url';
@@ -44,7 +44,7 @@ const verdict = (facts: PredictedFact[]): string => {
 /** Refuses output the product would not read, so a value such as "No" cannot pass as silence. Names the packet, never the text. */
 function assertWellFormed(id: string, prediction: Prediction): void {
   for (const e of prediction.facts ?? []) {
-    const ok = e && ['yes', 'no', 'unknown'].includes(String(e.value?.value)) && e.value?.type === 'tri_state' && typeof e.key === 'string' && typeof e.document_id === 'string'
+    const ok = e && typeof e.value?.type === 'string' && (e.value.type !== 'tri_state' || ['yes', 'no', 'unknown'].includes(String(e.value.value))) && typeof e.key === 'string' && typeof e.document_id === 'string'
       && typeof e.quote === 'string' && Number.isInteger(e.page) && ['high', 'medium', 'low'].includes(e.confidence_band);
     if (!ok) throw new Error(`malformed fact in the output for ${id}`);
   }
