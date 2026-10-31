@@ -1,0 +1,15 @@
+{
+  "generator_version": "packet-gen-1",
+  "seed": -2119122727,
+  "spec": {
+    "id": "gen_aggr_no",
+    "focus": "recent_aggression",
+    "value": "no"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": 0.52,
+    "gray": 0.25,
+    "speckle": 44
+  }
+}

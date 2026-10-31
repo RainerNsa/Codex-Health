@@ -1,0 +1,15 @@
+{
+  "generator_version": "packet-gen-1",
+  "seed": -1264406960,
+  "spec": {
+    "id": "gen_mcaid_no",
+    "focus": "payer_medicaid_pending",
+    "value": "no"
+  },
+  "degrade": {
+    "rotate": 90,
+    "skewDegrees": 0.2,
+    "gray": 0.08,
+    "speckle": 49
+  }
+}

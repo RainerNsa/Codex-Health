@@ -23,6 +23,7 @@ code/
 │   └── api/              HTTP API (facility-scoped, RLS-backed)
 ├── services/worker/      document pipeline workers (OCR, extract, verify) — never public
 ├── packages/
+│   ├── packets/         # synthetic referral packet generator (SPEC §15, 4.5)
 │   ├── rules-engine/     pure deterministic engine + CLI; three-valued logic; no I/O
 │   ├── schemas/          extraction facts, facility profile, rule record (JSON Schema, versioned)
 │   ├── db/               migrations, roles, RLS policies, audit-log triggers
