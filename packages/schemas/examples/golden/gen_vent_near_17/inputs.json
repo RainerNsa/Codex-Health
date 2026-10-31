@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": 1675800233,
+  "spec": {
+    "id": "gen_vent_near_17",
+    "focus": "ventilator_use",
+    "value": "no",
+    "phrase": "ventilator not needed, breathing well on room air"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": 1.5,
+    "blur": false,
+    "fade": 0.1,
+    "speckle": 541,
+    "dropouts": 2,
+    "fax": false
+  }
+}

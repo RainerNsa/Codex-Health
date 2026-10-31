@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": -156026525,
+  "spec": {
+    "id": "gen_vent_pos_15",
+    "focus": "ventilator_use",
+    "value": "yes",
+    "phrase": "ventilator dependent since the spinal injury"
+  },
+  "degrade": {
+    "rotate": 180,
+    "skewDegrees": -0.66,
+    "blur": true,
+    "fade": 0.13,
+    "speckle": 232,
+    "dropouts": 2,
+    "fax": true
+  }
+}

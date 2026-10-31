@@ -1,7 +1,7 @@
 {
   "packet_id": "gen_aggr_absent",
   "set": "extraction_eval",
-  "generator_version": "packet-gen-1",
+  "generator_version": "packet-gen-2",
   "referral_date": "2001-01-10",
   "referral_type": "skilled",
   "documents": [
@@ -22,10 +22,26 @@
       "expected_status": "processed"
     },
     {
+      "document_id": "doc_history_physical",
+      "type": "history_physical",
+      "pages": [
+        3
+      ],
+      "expected_status": "processed"
+    },
+    {
       "document_id": "doc_discharge_summary",
       "type": "discharge_summary",
       "pages": [
-        3
+        4
+      ],
+      "expected_status": "processed"
+    },
+    {
+      "document_id": "doc_medication_record",
+      "type": "medication_record",
+      "pages": [
+        5
       ],
       "expected_status": "processed"
     },
@@ -33,7 +49,7 @@
       "document_id": "doc_nursing_note",
       "type": "nursing_note",
       "pages": [
-        4
+        6
       ],
       "expected_status": "processed"
     }
@@ -70,11 +86,11 @@
         "value": "no"
       },
       "document_id": "doc_discharge_summary",
-      "page": 3,
-      "quote": "no longer ventilator dependent and stable on room air",
+      "page": 4,
+      "quote": "oxygen by mask only, not on mechanical ventilation",
       "span": {
-        "start": 189,
-        "end": 242
+        "start": 334,
+        "end": 384
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -124,8 +140,8 @@
       "page": 2,
       "quote": "Medicaid pending with application filed this week",
       "span": {
-        "start": 282,
-        "end": 331
+        "start": 788,
+        "end": 837
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",

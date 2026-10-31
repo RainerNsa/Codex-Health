@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": 1675800234,
+  "spec": {
+    "id": "gen_vent_near_18",
+    "focus": "ventilator_use",
+    "value": "no",
+    "phrase": "respiratory therapy signed off, no vent required"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": -0.28,
+    "blur": false,
+    "fade": 0.15,
+    "speckle": 708,
+    "dropouts": 2,
+    "fax": true
+  }
+}

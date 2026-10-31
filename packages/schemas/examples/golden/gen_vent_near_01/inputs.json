@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": 1675800196,
+  "spec": {
+    "id": "gen_vent_near_01",
+    "focus": "ventilator_use",
+    "value": "no",
+    "phrase": "weaned from the ventilator on day 4 and not on a ventilator now"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": -0.23,
+    "blur": false,
+    "fade": 0.08,
+    "speckle": 482,
+    "dropouts": 1,
+    "fax": true
+  }
+}

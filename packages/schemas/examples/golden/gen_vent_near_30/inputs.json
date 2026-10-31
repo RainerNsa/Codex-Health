@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": 1675800288,
+  "spec": {
+    "id": "gen_vent_near_30",
+    "focus": "ventilator_use",
+    "value": "no",
+    "phrase": "tracheostomy removed, stoma healed, room air today"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": 0.27,
+    "blur": true,
+    "fade": 0.02,
+    "speckle": 404,
+    "dropouts": 3,
+    "fax": false
+  }
+}

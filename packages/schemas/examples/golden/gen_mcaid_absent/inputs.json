@@ -1,5 +1,5 @@
 {
-  "generator_version": "packet-gen-1",
+  "generator_version": "packet-gen-2",
   "seed": 357737544,
   "spec": {
     "id": "gen_mcaid_absent",
@@ -7,9 +7,12 @@
     "value": "unknown"
   },
   "degrade": {
-    "rotate": 180,
-    "skewDegrees": 0.06,
-    "gray": 0.15,
-    "speckle": 75
+    "rotate": 0,
+    "skewDegrees": 1.48,
+    "blur": false,
+    "fade": 0.02,
+    "speckle": 163,
+    "dropouts": 1,
+    "fax": true
   }
 }

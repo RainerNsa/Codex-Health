@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": 1675800258,
+  "spec": {
+    "id": "gen_vent_near_21",
+    "focus": "ventilator_use",
+    "value": "no",
+    "phrase": "ventilator was not used after the first night"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": -0.29,
+    "blur": true,
+    "fade": 0.21,
+    "speckle": 752,
+    "dropouts": 4,
+    "fax": true
+  }
+}

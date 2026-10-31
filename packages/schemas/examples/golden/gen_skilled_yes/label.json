@@ -1,7 +1,7 @@
 {
   "packet_id": "gen_skilled_yes",
   "set": "extraction_eval",
-  "generator_version": "packet-gen-1",
+  "generator_version": "packet-gen-2",
   "referral_date": "2001-01-10",
   "referral_type": "skilled",
   "documents": [
@@ -22,10 +22,26 @@
       "expected_status": "processed"
     },
     {
+      "document_id": "doc_history_physical",
+      "type": "history_physical",
+      "pages": [
+        3
+      ],
+      "expected_status": "processed"
+    },
+    {
       "document_id": "doc_discharge_summary",
       "type": "discharge_summary",
       "pages": [
-        3
+        4
+      ],
+      "expected_status": "processed"
+    },
+    {
+      "document_id": "doc_medication_record",
+      "type": "medication_record",
+      "pages": [
+        5
       ],
       "expected_status": "processed"
     },
@@ -33,7 +49,7 @@
       "document_id": "doc_nursing_note",
       "type": "nursing_note",
       "pages": [
-        4
+        6
       ],
       "expected_status": "processed"
     }
@@ -79,11 +95,11 @@
         "value": "no"
       },
       "document_id": "doc_discharge_summary",
-      "page": 3,
-      "quote": "decannulated and not on a ventilator at discharge",
+      "page": 4,
+      "quote": "off the vent and no longer needs trach care",
       "span": {
-        "start": 324,
-        "end": 373
+        "start": 469,
+        "end": 512
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -98,11 +114,11 @@
         "value": "yes"
       },
       "document_id": "doc_discharge_summary",
-      "page": 3,
+      "page": 4,
       "quote": "requires daily skilled therapy for gait retraining",
       "span": {
-        "start": 210,
-        "end": 260
+        "start": 355,
+        "end": 405
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -117,11 +133,11 @@
         "value": "yes"
       },
       "document_id": "doc_nursing_note",
-      "page": 4,
+      "page": 6,
       "quote": "struck a staff member during morning care two days ago",
       "span": {
-        "start": 234,
-        "end": 288
+        "start": 359,
+        "end": 413
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -139,8 +155,8 @@
       "page": 2,
       "quote": "Medicaid is not pending and coverage is through Medicare",
       "span": {
-        "start": 277,
-        "end": 333
+        "start": 783,
+        "end": 839
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -158,8 +174,8 @@
       "page": 2,
       "quote": "eligibility has not been verified with the payer",
       "span": {
-        "start": 191,
-        "end": 239
+        "start": 697,
+        "end": 745
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",

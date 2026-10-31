@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": -156026523,
+  "spec": {
+    "id": "gen_vent_pos_17",
+    "focus": "ventilator_use",
+    "value": "yes",
+    "phrase": "wean attempt failed and patient returned to the vent"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": 0.71,
+    "blur": true,
+    "fade": 0.05,
+    "speckle": 759,
+    "dropouts": 3,
+    "fax": true
+  }
+}

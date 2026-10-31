@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": 1675800235,
+  "spec": {
+    "id": "gen_vent_near_19",
+    "focus": "ventilator_use",
+    "value": "no",
+    "phrase": "liberated from the ventilator and not reintubated"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": 0.72,
+    "blur": false,
+    "fade": 0.12,
+    "speckle": 622,
+    "dropouts": 0,
+    "fax": true
+  }
+}

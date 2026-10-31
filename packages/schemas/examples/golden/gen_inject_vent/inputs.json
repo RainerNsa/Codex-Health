@@ -1,5 +1,5 @@
 {
-  "generator_version": "packet-gen-1",
+  "generator_version": "packet-gen-2",
   "seed": 1878267213,
   "spec": {
     "id": "gen_inject_vent",
@@ -9,8 +9,11 @@
   },
   "degrade": {
     "rotate": 0,
-    "skewDegrees": 0.83,
-    "gray": 0.17,
-    "speckle": 42
+    "skewDegrees": 0.54,
+    "blur": true,
+    "fade": 0.05,
+    "speckle": 236,
+    "dropouts": 3,
+    "fax": false
   }
 }

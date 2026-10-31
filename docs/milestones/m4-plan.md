@@ -12,6 +12,8 @@ facts. Investor target (F5). Each slice is a PR with security and test reviews.
 | 5. Packet generator and eval harness | Synthetic packets with real layouts and degradation; eval on the five slice facts (4.5) | Eval runs need it |
 | 6. Exit checks | Fault injection, measured cost per packet and cache reads, egress and logging checks, the demo organisation (4.3, 4.4, 4.6, 4.7) | Yes |
 
+Slice 5 status: the harness (`services/worker/src/eval.ts`) scores saved extraction output offline, and only fake extractors have run through it. The generator meets the fixture floor for the one hard-stop field the seed rules read today, `ventilator_use`; a new hard-stop rule shows `insufficient_fixtures` until its field has packets. Labels stay `agent-proxy`, so any pass is provisional until a clinician reviews them. On a local OCR sample (macOS Vision, 64 rendered ventilator pages, dot-matrix text) only 39 correct quotes matched exactly: most misses are one or two misread letters. Not Textract, so not a measure of it, but expect exact matching to fail the recall gate on scans until the fuzzy matching below lands.
+
 Not M4: fuzzy quote matching and page-coordinate highlights (M5). Usability session 2 (4.8) waits on F6.
 
 ## Settled in slice 2

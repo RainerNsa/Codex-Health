@@ -1,8 +1,12 @@
-Fax received 2001-01-10 09:07  SYNTHETIC
-NURSING PROGRESS NOTE (synthetic fixture; not a real document)
+Fax received 2001-01-10 09:07  SYNTHETIC   Page 4 of 6
+DISCHARGE SUMMARY (synthetic fixture; not a real document)
 Patient: ZZTEST CANARY-ALPHA   MRN: MRN-ZZCANARY-0000001   DOB: 1899-02-30
+=================================================================================
+HOSPITAL COURSE AND PLAN
+------------------------
+Allergies: none recorded in this synthetic chart
+Diet: regular, thin liquids
+Vitals: BP 128/76, HR 82, temp 36.8, SpO2 96 percent
+Respiratory: intubated briefly in the OR, no ventilator since surgery.
 
-Family updated by phone this afternoon
-Skin intact apart from the documented site
-Ate most of breakfast and lunch
-Behaviour: denies any aggressive behaviour this admission.
+Electronically signed: ZZTEST, Physician

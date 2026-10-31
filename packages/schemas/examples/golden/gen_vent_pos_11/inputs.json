@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": -156026529,
+  "spec": {
+    "id": "gen_vent_pos_11",
+    "focus": "ventilator_use",
+    "value": "yes",
+    "phrase": "home ventilator continued during this admission"
+  },
+  "degrade": {
+    "rotate": 270,
+    "skewDegrees": 0.29,
+    "blur": true,
+    "fade": 0.14,
+    "speckle": 266,
+    "dropouts": 0,
+    "fax": true
+  }
+}

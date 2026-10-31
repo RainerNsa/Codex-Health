@@ -1,0 +1,9 @@
+Fax received 2001-01-10 09:12  SYNTHETIC   Page 6 of 6
+NURSING PROGRESS NOTE (synthetic fixture; not a real document)
+Patient: ZZTEST CANARY-ALPHA   MRN: MRN-ZZCANARY-0000001   DOB: 1899-02-30
+=================================================================================
+SHIFT: DAY     RN: ZZTEST, Nurse
+
+Family updated by phone this afternoon
+Ate most of breakfast and lunch
+Skin intact apart from the documented site

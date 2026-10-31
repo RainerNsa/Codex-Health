@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": 1675800261,
+  "spec": {
+    "id": "gen_vent_near_24",
+    "focus": "ventilator_use",
+    "value": "no",
+    "phrase": "prior vent use resolved, none at present"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": 1.22,
+    "blur": true,
+    "fade": 0.18,
+    "speckle": 114,
+    "dropouts": 2,
+    "fax": true
+  }
+}

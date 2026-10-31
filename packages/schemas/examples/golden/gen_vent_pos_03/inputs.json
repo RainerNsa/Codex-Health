@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": -156026558,
+  "spec": {
+    "id": "gen_vent_pos_03",
+    "focus": "ventilator_use",
+    "value": "yes",
+    "phrase": "requires ventilator support overnight and at rest"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": 1.13,
+    "blur": false,
+    "fade": 0.14,
+    "speckle": 953,
+    "dropouts": 2,
+    "fax": false
+  }
+}

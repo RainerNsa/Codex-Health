@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": -156026493,
+  "spec": {
+    "id": "gen_vent_pos_26",
+    "focus": "ventilator_use",
+    "value": "yes",
+    "phrase": "patient cannot breathe off the ventilator for long"
+  },
+  "degrade": {
+    "rotate": 270,
+    "skewDegrees": -0.26,
+    "blur": false,
+    "fade": 0.16,
+    "speckle": 479,
+    "dropouts": 0,
+    "fax": true
+  }
+}

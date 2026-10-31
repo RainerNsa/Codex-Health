@@ -316,7 +316,7 @@ A golden packet is a synthetic referral packet plus a label file that says what 
 Two artefacts, never mixed:
 
 - **The case library** (the 17 Phase 9 case types, two packets each): tests that the whole workflow reaches the right outcome for each kind of referral. Its labels carry the packet-level fields below; per-field labels are optional.
-- **The extraction-evaluation set**: tests per-field recall on hard-stop fields against the CONSTRAINTS §4.1 gate. Its labels carry every per-field element; it lives in its own directory so the gate cannot be padded with case-library packets. QA authors ≥ 30 positive and ≥ 30 near-miss negative fixtures per hard-stop field (R4); the enforced floor is whatever `CONSTRAINTS.md` §4.1 says, ≥ 25 today, and raising it to 30 is a pending `constraints-change` PR now that a remote exists.
+- **The extraction-evaluation set**: tests per-field recall on hard-stop fields against the CONSTRAINTS §4.1 gate. Its labels carry every per-field element; it lives in its own directory so the gate cannot be padded with case-library packets. QA authors ≥ 30 positive and ≥ 30 near-miss negative fixtures per hard-stop field (R4); the enforced floor is whatever `CONSTRAINTS.md` §4.1 says, ≥ 30 since R4 was applied on 2026-10-29. Until a case library exists, `examples/golden/` holds only this set; the harness refuses a packet labelled for any other set, and a repeated quote counts once toward the floor.
 
 ### 15.1 Per packet
 

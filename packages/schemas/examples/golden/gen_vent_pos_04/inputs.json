@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": -156026557,
+  "spec": {
+    "id": "gen_vent_pos_04",
+    "focus": "ventilator_use",
+    "value": "yes",
+    "phrase": "trach to vent, assist control, rate 14"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": 0.72,
+    "blur": false,
+    "fade": 0.13,
+    "speckle": 1032,
+    "dropouts": 4,
+    "fax": true
+  }
+}

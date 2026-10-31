@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": -156026528,
+  "spec": {
+    "id": "gen_vent_pos_12",
+    "focus": "ventilator_use",
+    "value": "yes",
+    "phrase": "on pressure support ventilation via tracheostomy"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": 0.61,
+    "blur": false,
+    "fade": 0.08,
+    "speckle": 512,
+    "dropouts": 1,
+    "fax": true
+  }
+}

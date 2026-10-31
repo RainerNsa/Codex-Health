@@ -1,5 +1,5 @@
 {
-  "generator_version": "packet-gen-1",
+  "generator_version": "packet-gen-2",
   "seed": -1957113556,
   "spec": {
     "id": "gen_conflict_vent",
@@ -7,9 +7,12 @@
     "value": "conflict"
   },
   "degrade": {
-    "rotate": 0,
-    "skewDegrees": 1.24,
-    "gray": 0.12,
-    "speckle": 38
+    "rotate": 180,
+    "skewDegrees": 1.37,
+    "blur": true,
+    "fade": 0.18,
+    "speckle": 75,
+    "dropouts": 0,
+    "fax": true
   }
 }

@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": 1675800227,
+  "spec": {
+    "id": "gen_vent_near_11",
+    "focus": "ventilator_use",
+    "value": "no",
+    "phrase": "no ventilator or tracheostomy needs at discharge"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": -1.48,
+    "blur": false,
+    "fade": 0.01,
+    "speckle": 935,
+    "dropouts": 0,
+    "fax": false
+  }
+}

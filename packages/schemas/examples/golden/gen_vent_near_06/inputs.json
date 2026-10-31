@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": 1675800201,
+  "spec": {
+    "id": "gen_vent_near_06",
+    "focus": "ventilator_use",
+    "value": "no",
+    "phrase": "CPAP at night for sleep apnea, no ventilator use"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": 1.39,
+    "blur": true,
+    "fade": 0.16,
+    "speckle": 115,
+    "dropouts": 0,
+    "fax": true
+  }
+}

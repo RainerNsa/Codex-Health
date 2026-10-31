@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": -156026492,
+  "spec": {
+    "id": "gen_vent_pos_27",
+    "focus": "ventilator_use",
+    "value": "yes",
+    "phrase": "ventilator weaning unsuccessful, full support resumed"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": 0.94,
+    "blur": false,
+    "fade": 0.21,
+    "speckle": 1062,
+    "dropouts": 0,
+    "fax": false
+  }
+}

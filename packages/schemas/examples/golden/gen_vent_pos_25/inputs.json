@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": -156026494,
+  "spec": {
+    "id": "gen_vent_pos_25",
+    "focus": "ventilator_use",
+    "value": "yes",
+    "phrase": "tracheostomy with ventilator support around the clock"
+  },
+  "degrade": {
+    "rotate": 180,
+    "skewDegrees": 1.36,
+    "blur": true,
+    "fade": 0.01,
+    "speckle": 225,
+    "dropouts": 0,
+    "fax": true
+  }
+}

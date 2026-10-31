@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": 1675800262,
+  "spec": {
+    "id": "gen_vent_near_25",
+    "focus": "ventilator_use",
+    "value": "no",
+    "phrase": "vent dependent in ICU, weaned before discharge"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": -0.86,
+    "blur": true,
+    "fade": 0.18,
+    "speckle": 629,
+    "dropouts": 2,
+    "fax": true
+  }
+}

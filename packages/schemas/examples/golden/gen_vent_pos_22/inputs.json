@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": -156026497,
+  "spec": {
+    "id": "gen_vent_pos_22",
+    "focus": "ventilator_use",
+    "value": "yes",
+    "phrase": "transferred on the ventilator from the ICU"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": -0.8,
+    "blur": true,
+    "fade": 0.07,
+    "speckle": 447,
+    "dropouts": 3,
+    "fax": true
+  }
+}

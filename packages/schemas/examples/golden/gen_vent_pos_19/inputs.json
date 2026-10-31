@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": -156026521,
+  "spec": {
+    "id": "gen_vent_pos_19",
+    "focus": "ventilator_use",
+    "value": "yes",
+    "phrase": "long term ventilator patient with stable settings"
+  },
+  "degrade": {
+    "rotate": 270,
+    "skewDegrees": -0.32,
+    "blur": false,
+    "fade": 0.13,
+    "speckle": 388,
+    "dropouts": 3,
+    "fax": true
+  }
+}
