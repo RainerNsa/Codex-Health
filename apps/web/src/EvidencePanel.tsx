@@ -27,8 +27,10 @@ export function EvidencePanel({ view, facility, user, busy, onConfirm, form }: {
     setMsg(null);
     if (!f.evidence) return;
     try {
-      const { url } = await viewDocument(facility, view.referral.id, user, f.evidence.document_id, f.id);
+      const { url, expires_in } = await viewDocument(facility, view.referral.id, user, f.evidence.document_id, f.id);
       setLink({ id: f.id, url: `${url}#page=${f.evidence.page}` });
+      // an expired link opens an error page, so it must not stand as having seen the document
+      window.setTimeout(() => setLink((now) => (now?.id === f.id && now.url.startsWith(url) ? null : now)), expires_in * 1000);
     } catch (err) {
       setMsg(err instanceof ApiError && err.code === 'storage_unavailable' ? 'Document storage is not configured on this server.' : err instanceof ApiError && err.code === 'not_found' ? 'This document cannot be opened: it was not read successfully.' : 'Could not open the document.');
     }
