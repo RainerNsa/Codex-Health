@@ -197,5 +197,5 @@ if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) 
   const ocrFile = flag('--ocr');
   const report = score(loadPackets(), saved.packets, hardStopKeys(), ocrFile ? JSON.parse(readFileSync(ocrFile, 'utf8')) as OcrText : {});
   console.log(JSON.stringify({ run: saved.run, predictions_sha256: createHash('sha256').update(bytes).digest('hex'), ...report }, null, 2));
-  process.exit(report.result === 'pass' ? 0 : 1);
+  process.exitCode = report.result === 'pass' ? 0 : 1; // never process.exit here: it cuts a piped report short
 }
