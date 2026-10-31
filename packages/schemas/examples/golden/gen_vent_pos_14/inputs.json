@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": -156026526,
+  "spec": {
+    "id": "gen_vent_pos_14",
+    "focus": "ventilator_use",
+    "value": "yes",
+    "phrase": "unable to wean, ventilator support continues"
+  },
+  "degrade": {
+    "rotate": 90,
+    "skewDegrees": -0.83,
+    "blur": true,
+    "fade": 0.05,
+    "speckle": 359,
+    "dropouts": 0,
+    "fax": true
+  }
+}

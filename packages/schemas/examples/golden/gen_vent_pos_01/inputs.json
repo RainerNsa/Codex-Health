@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": -156026560,
+  "spec": {
+    "id": "gen_vent_pos_01",
+    "focus": "ventilator_use",
+    "value": "yes",
+    "phrase": "patient remains ventilator dependent via tracheostomy"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": -0.13,
+    "blur": true,
+    "fade": 0.01,
+    "speckle": 829,
+    "dropouts": 2,
+    "fax": false
+  }
+}

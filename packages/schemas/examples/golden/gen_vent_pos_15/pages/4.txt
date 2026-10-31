@@ -1,0 +1,14 @@
+Fax received 2001-01-10 09:03  SYNTHETIC   Page 4 of 6
+DISCHARGE SUMMARY (synthetic fixture; not a real document)
+Patient: ZZTEST CANARY-ALPHA   MRN: MRN-ZZCANARY-0000001   DOB: 1899-02-30
+=================================================================================
+HOSPITAL COURSE AND PLAN
+------------------------
+Diet: regular, thin liquids
+Vitals: BP 128/76, HR 82, temp 36.8, SpO2 96 percent
+Plan: does not need skilled nursing or therapy each day.
+Allergies: none recorded in this synthetic chart
+prior admission note: weaned from the ventilator last year
+Respiratory: ventilator dependent since the spinal injury.
+
+Electronically signed: ZZTEST, Physician

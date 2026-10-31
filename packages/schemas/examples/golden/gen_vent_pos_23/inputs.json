@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": -156026496,
+  "spec": {
+    "id": "gen_vent_pos_23",
+    "focus": "ventilator_use",
+    "value": "yes",
+    "phrase": "vent support needed during sleep and naps"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": -0.11,
+    "blur": false,
+    "fade": 0.18,
+    "speckle": 809,
+    "dropouts": 0,
+    "fax": false
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": 1675800264,
+  "spec": {
+    "id": "gen_vent_near_27",
+    "focus": "ventilator_use",
+    "value": "no",
+    "phrase": "ventilator weaned off on hospital day 9"
+  },
+  "degrade": {
+    "rotate": 90,
+    "skewDegrees": 1.27,
+    "blur": false,
+    "fade": 0.14,
+    "speckle": 442,
+    "dropouts": 4,
+    "fax": true
+  }
+}

@@ -1,5 +1,5 @@
 {
-  "generator_version": "packet-gen-1",
+  "generator_version": "packet-gen-2",
   "seed": 1772500866,
   "spec": {
     "id": "gen_skilled_yes",
@@ -7,9 +7,12 @@
     "value": "yes"
   },
   "degrade": {
-    "rotate": 0,
-    "skewDegrees": 0.16,
-    "gray": 0.21,
-    "speckle": 71
+    "rotate": 180,
+    "skewDegrees": -0.27,
+    "blur": false,
+    "fade": 0.24,
+    "speckle": 376,
+    "dropouts": 3,
+    "fax": true
   }
 }

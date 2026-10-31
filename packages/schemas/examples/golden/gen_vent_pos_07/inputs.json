@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": -156026554,
+  "spec": {
+    "id": "gen_vent_pos_07",
+    "focus": "ventilator_use",
+    "value": "yes",
+    "phrase": "failed spontaneous breathing trial, stays on vent"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": 0.36,
+    "blur": true,
+    "fade": 0.24,
+    "speckle": 880,
+    "dropouts": 4,
+    "fax": true
+  }
+}

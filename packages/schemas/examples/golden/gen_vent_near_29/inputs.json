@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": 1675800266,
+  "spec": {
+    "id": "gen_vent_near_29",
+    "focus": "ventilator_use",
+    "value": "no",
+    "phrase": "mechanically ventilated in ICU, now breathing on room air"
+  },
+  "degrade": {
+    "rotate": 90,
+    "skewDegrees": -1.41,
+    "blur": false,
+    "fade": 0.18,
+    "speckle": 1070,
+    "dropouts": 2,
+    "fax": true
+  }
+}

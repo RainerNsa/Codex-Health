@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": 1675800289,
+  "spec": {
+    "id": "gen_vent_near_31",
+    "focus": "ventilator_use",
+    "value": "no",
+    "phrase": "came off the ventilator early in the admission"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": 1.05,
+    "blur": true,
+    "fade": 0.07,
+    "speckle": 284,
+    "dropouts": 1,
+    "fax": true
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": -156026491,
+  "spec": {
+    "id": "gen_vent_pos_28",
+    "focus": "ventilator_use",
+    "value": "yes",
+    "phrase": "AC mode ventilation continues via tracheostomy"
+  },
+  "degrade": {
+    "rotate": 270,
+    "skewDegrees": -0.8,
+    "blur": true,
+    "fade": 0.22,
+    "speckle": 979,
+    "dropouts": 0,
+    "fax": true
+  }
+}

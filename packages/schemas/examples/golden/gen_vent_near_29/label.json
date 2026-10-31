@@ -1,0 +1,179 @@
+{
+  "packet_id": "gen_vent_near_29",
+  "set": "extraction_eval",
+  "generator_version": "packet-gen-2",
+  "referral_date": "2001-01-10",
+  "referral_type": "skilled",
+  "documents": [
+    {
+      "document_id": "doc_fax_cover",
+      "type": "fax_cover",
+      "pages": [
+        1
+      ],
+      "expected_status": "processed"
+    },
+    {
+      "document_id": "doc_face_sheet",
+      "type": "face_sheet",
+      "pages": [
+        2
+      ],
+      "expected_status": "processed"
+    },
+    {
+      "document_id": "doc_history_physical",
+      "type": "history_physical",
+      "pages": [
+        3
+      ],
+      "expected_status": "processed"
+    },
+    {
+      "document_id": "doc_discharge_summary",
+      "type": "discharge_summary",
+      "pages": [
+        4
+      ],
+      "expected_status": "processed"
+    },
+    {
+      "document_id": "doc_medication_record",
+      "type": "medication_record",
+      "pages": [
+        5
+      ],
+      "expected_status": "processed"
+    },
+    {
+      "document_id": "doc_nursing_note",
+      "type": "nursing_note",
+      "pages": [
+        6
+      ],
+      "expected_status": "processed"
+    }
+  ],
+  "facility_profile_ref": "examples/profiles/zztest-facility.json@1",
+  "rule_set_ref": "examples/rules@seed",
+  "expected": {
+    "outcome": "admit",
+    "clinical_outcome": "admit",
+    "financial_status": "clear",
+    "sub_reasons": [],
+    "triggered_rules": [
+      {
+        "rule_id": "seed.favorable.skilled_need_documented",
+        "fact_keys": [
+          "daily_skilled_need"
+        ]
+      }
+    ],
+    "missing": [
+      "recent_aggression"
+    ],
+    "conflicts": []
+  },
+  "adversarial": {
+    "planted_visible": [],
+    "invisible_text": [],
+    "xss_values": [],
+    "instruction_text": [],
+    "identity_mismatch_pages": []
+  },
+  "fields": [
+    {
+      "key": "ventilator_use",
+      "value": {
+        "type": "tri_state",
+        "value": "no"
+      },
+      "document_id": "doc_discharge_summary",
+      "page": 4,
+      "quote": "mechanically ventilated in ICU, now breathing on room air",
+      "span": {
+        "start": 362,
+        "end": 419
+      },
+      "negative_quotes": [],
+      "as_of_date": "2001-01-09",
+      "polarity": "near_miss_negative",
+      "is_critical": true,
+      "specially_protected": false
+    },
+    {
+      "key": "daily_skilled_need",
+      "value": {
+        "type": "tri_state",
+        "value": "yes"
+      },
+      "document_id": "doc_discharge_summary",
+      "page": 4,
+      "quote": "requires daily skilled therapy for gait retraining",
+      "span": {
+        "start": 480,
+        "end": 530
+      },
+      "negative_quotes": [],
+      "as_of_date": "2001-01-09",
+      "polarity": "positive",
+      "is_critical": false,
+      "specially_protected": false
+    },
+    {
+      "key": "recent_aggression",
+      "value": {
+        "type": "tri_state",
+        "value": "unknown"
+      },
+      "document_id": null,
+      "page": null,
+      "quote": null,
+      "span": null,
+      "negative_quotes": [],
+      "as_of_date": null,
+      "polarity": "absent",
+      "is_critical": false,
+      "specially_protected": false
+    },
+    {
+      "key": "payer_medicaid_pending",
+      "value": {
+        "type": "tri_state",
+        "value": "yes"
+      },
+      "document_id": "doc_face_sheet",
+      "page": 2,
+      "quote": "Medicaid pending with application filed this week",
+      "span": {
+        "start": 786,
+        "end": 835
+      },
+      "negative_quotes": [],
+      "as_of_date": "2001-01-09",
+      "polarity": "positive",
+      "is_critical": false,
+      "specially_protected": false
+    },
+    {
+      "key": "payer_eligibility_verified",
+      "value": {
+        "type": "tri_state",
+        "value": "no"
+      },
+      "document_id": "doc_face_sheet",
+      "page": 2,
+      "quote": "eligibility has not been verified with the payer",
+      "span": {
+        "start": 697,
+        "end": 745
+      },
+      "negative_quotes": [],
+      "as_of_date": "2001-01-09",
+      "polarity": "near_miss_negative",
+      "is_critical": false,
+      "specially_protected": false
+    }
+  ],
+  "reviewed_by": "agent-proxy"
+}

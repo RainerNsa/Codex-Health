@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": 1675800228,
+  "spec": {
+    "id": "gen_vent_near_12",
+    "focus": "ventilator_use",
+    "value": "no",
+    "phrase": "vent discontinued in the ICU, none needed since"
+  },
+  "degrade": {
+    "rotate": 270,
+    "skewDegrees": 0.49,
+    "blur": true,
+    "fade": 0.24,
+    "speckle": 681,
+    "dropouts": 0,
+    "fax": false
+  }
+}

@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": 1675800226,
+  "spec": {
+    "id": "gen_vent_near_10",
+    "focus": "ventilator_use",
+    "value": "no",
+    "phrase": "denies any ventilator use at home"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": 1.33,
+    "blur": true,
+    "fade": 0.02,
+    "speckle": 1031,
+    "dropouts": 3,
+    "fax": false
+  }
+}

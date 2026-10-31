@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": 1675800232,
+  "spec": {
+    "id": "gen_vent_near_16",
+    "focus": "ventilator_use",
+    "value": "no",
+    "phrase": "extubated on day 2 with no further ventilator need"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": -0.11,
+    "blur": true,
+    "fade": 0.12,
+    "speckle": 923,
+    "dropouts": 3,
+    "fax": true
+  }
+}

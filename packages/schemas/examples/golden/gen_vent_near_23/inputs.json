@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": 1675800260,
+  "spec": {
+    "id": "gen_vent_near_23",
+    "focus": "ventilator_use",
+    "value": "no",
+    "phrase": "tolerating room air, no vent support needed"
+  },
+  "degrade": {
+    "rotate": 90,
+    "skewDegrees": 0.12,
+    "blur": true,
+    "fade": 0.11,
+    "speckle": 52,
+    "dropouts": 0,
+    "fax": false
+  }
+}

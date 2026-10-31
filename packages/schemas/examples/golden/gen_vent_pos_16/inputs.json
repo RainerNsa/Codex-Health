@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": -156026524,
+  "spec": {
+    "id": "gen_vent_pos_16",
+    "focus": "ventilator_use",
+    "value": "yes",
+    "phrase": "nocturnal ventilation by trach continues every night"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": -0.73,
+    "blur": true,
+    "fade": 0.23,
+    "speckle": 1191,
+    "dropouts": 0,
+    "fax": true
+  }
+}

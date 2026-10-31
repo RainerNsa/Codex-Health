@@ -1,7 +1,7 @@
 {
   "packet_id": "gen_mcaid_yes",
   "set": "extraction_eval",
-  "generator_version": "packet-gen-1",
+  "generator_version": "packet-gen-2",
   "referral_date": "2001-01-10",
   "referral_type": "skilled",
   "documents": [
@@ -22,10 +22,26 @@
       "expected_status": "processed"
     },
     {
+      "document_id": "doc_history_physical",
+      "type": "history_physical",
+      "pages": [
+        3
+      ],
+      "expected_status": "processed"
+    },
+    {
       "document_id": "doc_discharge_summary",
       "type": "discharge_summary",
       "pages": [
-        3
+        4
+      ],
+      "expected_status": "processed"
+    },
+    {
+      "document_id": "doc_medication_record",
+      "type": "medication_record",
+      "pages": [
+        5
       ],
       "expected_status": "processed"
     },
@@ -33,7 +49,7 @@
       "document_id": "doc_nursing_note",
       "type": "nursing_note",
       "pages": [
-        4
+        6
       ],
       "expected_status": "processed"
     }
@@ -73,11 +89,11 @@
         "value": "no"
       },
       "document_id": "doc_discharge_summary",
-      "page": 3,
-      "quote": "weaned from the ventilator on day 4 and not on a ventilator now",
+      "page": 4,
+      "quote": "BiPAP was stopped and patient is not ventilated",
       "span": {
-        "start": 316,
-        "end": 379
+        "start": 461,
+        "end": 508
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -92,11 +108,11 @@
         "value": "yes"
       },
       "document_id": "doc_discharge_summary",
-      "page": 3,
+      "page": 4,
       "quote": "needs daily skilled nursing for wound care",
       "span": {
-        "start": 182,
-        "end": 224
+        "start": 327,
+        "end": 369
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -130,8 +146,8 @@
       "page": 2,
       "quote": "Medicaid pending with application filed this week",
       "span": {
-        "start": 188,
-        "end": 237
+        "start": 694,
+        "end": 743
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -149,8 +165,8 @@
       "page": 2,
       "quote": "benefits and eligibility confirmed with the payer today",
       "span": {
-        "start": 307,
-        "end": 362
+        "start": 813,
+        "end": 868
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",

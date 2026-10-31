@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": -156026499,
+  "spec": {
+    "id": "gen_vent_pos_20",
+    "focus": "ventilator_use",
+    "value": "yes",
+    "phrase": "requires invasive ventilation through a tracheostomy"
+  },
+  "degrade": {
+    "rotate": 270,
+    "skewDegrees": 1.06,
+    "blur": false,
+    "fade": 0.22,
+    "speckle": 809,
+    "dropouts": 1,
+    "fax": false
+  }
+}

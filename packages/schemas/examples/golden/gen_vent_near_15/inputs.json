@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": 1675800231,
+  "spec": {
+    "id": "gen_vent_near_15",
+    "focus": "ventilator_use",
+    "value": "no",
+    "phrase": "off the vent and no longer needs trach care"
+  },
+  "degrade": {
+    "rotate": 180,
+    "skewDegrees": 0.11,
+    "blur": true,
+    "fade": 0.21,
+    "speckle": 155,
+    "dropouts": 4,
+    "fax": true
+  }
+}

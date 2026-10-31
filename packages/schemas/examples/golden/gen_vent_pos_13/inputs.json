@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": -156026527,
+  "spec": {
+    "id": "gen_vent_pos_13",
+    "focus": "ventilator_use",
+    "value": "yes",
+    "phrase": "vent settings: SIMV, tidal volume 450, FiO2 30 percent"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": -0.73,
+    "blur": false,
+    "fade": 0.04,
+    "speckle": 1,
+    "dropouts": 4,
+    "fax": true
+  }
+}

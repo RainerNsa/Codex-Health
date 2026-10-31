@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": -156026498,
+  "spec": {
+    "id": "gen_vent_pos_21",
+    "focus": "ventilator_use",
+    "value": "yes",
+    "phrase": "continuous ventilator support, respiratory therapy following"
+  },
+  "degrade": {
+    "rotate": 180,
+    "skewDegrees": 0.89,
+    "blur": false,
+    "fade": 0.04,
+    "speckle": 836,
+    "dropouts": 3,
+    "fax": true
+  }
+}

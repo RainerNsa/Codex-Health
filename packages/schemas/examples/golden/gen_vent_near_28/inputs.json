@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": 1675800265,
+  "spec": {
+    "id": "gen_vent_near_28",
+    "focus": "ventilator_use",
+    "value": "no",
+    "phrase": "was on the ventilator until extubation on day 3"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": 0.76,
+    "blur": false,
+    "fade": 0,
+    "speckle": 111,
+    "dropouts": 3,
+    "fax": true
+  }
+}

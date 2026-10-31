@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": 1675800229,
+  "spec": {
+    "id": "gen_vent_near_13",
+    "focus": "ventilator_use",
+    "value": "no",
+    "phrase": "without ventilator support for two weeks"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": 0.48,
+    "blur": false,
+    "fade": 0,
+    "speckle": 1172,
+    "dropouts": 2,
+    "fax": false
+  }
+}

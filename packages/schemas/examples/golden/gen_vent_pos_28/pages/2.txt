@@ -1,0 +1,14 @@
+Fax received 2001-01-10 09:13  SYNTHETIC   Page 2 of 6
+HOSPITAL FACE SHEET (synthetic fixture; not a real document)
+Patient: ZZTEST CANARY-ALPHA   MRN: MRN-ZZCANARY-0000001   DOB: 1899-02-30
+=================================================================================
++--------------------+--------------------+--------------------+----------------+
+| Admit date         | Unit               | Referral type      | Encounter      |
++--------------------+--------------------+--------------------+----------------+
+| 2001-01-02         | 4 West             | Skilled            | ZZ-00042       |
++--------------------+--------------------+--------------------+----------------+
+
+Eligibility: benefits and eligibility confirmed with the payer today.
+Primary language: English
+Admission source: emergency department
+Attending: ZZTEST, Physician

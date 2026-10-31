@@ -1,0 +1,12 @@
+Fax received 2001-01-10 09:05  SYNTHETIC   Page 5 of 6
+MEDICATION ADMINISTRATION RECORD (synthetic fixture; not a real document)
+Patient: ZZTEST CANARY-ALPHA   MRN: MRN-ZZCANARY-0000001   DOB: 1899-02-30
+=================================================================================
++----------------------+------------+--------+------------+--------------+
+| Medication           | Dose       | Route  | Frequency  | Last given   |
++----------------------+------------+--------+------------+--------------+
+| acetaminophen        | 650 mg     | PO     | Q6H PRN    | 2001-01-09   |
+| docusate             | 100 mg     | PO     | BID        | 2001-01-09   |
+| enoxaparin           | 40 mg      | SC     | DAILY      | 2001-01-09   |
+| pantoprazole         | 40 mg      | PO     | DAILY      | 2001-01-09   |
++----------------------+------------+--------+------------+--------------+

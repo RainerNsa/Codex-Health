@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": 1675800197,
+  "spec": {
+    "id": "gen_vent_near_02",
+    "focus": "ventilator_use",
+    "value": "no",
+    "phrase": "decannulated and not on a ventilator at discharge"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": -1.4,
+    "blur": true,
+    "fade": 0.08,
+    "speckle": 604,
+    "dropouts": 1,
+    "fax": false
+  }
+}

@@ -1,7 +1,7 @@
 {
   "packet_id": "gen_elig_no",
   "set": "extraction_eval",
-  "generator_version": "packet-gen-1",
+  "generator_version": "packet-gen-2",
   "referral_date": "2001-01-10",
   "referral_type": "skilled",
   "documents": [
@@ -22,10 +22,26 @@
       "expected_status": "processed"
     },
     {
+      "document_id": "doc_history_physical",
+      "type": "history_physical",
+      "pages": [
+        3
+      ],
+      "expected_status": "processed"
+    },
+    {
       "document_id": "doc_discharge_summary",
       "type": "discharge_summary",
       "pages": [
-        3
+        4
+      ],
+      "expected_status": "processed"
+    },
+    {
+      "document_id": "doc_medication_record",
+      "type": "medication_record",
+      "pages": [
+        5
       ],
       "expected_status": "processed"
     },
@@ -33,7 +49,7 @@
       "document_id": "doc_nursing_note",
       "type": "nursing_note",
       "pages": [
-        4
+        6
       ],
       "expected_status": "processed"
     }
@@ -97,11 +113,11 @@
         "value": "yes"
       },
       "document_id": "doc_discharge_summary",
-      "page": 3,
+      "page": 4,
       "quote": "requires daily skilled therapy for gait retraining",
       "span": {
-        "start": 312,
-        "end": 362
+        "start": 457,
+        "end": 507
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -116,11 +132,11 @@
         "value": "yes"
       },
       "document_id": "doc_nursing_note",
-      "page": 4,
+      "page": 6,
       "quote": "struck a staff member during morning care two days ago",
       "span": {
-        "start": 305,
-        "end": 359
+        "start": 320,
+        "end": 374
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -138,8 +154,8 @@
       "page": 2,
       "quote": "Medicaid pending with application filed this week",
       "span": {
-        "start": 301,
-        "end": 350
+        "start": 807,
+        "end": 856
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -157,8 +173,8 @@
       "page": 2,
       "quote": "no eligibility check has been completed yet",
       "span": {
-        "start": 246,
-        "end": 289
+        "start": 752,
+        "end": 795
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",

@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": -156026556,
+  "spec": {
+    "id": "gen_vent_pos_05",
+    "focus": "ventilator_use",
+    "value": "yes",
+    "phrase": "remains on the ventilator 24 hours a day"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": -0.35,
+    "blur": false,
+    "fade": 0.12,
+    "speckle": 721,
+    "dropouts": 0,
+    "fax": true
+  }
+}

@@ -1,7 +1,7 @@
 {
   "packet_id": "gen_mcaid_absent",
   "set": "extraction_eval",
-  "generator_version": "packet-gen-1",
+  "generator_version": "packet-gen-2",
   "referral_date": "2001-01-10",
   "referral_type": "skilled",
   "documents": [
@@ -22,10 +22,26 @@
       "expected_status": "processed"
     },
     {
+      "document_id": "doc_history_physical",
+      "type": "history_physical",
+      "pages": [
+        3
+      ],
+      "expected_status": "processed"
+    },
+    {
       "document_id": "doc_discharge_summary",
       "type": "discharge_summary",
       "pages": [
-        3
+        4
+      ],
+      "expected_status": "processed"
+    },
+    {
+      "document_id": "doc_medication_record",
+      "type": "medication_record",
+      "pages": [
+        5
       ],
       "expected_status": "processed"
     },
@@ -33,7 +49,7 @@
       "document_id": "doc_nursing_note",
       "type": "nursing_note",
       "pages": [
-        4
+        6
       ],
       "expected_status": "processed"
     }
@@ -81,11 +97,11 @@
         "value": "no"
       },
       "document_id": "doc_discharge_summary",
-      "page": 3,
-      "quote": "no longer ventilator dependent and stable on room air",
+      "page": 4,
+      "quote": "no history of chronic ventilator dependence",
       "span": {
-        "start": 377,
-        "end": 430
+        "start": 522,
+        "end": 565
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -100,11 +116,11 @@
         "value": "yes"
       },
       "document_id": "doc_discharge_summary",
-      "page": 3,
+      "page": 4,
       "quote": "requires daily skilled therapy for gait retraining",
       "span": {
-        "start": 312,
-        "end": 362
+        "start": 457,
+        "end": 507
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -119,11 +135,11 @@
         "value": "yes"
       },
       "document_id": "doc_nursing_note",
-      "page": 4,
+      "page": 6,
       "quote": "verbal and physical aggression toward staff this week",
       "span": {
-        "start": 273,
-        "end": 326
+        "start": 352,
+        "end": 405
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -157,8 +173,8 @@
       "page": 2,
       "quote": "no eligibility check has been completed yet",
       "span": {
-        "start": 259,
-        "end": 302
+        "start": 765,
+        "end": 808
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",

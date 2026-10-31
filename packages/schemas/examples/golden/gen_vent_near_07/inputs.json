@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": 1675800202,
+  "spec": {
+    "id": "gen_vent_near_07",
+    "focus": "ventilator_use",
+    "value": "no",
+    "phrase": "BiPAP was stopped and patient is not ventilated"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": -0.37,
+    "blur": true,
+    "fade": 0.14,
+    "speckle": 1119,
+    "dropouts": 3,
+    "fax": true
+  }
+}

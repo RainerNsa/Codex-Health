@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": 1675800290,
+  "spec": {
+    "id": "gen_vent_near_32",
+    "focus": "ventilator_use",
+    "value": "no",
+    "phrase": "discharged on room air after ventilator wean"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": 1.23,
+    "blur": false,
+    "fade": 0.11,
+    "speckle": 877,
+    "dropouts": 3,
+    "fax": false
+  }
+}

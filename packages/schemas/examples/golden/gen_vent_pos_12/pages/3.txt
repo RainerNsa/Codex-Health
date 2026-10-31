@@ -1,0 +1,19 @@
+Fax received 2001-01-10 09:28  SYNTHETIC   Page 3 of 6
+HISTORY AND PHYSICAL (synthetic fixture; not a real document)
+Patient: ZZTEST CANARY-ALPHA   MRN: MRN-ZZCANARY-0000001   DOB: 1899-02-30
+=================================================================================
+CHIEF COMPLAINT:
+  Generalised weakness after a hospital stay.
+
+PAST MEDICAL HISTORY:
+  Hypertension. Type 2 diabetes. All entries synthetic.
+
+VITAL SIGNS
++------------+------------+------------+------------+
+| BP         | HR         | Temp       | Weight     |
++------------+------------+------------+------------+
+| 132/80     | 78         | 36.7 C     | 72 kg      |
++------------+------------+------------+------------+
+
+ASSESSMENT:
+  Referred for post-acute placement. See discharge summary.

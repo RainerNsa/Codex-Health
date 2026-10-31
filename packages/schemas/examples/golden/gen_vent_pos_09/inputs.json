@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": -156026552,
+  "spec": {
+    "id": "gen_vent_pos_09",
+    "focus": "ventilator_use",
+    "value": "yes",
+    "phrase": "vent dependent, no weaning potential at this time"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": 1.26,
+    "blur": false,
+    "fade": 0.13,
+    "speckle": 531,
+    "dropouts": 3,
+    "fax": true
+  }
+}

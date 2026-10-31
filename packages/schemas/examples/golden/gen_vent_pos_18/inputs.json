@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": -156026522,
+  "spec": {
+    "id": "gen_vent_pos_18",
+    "focus": "ventilator_use",
+    "value": "yes",
+    "phrase": "mechanically ventilated at time of transfer"
+  },
+  "degrade": {
+    "rotate": 90,
+    "skewDegrees": 1.42,
+    "blur": true,
+    "fade": 0.07,
+    "speckle": 113,
+    "dropouts": 4,
+    "fax": false
+  }
+}

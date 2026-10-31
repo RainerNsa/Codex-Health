@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": -156026466,
+  "spec": {
+    "id": "gen_vent_pos_32",
+    "focus": "ventilator_use",
+    "value": "yes",
+    "phrase": "tolerating ventilator well, settings stable this week"
+  },
+  "degrade": {
+    "rotate": 270,
+    "skewDegrees": -0.04,
+    "blur": false,
+    "fade": 0.12,
+    "speckle": 727,
+    "dropouts": 3,
+    "fax": true
+  }
+}

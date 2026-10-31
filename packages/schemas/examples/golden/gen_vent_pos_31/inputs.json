@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": -156026467,
+  "spec": {
+    "id": "gen_vent_pos_31",
+    "focus": "ventilator_use",
+    "value": "yes",
+    "phrase": "trach collar trials stopped, back on full vent support"
+  },
+  "degrade": {
+    "rotate": 90,
+    "skewDegrees": 0.27,
+    "blur": false,
+    "fade": 0.08,
+    "speckle": 902,
+    "dropouts": 2,
+    "fax": false
+  }
+}

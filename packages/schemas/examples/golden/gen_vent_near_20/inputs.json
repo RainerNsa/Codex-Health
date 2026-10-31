@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": 1675800257,
+  "spec": {
+    "id": "gen_vent_near_20",
+    "focus": "ventilator_use",
+    "value": "no",
+    "phrase": "no history of chronic ventilator dependence"
+  },
+  "degrade": {
+    "rotate": 0,
+    "skewDegrees": 1.25,
+    "blur": false,
+    "fade": 0.1,
+    "speckle": 927,
+    "dropouts": 3,
+    "fax": true
+  }
+}

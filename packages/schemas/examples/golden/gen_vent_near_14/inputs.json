@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": 1675800230,
+  "spec": {
+    "id": "gen_vent_near_14",
+    "focus": "ventilator_use",
+    "value": "no",
+    "phrase": "no mechanical ventilation required at this time"
+  },
+  "degrade": {
+    "rotate": 90,
+    "skewDegrees": -0.16,
+    "blur": false,
+    "fade": 0.04,
+    "speckle": 127,
+    "dropouts": 2,
+    "fax": true
+  }
+}

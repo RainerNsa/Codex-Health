@@ -1,0 +1,19 @@
+{
+  "generator_version": "packet-gen-2",
+  "seed": 1675800259,
+  "spec": {
+    "id": "gen_vent_near_22",
+    "focus": "ventilator_use",
+    "value": "no",
+    "phrase": "oxygen by mask only, not on mechanical ventilation"
+  },
+  "degrade": {
+    "rotate": 180,
+    "skewDegrees": 1.25,
+    "blur": true,
+    "fade": 0.2,
+    "speckle": 1171,
+    "dropouts": 3,
+    "fax": false
+  }
+}

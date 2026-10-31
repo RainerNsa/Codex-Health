@@ -1,7 +1,7 @@
 {
   "packet_id": "gen_mcaid_no",
   "set": "extraction_eval",
-  "generator_version": "packet-gen-1",
+  "generator_version": "packet-gen-2",
   "referral_date": "2001-01-10",
   "referral_type": "skilled",
   "documents": [
@@ -22,10 +22,26 @@
       "expected_status": "processed"
     },
     {
+      "document_id": "doc_history_physical",
+      "type": "history_physical",
+      "pages": [
+        3
+      ],
+      "expected_status": "processed"
+    },
+    {
       "document_id": "doc_discharge_summary",
       "type": "discharge_summary",
       "pages": [
-        3
+        4
+      ],
+      "expected_status": "processed"
+    },
+    {
+      "document_id": "doc_medication_record",
+      "type": "medication_record",
+      "pages": [
+        5
       ],
       "expected_status": "processed"
     },
@@ -33,7 +49,7 @@
       "document_id": "doc_nursing_note",
       "type": "nursing_note",
       "pages": [
-        4
+        6
       ],
       "expected_status": "processed"
     }
@@ -69,11 +85,11 @@
         "value": "no"
       },
       "document_id": "doc_discharge_summary",
-      "page": 3,
-      "quote": "weaned from the ventilator on day 4 and not on a ventilator now",
+      "page": 4,
+      "quote": "BiPAP was stopped and patient is not ventilated",
       "span": {
-        "start": 319,
-        "end": 382
+        "start": 464,
+        "end": 511
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -123,8 +139,8 @@
       "page": 2,
       "quote": "no Medicaid application is pending",
       "span": {
-        "start": 217,
-        "end": 251
+        "start": 723,
+        "end": 757
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
@@ -142,8 +158,8 @@
       "page": 2,
       "quote": "eligibility has not been verified with the payer",
       "span": {
-        "start": 305,
-        "end": 353
+        "start": 811,
+        "end": 859
       },
       "negative_quotes": [],
       "as_of_date": "2001-01-09",
