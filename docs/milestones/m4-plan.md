@@ -59,3 +59,9 @@ A quote proves its words are on the page, not that they are about this fact: `ve
 aggression" verifies. A person states every hard-stop and review fact before an Admit (T12), so this cannot finalize
 anything. M5 adds key-aware checks and the page-image confirmation that reads `single_source`. Slice 3 shows
 `disagreements` on screen (§13 row 4).
+
+## Open from the stage 3 persona reviews
+
+With sign-in (M6): the 15-minute idle timeout (§4.2); hiding Save settings from Reviewers and New referral from Viewers, which
+the API already refuses. Accepted until a page image shows in the app: `evidence.viewed` is recorded when the link is issued,
+not when the page loads.

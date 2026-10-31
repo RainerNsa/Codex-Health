@@ -93,7 +93,12 @@ export function ReviewPanel({ view, busy, on }: { view: ReferralView; busy: bool
             {' '}{view.pending_request.can_cosign ? 'You can co-sign it.' : 'Waiting for an Admin who did not file it.'}
             {open === 'cosign' && view.pending_request.can_cosign && (
               <Box mt="2">
-                <Text>Co-signing records this decision for {view.pending_request.requested_by_name}, with you as the second Admin, and finalizes the referral.</Text>
+                <Text>
+                  {view.pending_request.amends_decision_id
+                    ? <>Co-signing replaces the recorded decision with {OUTCOME_TEXT[view.pending_request.decision]}, filed by {view.pending_request.requested_by_name}, with you as the co-signing Admin.</>
+                    : <>Co-signing records {OUTCOME_TEXT[view.pending_request.decision]}, filed by {view.pending_request.requested_by_name}, with you as the co-signing Admin, and finalizes the referral.</>}
+                  {view.evaluation && view.pending_request.decision !== view.evaluation.outcome && <> This overrides the recommendation: {OUTCOME_TEXT[view.evaluation.outcome]}.</>}
+                </Text>
                 <HStack mt="1" gap="2">
                   <Button size="sm" disabled={busy} onClick={() => view.pending_request && void on.cosign(view.pending_request.id).then((ok) => ok && reset())}>Co-sign and finalize</Button>
                   <Button size="sm" variant="outline" onClick={reset}>Cancel</Button>

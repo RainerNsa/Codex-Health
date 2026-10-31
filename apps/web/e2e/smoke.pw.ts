@@ -1,6 +1,6 @@
 // Every screen renders in both themes and at phone width, with no automatic accessibility violation and no sideways
 // page scroll. Screenshots go to test-results for a person to look at; nothing here compares pixels.
-import { expect, test, type Page } from '@playwright/test';
+import { expect, test, type Browser, type Page } from '@playwright/test';
 import AxeBuilder from '@axe-core/playwright';
 
 const sizes = [{ name: 'desktop', width: 1440, height: 900 }, { name: 'phone', width: 390, height: 844 }];
@@ -65,6 +65,57 @@ test('evidence: quotes stay text, and what did not verify says so in words', asy
   await expect(page.getByRole('button', { name: 'Confirm this reading' })).toHaveCount(0); // nothing is confirmable until its page is opened
   await expect(page.getByText('Open the page to confirm this reading.').first()).toBeVisible();
   await check(page, 'light-desktop-evidence');
+});
+
+/** A new referral whose answer is overlaid with synthetic content, and a page context to open it in. */
+async function overlaid(browser: Browser, overlay: Record<string, unknown>) {
+  const page = await (await browser.newContext({ viewport: sizes[0], acceptDownloads: true })).newPage();
+  await page.route('**/api/facilities/*/referrals', async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    const { referral, ...rest } = overlay as { referral?: object };
+    await route.fulfill({ response: res, json: route.request().method() === 'POST' ? { ...body, ...rest, referral: { ...body.referral, ...referral } } : body });
+  });
+  await page.goto('/');
+  await page.getByRole('button', { name: 'New referral' }).click();
+  return page;
+}
+
+test('a reading can be confirmed once its page is opened, and only while the link was live', async ({ browser }) => {
+  const page = await overlaid(browser, { facts: [aiFact('ventilator_use', 'no', true, 'high')] });
+  await page.route('**/documents/*/view*', (route) => route.fulfill({ json: { url: 'http://127.0.0.1:5173/zz-page', expires_in: 1 } }));
+  const fact = page.getByRole('listitem').filter({ hasText: 'ventilator use' });
+  await fact.getByRole('button', { name: 'View document' }).click();
+  await expect(fact.getByRole('link')).toBeVisible();
+  await expect(fact.getByRole('link')).toHaveCount(0, { timeout: 3000 }); // an expired link is gone, so it cannot count as opening the page
+  await expect(fact.getByRole('button', { name: 'Confirm this reading' })).toHaveCount(0);
+
+  await page.unroute('**/documents/*/view*');
+  await page.route('**/documents/*/view*', (route) => route.fulfill({ json: { url: 'http://127.0.0.1:5173/zz-page', expires_in: 120 } }));
+  await fact.getByRole('button', { name: 'View document' }).click();
+  const [popup] = await Promise.all([page.waitForEvent('popup'), fact.getByRole('link').click()]);
+  await popup.close();
+  const saved = page.waitForRequest((r) => r.method() === 'POST' && r.url().includes('/facts'));
+  await fact.getByRole('button', { name: 'Confirm this reading' }).click();
+  expect((await saved).postDataJSON().key).toBe('ventilator_use');
+});
+
+test('a failed document: a refused copy says so, and a good one downloads, never as a fact view', async ({ browser }) => {
+  const doc = { id: 'zzdoc', type: 'discharge_summary', status: 'failed', pages: null, not_applicable_reason: null, created_at: '2001-01-10T09:00:00Z' };
+  const page = await overlaid(browser, { referral: { status: 'partial_failure' }, documents: [doc], actions: ['upload'] });
+  await page.route('**/documents/zzdoc/view*', (route) => route.fulfill({ status: 503, json: { error: 'storage_unavailable' } }));
+  await page.getByRole('button', { name: /Get a copy/ }).click();
+  await expect(page.getByRole('alert').filter({ hasText: 'could not be fetched' })).toBeVisible();
+
+  await page.unroute('**/documents/zzdoc/view*');
+  const asked: string[] = [];
+  await page.route('**/documents/zzdoc/view*', (route) => { asked.push(route.request().url()); return route.fulfill({ json: { url: 'http://127.0.0.1:5173/zz-copy', expires_in: 120 } }); });
+  await page.route('**/zz-copy', (route) => route.fulfill({ body: 'SYNTHETIC', headers: { 'Content-Disposition': 'attachment; filename="zz.pdf"' } }));
+  await page.getByRole('button', { name: /Get a copy/ }).click();
+  await expect(page.getByText('could not be fetched')).toHaveCount(0);
+  const [download] = await Promise.all([page.waitForEvent('download'), page.getByRole('link', { name: /Save the file/ }).click()]);
+  expect(download.suggestedFilename()).toBe('zz.pdf');
+  expect(asked[0]).not.toContain('?fact=');
 });
 
 test('the queue is home: a referral replaces it, Back returns, and the facility picker never shows another facility list', async ({ browser }) => {
