@@ -1,0 +1,62 @@
+# The whole product on one machine, on top of docker-compose.yml: see docs/local-development.md. Synthetic data only.
+# The app shares LocalStack's network, so the 127.0.0.1:4566 in a signed upload link means the same place to the API and
+# to the browser. Every port stays on 127.0.0.1.
+x-app: &app
+  image: codex-health:local
+  network_mode: service:localstack
+  restart: unless-stopped
+  depends_on:
+    setup:
+      condition: service_completed_successfully
+
+x-aws: &aws
+  CODEX_ENV: development
+  AWS_REGION: us-east-1
+  AWS_ENDPOINT_URL: http://127.0.0.1:4566
+  AWS_ACCESS_KEY_ID: test
+  AWS_SECRET_ACCESS_KEY: test
+  S3_DOCUMENTS_BUCKET: codex-health-documents-local
+  SQS_PROCESSING_QUEUE_URL: http://127.0.0.1:4566/000000000000/codex-healthcessing
+  SQS_PROCESSING_DLQ_URL: http://127.0.0.1:4566/000000000000/codex-healthcessing-dlq
+
+services:
+  localstack:
+    ports:
+      - "127.0.0.1:5173:5173"
+
+  setup:
+    image: codex-health:local
+    build: .
+    depends_on:
+      postgres:
+        condition: service_healthy
+    environment:
+      DATABASE_URL: postgres://codex_migrator:migrator-local-only@postgres:5432/codex_health
+    command: sh -c "node packages/db/migrate.mjs && node scripts/dev/seed-synthetic.mjs"
+
+  api:
+    <<: *app
+    environment:
+      <<: *aws
+      DATABASE_URL_APP: postgres://codex_app:app-local-only@postgres:5432/codex_health
+    working_dir: /app/apps/api
+    command: node --disable-sigusr1 src/server.ts
+
+  worker:
+    <<: *app
+    # The renderer's jail needs user namespaces, which Docker's default profiles refuse. shortcut: profiles off, write a
+    # narrow seccomp profile before this image holds real data.
+    security_opt:
+      - seccomp=unconfined
+      - apparmor=unconfined
+    environment:
+      <<: *aws
+      LOCAL_PIPELINE: "1"
+      DATABASE_URL_WORKER: postgres://codex_worker:worker-local-only@postgres:5432/codex_health
+    working_dir: /app/services/worker
+    command: node --disable-sigusr1 src/index.ts
+
+  web:
+    <<: *app
+    working_dir: /app/apps/web
+    command: npx vite preview --host 0.0.0.0 --port 5173 --strictPort
