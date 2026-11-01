@@ -7,6 +7,7 @@ import { TextractClient } from '@aws-sdk/client-textract';
 import { bedrockClientConfig, requireEnv } from '@codex-health/shared';
 import { bedrockExtract, s3PageImages, textractOcr, VERSIONS, type Send } from './adapters.ts';
 import { poolTx } from './db.ts';
+import { LOCAL_VERSIONS, localExtract, localMode, tesseractOcr } from './local.ts';
 import { drain, handlers } from './loop.ts';
 import type { Ports } from './pipeline.ts';
 import { renderCheck } from './render.ts';
@@ -15,20 +16,27 @@ const queue = requireEnv('SQS_PROCESSING_QUEUE_URL');
 const deadLetters = requireEnv('SQS_PROCESSING_DLQ_URL');
 const bucket = requireEnv('S3_DOCUMENTS_BUCKET');
 const tx = poolTx(requireEnv('DATABASE_URL_WORKER'));
-const { region, modelId } = bedrockClientConfig({ region: requireEnv('AWS_REGION'), modelId: requireEnv('BEDROCK_MODEL_ID') });
+const region = requireEnv('AWS_REGION');
+const local = localMode(process.env);
 
 const sqs = new SQSClient({ region });
-const textract = new TextractClient({ region });
-const s3 = new S3Client({ region });
-const bedrock = new BedrockRuntimeClient({ region, requestHandler: { requestTimeout: 300_000 } });
+const s3 = new S3Client({ region, forcePathStyle: local }); // the SDK reads LocalStack's address from the environment
 const clientSend = (c: { send: (x: never) => Promise<unknown> }): Send => (cmd) => c.send(cmd as never) as Promise<Record<string, unknown>>;
 
-const ports: Ports = {
-  versions: { ...VERSIONS, model_id: modelId },
-  ocr: textractOcr(clientSend(textract), bucket),
-  render: s3PageImages(clientSend(s3), bucket, requireEnv('S3_DOCUMENTS_KMS_KEY_ID')),
-  extract: bedrockExtract(clientSend(bedrock), modelId, (usage) => console.log(JSON.stringify({ event: 'extract.usage', usage }))),
-};
+function cloudPorts(): Ports {
+  const { modelId } = bedrockClientConfig({ region, modelId: requireEnv('BEDROCK_MODEL_ID') });
+  const textract = new TextractClient({ region });
+  const bedrock = new BedrockRuntimeClient({ region, requestHandler: { requestTimeout: 300_000 } });
+  return {
+    versions: { ...VERSIONS, model_id: modelId },
+    ocr: textractOcr(clientSend(textract), bucket),
+    render: s3PageImages(clientSend(s3), bucket, requireEnv('S3_DOCUMENTS_KMS_KEY_ID')),
+    extract: bedrockExtract(clientSend(bedrock), modelId, (usage) => console.log(JSON.stringify({ event: 'extract.usage', usage }))),
+  };
+}
+const ports: Ports = local
+  ? { versions: LOCAL_VERSIONS, ocr: tesseractOcr(clientSend(s3), bucket), render: s3PageImages(clientSend(s3), bucket), extract: localExtract }
+  : cloudPorts();
 
 const forever = async (url: string, label: string, handle: Parameters<typeof drain>[3]) => {
   for (;;) await drain(clientSend(sqs), url, label, handle);
