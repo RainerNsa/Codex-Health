@@ -13,7 +13,7 @@ decision lands in an append-only hash-chained audit log.
 3. `README.md`: where things live (the layout tree there is the map of this repo).
 4. `.claude/rules/`: short always-on rules (`constraints-first.md`, `data-policy.md`).
 
-Milestone now: **M3 exit** (intake and screens; engineering complete 2026-10-30, `docs/milestones/m3-exit-review.md`). M0, M1 and M2 closed 2026-10-29 (`../ops/decision-log.md`; the infra half is Terraform validated, never applied). M4 (the document pipeline: OCR, extraction) needs AWS spend for Textract and Bedrock. Resolver, RLS, audit and override changes still get `doubt-driven-development` and fresh-context reviews; `/build auto` is never used on them.
+Milestone now: **M5** (`docs/milestones/m5-plan.md`). M0, M1 and M2 closed 2026-10-29 and M3 is engineering complete (`../ops/decision-log.md`; the infra half is Terraform validated, never applied). M4 (`docs/milestones/m4-plan.md`) is built except slice 6; that slice and M5's real eval runs need AWS, paused by the founder since 2026-10-30. Resolver, RLS, audit and override changes still get `doubt-driven-development` and fresh-context reviews; `/build auto` is never used on them.
 
 ## Non-negotiables
 
