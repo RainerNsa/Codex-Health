@@ -332,7 +332,7 @@ test('row-level security, organisation isolation, audit immutability, the hash c
         'codex_app user_facility_roles SELECT',
         'codex_app users SELECT',
         'codex_worker audit_log INSERT', 'codex_worker audit_log SELECT',
-        'codex_worker documents SELECT', 'codex_worker documents UPDATE (pages,status,updated_at)',
+        'codex_worker documents SELECT', 'codex_worker documents UPDATE (page_images,pages,status,updated_at)',
         'codex_worker evaluations INSERT', 'codex_worker evaluations SELECT',
         'codex_worker facilities SELECT',
         'codex_worker facility_profiles SELECT',

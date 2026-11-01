@@ -82,6 +82,7 @@ DATABASE_URL_WORKER=postgres://codex_worker:$${WORKER_PW}@127.0.0.1:5432/codex_h
 SQS_PROCESSING_QUEUE_URL=${queue_url}
 SQS_PROCESSING_DLQ_URL=${dlq_url}
 S3_DOCUMENTS_BUCKET=${docs_bucket}
+S3_DOCUMENTS_KMS_KEY_ID=${docs_key_arn}
 BEDROCK_MODEL_ID=${model_id}
 AWS_REGION=${region}
 ENV
@@ -97,7 +98,7 @@ Wants=network-online.target
 User=codex
 WorkingDirectory=/srv/codex/app/apps/api
 EnvironmentFile=/etc/codex-api.env
-ExecStart=/usr/local/bin/node src/server.ts
+ExecStart=/usr/local/bin/node --disable-sigusr1 src/server.ts
 Restart=always
 NoNewPrivileges=true
 ProtectSystem=strict
@@ -107,7 +108,7 @@ PrivateTmp=true
 [Install]
 WantedBy=multi-user.target
 UNIT
-sed -e 's/Codex Health API/Codex Health worker/' -e 's#apps/api#services/worker#' -e 's/codex-api.env/codex-worker.env/' -e 's/server.ts/index.ts/' \
+sed -e 's/Codex Health API/Codex Health worker/' -e 's#apps/api#services/worker#' -e 's/codex-api.env/codex-worker.env/' -e 's/server.ts/index.ts/' -e 's/^Restart=always/Restart=always\nMemoryMax=1200M\nMemorySwapMax=0\nOOMPolicy=continue\nCPUQuota=150%\nTasksMax=256\nInaccessiblePaths=-\/run\/dbus -\/run\/systemd\/journal\/socket -\/run\/systemd\/journal\/dev-log -\/run\/systemd\/private/' \
   /etc/systemd/system/codex-api.service > /etc/systemd/system/codex-worker.service
 systemctl daemon-reload
 systemctl enable --now codex-api codex-worker
