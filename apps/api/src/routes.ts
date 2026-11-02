@@ -205,7 +205,7 @@ async function openReviewStart(q: Query, facilityId: string, referralId: string,
 
 async function referralView(q: Query, facilityId: string, referralId: string, ruleSet: RuleSet | null, who: Caller | null = null) {
   const role = who?.role ?? '';
-  const ref = await q<{ id: string; status: string }>('SELECT id, status FROM referrals WHERE facility_id = $1 AND id = $2', [facilityId, referralId]);
+  const ref = await q<{ id: string; status: string; purge_started_at: Date | null }>('SELECT id, status, purge_started_at FROM referrals WHERE facility_id = $1 AND id = $2', [facilityId, referralId]);
   if (!ref.rows[0]) throw new HttpError(404, 'not_found');
   const status = ref.rows[0].status;
   const facts = await currentFacts(q, facilityId, referralId);
@@ -282,7 +282,7 @@ async function referralView(q: Query, facilityId: string, referralId: string, ru
       // finalize covers both paths: a decision that needs a co-sign is filed as a request instead
       ...(status === 'ready_for_review' && ev && !outdated ? ['finalize'] : []),
       ...(pendingRequest?.can_cosign ? ['cosign'] : []),
-      ...(closed && ev && role === 'facility_admin' ? ['amend'] : []),
+      ...(closed && ev && role === 'facility_admin' && !ref.rows[0].purge_started_at ? ['amend'] : []),
     ] : [],
   };
 }
