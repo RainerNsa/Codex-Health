@@ -4,6 +4,7 @@
 // re-evaluates. Responses carry ids, codes and the reviewer's own entries; errors never echo request content.
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { evaluate, ENGINE_VERSION, isRealDate, parseFactValue, type Fact, type FactValue } from '@codex-health/rules-engine';
+import { pageImageKey } from '@codex-health/shared';
 import { bindFacility, bindOrganization, type Query, type Tx } from './db.ts';
 import { userFromHeaders } from './auth.ts';
 import { loadSettings as loadStored, NOT_SWITCHABLE, PROFILE_KEYS, RuleSetRefused, type RuleSet } from './ruleset.ts';
@@ -868,7 +869,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
   });
 
   // a short-lived link to one document on this referral (SPEC §12.1, XF-11, I4): a read of the record, audited; never the key
-  app.get<{ Params: { fid: string; rid: string; did: string }; Querystring: { fact?: string } }>('/api/facilities/:fid/referrals/:rid/documents/:did/view', async (req, reply) => {
+  app.get<{ Params: { fid: string; rid: string; did: string } }>('/api/facilities/:fid/referrals/:rid/documents/:did/view', async (req, reply) => {
     try {
       const user = caller(req.headers);
       const { fid, rid } = ids(req.params);
@@ -883,14 +884,55 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
         const doc = (await q<{ storage_key: string; status: string }>("SELECT storage_key, status FROM documents WHERE facility_id = $1 AND referral_id = $2 AND id = $3 AND status IN ('processed', 'failed', 'unreadable')", [fid, rid, did])).rows[0];
         if (!doc) throw new HttpError(404, 'not_found');
         await audit(q, fid, user, 'document.viewed', 'document', did);
-        // opened from a fact: counted only when that fact really cites this document
-        const fact = (await currentFacts(q, fid, rid)).find((f) => f.id === req.query.fact && f.evidence?.document_id === did);
-        if (fact?.evidence) {
-          const ever = await q<{ p: boolean }>('SELECT bool_or(specially_protected) AS p FROM facts WHERE facility_id = $1 AND referral_id = $2 AND key = $3', [fid, rid, fact.key]);
-          await emit(q, fid, rid, user, 'evidence.viewed', { ...(ever.rows[0]?.p === true ? {} : { fact_key: fact.key }), document_id: did, page: fact.evidence.page, decisive: fact.is_critical });
-        }
         return { url: await s3.presignGet(doc.storage_key, doc.status === 'processed' ? 'inline' : 'attachment'), expires_in: VIEW_TTL_SECONDS };
       }));
+    } catch (err) { return fail(reply, err); }
+  });
+
+  // A page image for a person to check a reading against (I2): the renderer's PNG, never the sender's file.
+  app.get<{ Params: { fid: string; rid: string; did: string; page: string } }>('/api/facilities/:fid/referrals/:rid/documents/:did/pages/:page', async (req, reply) => {
+    try {
+      const user = caller(req.headers);
+      const { page: raw, ...rest } = req.params;
+      const { fid, rid, did } = ids(rest);
+      const page = Number(raw);
+      if (!Number.isInteger(page) || page < 1) throw new HttpError(404, 'not_found');
+      const s3 = needStorage();
+      return reply.send(await tx(async (q) => {
+        const who = await enter(q, fid, user);
+        if (!READ_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
+        const doc = (await q<{ storage_key: string; page_images: number | null }>("SELECT storage_key, page_images FROM documents WHERE facility_id = $1 AND referral_id = $2 AND id = $3 AND status = 'processed'", [fid, rid, did])).rows[0];
+        if (!doc) throw new HttpError(404, 'not_found');
+        if (page > (doc.page_images ?? 0)) throw new HttpError(404, 'no_page_image'); // a TIFF has none: a person states the fact
+        await audit(q, fid, user, 'document.page_issued', 'document', did);
+        return { url: await s3.presignGet(pageImageKey(doc.storage_key, page), 'inline'), expires_in: VIEW_TTL_SECONDS };
+      }));
+    } catch (err) { return fail(reply, err); }
+  });
+
+  // The browser says the image has loaded (I2). Only this counts as the page being seen, and Confirm rests on it. It must name a
+  // current reading that cites this page, and this person must have been given a link to the document.
+  // shortcut: the audit row names the document, not the page; ids only, so a browser could claim another page of a document it opened.
+  app.post<{ Params: { fid: string; rid: string; did: string; page: string }; Body: unknown }>('/api/facilities/:fid/referrals/:rid/documents/:did/pages/:page/seen', async (req, reply) => {
+    try {
+      const user = caller(req.headers);
+      const { page: raw, ...rest } = req.params;
+      const { fid, rid, did } = ids(rest);
+      const page = Number(raw);
+      const factId = ((req.body ?? {}) as { fact?: unknown }).fact;
+      if (!Number.isInteger(page) || page < 1 || typeof factId !== 'string' || !UUID.test(factId)) throw new HttpError(404, 'not_found');
+      await tx(async (q) => {
+        const who = await enter(q, fid, user);
+        if (!READ_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
+        const fact = (await currentFacts(q, fid, rid)).find((f) => f.id === factId && f.evidence?.document_id === did && f.evidence.page === page);
+        if (!fact) throw new HttpError(404, 'not_found');
+        const issued = await q(`SELECT 1 FROM audit_log WHERE facility_id = $1 AND action = 'document.page_issued' AND entity_id = $2 AND actor = $3
+          AND at > now() - interval '10 minutes' LIMIT 1`, [fid, did, `user:${user}`]);
+        if (!issued.rowCount) throw new HttpError(409, 'page_not_issued');
+        const ever = await q<{ p: boolean }>('SELECT bool_or(specially_protected) AS p FROM facts WHERE facility_id = $1 AND referral_id = $2 AND key = $3', [fid, rid, fact.key]);
+        await emit(q, fid, rid, user, 'evidence.viewed', { ...(ever.rows[0]?.p === true ? {} : { fact_key: fact.key }), document_id: did, page, decisive: fact.is_critical });
+      });
+      return reply.code(204).send();
     } catch (err) { return fail(reply, err); }
   });
 
