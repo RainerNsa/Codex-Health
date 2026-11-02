@@ -1,6 +1,6 @@
 -- 0018: M5 step 2 (I2) — a page that rendered blank cannot be checked against, and a page view rests on a link to that page.
 -- blank_pages: pages whose image came out as one flat colour (a corrupt scan). Only the worker reports it. A fact citing one has
--- no image to show, so a person states it. evidence.page_issued: ids and a page number, the same shape as evidence.viewed.
+-- no image to show, so a person states it. evidence.page_issued: ids and a page number. evidence.viewed gains fact_id: a look counts for one reading, not for every reading on the page.
 ALTER TABLE documents ADD COLUMN blank_pages integer[];
 GRANT UPDATE (blank_pages) ON documents TO codex_worker;
 
@@ -23,7 +23,7 @@ CREATE OR REPLACE FUNCTION product_event_allowed_attrs(p_event text) RETURNS jso
     WHEN 'review.started'          THEN '{"screen":"screen"}'
     WHEN 'review.ended'            THEN '{"screen":"screen","active_ms":"int"}'
     WHEN 'evidence.page_issued'    THEN '{"document_id":"uuid","page":"int"}'
-    WHEN 'evidence.viewed'         THEN '{"fact_key":"fact_key","document_id":"uuid","page":"int","decisive":"bool"}'
+    WHEN 'evidence.viewed'         THEN '{"fact_id":"uuid","fact_key":"fact_key","document_id":"uuid","page":"int","decisive":"bool"}'
     WHEN 'fact.confirmed'          THEN '{"fact_key":"fact_key","decisive":"bool"}'
     WHEN 'fact.corrected'          THEN '{"fact_key":"fact_key","decisive":"bool"}'
     WHEN 'fact.entered'            THEN '{"fact_key":"fact_key","decisive":"bool"}'

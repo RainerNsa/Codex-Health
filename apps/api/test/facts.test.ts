@@ -828,7 +828,7 @@ describe.skipIf(!url)('manual fact entry API', () => {
       expect((await pageSeen(rid, docId, factId, 2, U.admin)).json()).toEqual({ error: 'page_not_issued' }); // someone else's link
       expect(await viewed(rid)).toEqual([]);
       expect((await pageSeen(rid, docId, factId)).statusCode).toBe(204);
-      expect(await viewed(rid)).toEqual([{ fact_key: 'ventilator_use', document_id: docId, page: 2, decisive: false }]);
+      expect(await viewed(rid)).toEqual([{ fact_id: factId, fact_key: 'ventilator_use', document_id: docId, page: 2, decisive: false }]);
       expect((await confirm()).statusCode).toBe(201);
 
       expect((await pageLink(rid, docId, 4)).json()).toEqual({ error: 'no_page_image' }); // past the last page
@@ -844,10 +844,45 @@ describe.skipIf(!url)('manual fact entry API', () => {
       for (let i = 0; i < 3; i += 1) expect((await pageSeen(rid, docId, factId)).statusCode).toBe(204);
       expect(await viewed(rid)).toHaveLength(1);
       await asOwner(FAC.a);
-      const newer = (await c.query(`INSERT INTO facts (facility_id, referral_id, key, value, source, evidence, confidence_band, supersedes, created_at, created_by) VALUES ($1, $2, 'ventilator_use', $3, 'ai', $4, 'high', $5, clock_timestamp() + interval '1 second', 'worker:zz') RETURNING id`,
+      const newer = (await c.query(`INSERT INTO facts (facility_id, referral_id, key, value, source, evidence, confidence_band, supersedes, created_by) VALUES ($1, $2, 'ventilator_use', $3, 'ai', $4, 'high', $5, 'worker:zz') RETURNING id`,
         [FAC.a, rid, { type: 'tri_state', value: 'no' }, { document_id: docId, page: 2, quote: 'SYNTHETIC not on a ventilator today', verified: true, span: null, coordinates: null }, factId])).rows[0].id as string;
       await c.query("SELECT set_config('app.facility_id', '', true)");
       expect((await post(factsUrl(rid), U.reviewer, { ...fact('ventilator_use', 'no'), confirms: newer })).json()).toEqual({ error: 'evidence_not_viewed' });
+      await pageLink(rid, docId);
+      expect((await pageSeen(rid, docId, newer)).statusCode).toBe(204);
+      expect(await viewed(rid)).toHaveLength(2);
+      expect((await post(factsUrl(rid), U.reviewer, { ...fact('ventilator_use', 'no'), confirms: newer })).statusCode).toBe(201);
+    });
+
+    it('page images: a link to the same page of another document counts for nothing', async () => {
+      const { rid, docId, factId } = await withReading(65);
+      const other = (await upload(rid, PDF(66))).json().documents[0].id as string;
+      await asOwner(FAC.a);
+      await c.query("UPDATE documents SET status = 'processed', page_images = 3 WHERE id = $1", [other]);
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      expect((await pageLink(rid, other)).statusCode).toBe(200);
+      expect((await pageSeen(rid, other, factId)).statusCode).toBe(404); // the reading cites the first document
+      expect((await pageSeen(rid, docId, factId)).json()).toEqual({ error: 'page_not_issued' });
+    });
+
+    it('page images: a key that was ever protected stays out of the event, and a reading on a critical fact is marked decisive', async () => {
+      const { rid, docId, factId } = await withReading(67);
+      await asOwner(FAC.a);
+      await c.query('SAVEPOINT older');
+      await c.query('ALTER TABLE facts DISABLE TRIGGER USER');
+      await c.query("UPDATE facts SET is_critical = true WHERE id = $1", [factId]);
+      await c.query('ALTER TABLE facts ENABLE TRIGGER USER');
+      const old = (await c.query("INSERT INTO facts (facility_id, referral_id, key, value, source, note, specially_protected, created_by) VALUES ($1, $2, 'zz_old', $3, 'user', 'SYNTHETIC', true, $4) RETURNING id", [FAC.a, rid, { type: 'tri_state', value: 'no' }, `user:${U.reviewer}`])).rows[0].id as string;
+      await c.query('ALTER TABLE facts DISABLE TRIGGER USER');
+      await c.query('UPDATE facts SET supersedes = $1 WHERE id = $2', [old, factId]);
+      await c.query("UPDATE facts SET key = 'ventilator_use' WHERE id = $1", [old]);
+      await c.query('ALTER TABLE facts ENABLE TRIGGER USER');
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      await pageLink(rid, docId);
+      await pageSeen(rid, docId, factId);
+      expect((await viewed(rid))[0].decisive).toBe(true);
+      expect((await viewed(rid))[0]).not.toHaveProperty('fact_key');
+      await c.query('ROLLBACK TO SAVEPOINT older');
     });
 
     it('page images: only a processed document shows a page', async () => {
@@ -886,6 +921,9 @@ describe.skipIf(!url)('manual fact entry API', () => {
         await asOwner(FAC.a);
         await c.query("UPDATE product_events SET at = at - make_interval(mins => $2) WHERE referral_id = $1 AND event = 'evidence.page_issued'", [rid, minutes]);
         await c.query('ALTER TABLE product_events ENABLE TRIGGER USER');
+        await c.query('ALTER TABLE facts DISABLE TRIGGER USER');
+        await c.query("UPDATE facts SET created_at = created_at - interval '1 hour' WHERE id = $1", [factId]); // the reading came first
+        await c.query('ALTER TABLE facts ENABLE TRIGGER USER');
         await c.query("SELECT set_config('app.facility_id', '', true)");
       };
       await pageLink(rid, docId);
@@ -897,6 +935,30 @@ describe.skipIf(!url)('manual fact entry API', () => {
       await c.query('ROLLBACK TO SAVEPOINT aged');
     });
 
+    it('page images: a look counts for one reading, however many cite that page, and a link older than the reading counts for nothing', async () => {
+      const { rid, docId, factId } = await withReading(63);
+      await asOwner(FAC.a);
+      const second = (await c.query(`INSERT INTO facts (facility_id, referral_id, key, value, source, evidence, confidence_band, created_by) VALUES ($1, $2, 'recent_aggression', $3, 'ai', $4, 'high', 'worker:zz') RETURNING id`,
+        [FAC.a, rid, { type: 'tri_state', value: 'no' }, { document_id: docId, page: 2, quote: 'SYNTHETIC no aggression noted', verified: true, span: null, coordinates: null }])).rows[0].id as string;
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      await pageLink(rid, docId);
+      expect((await pageSeen(rid, docId, factId)).statusCode).toBe(204);
+      expect((await post(factsUrl(rid), U.reviewer, { ...fact('recent_aggression', 'no'), confirms: second })).json()).toEqual({ error: 'evidence_not_viewed' });
+      expect((await pageSeen(rid, docId, second)).statusCode).toBe(204);
+      expect((await viewed(rid)).map((a) => a.fact_id).sort()).toEqual([factId, second].sort());
+
+      const { rid: late, docId: lateDoc, factId: lateFact } = await withReading(64);
+      await pageLink(late, lateDoc);
+      await asOwner(FAC.a);
+      await c.query('SAVEPOINT newer');
+      await c.query('ALTER TABLE facts DISABLE TRIGGER USER');
+      await c.query("UPDATE facts SET created_at = created_at + interval '1 minute' WHERE id = $1", [lateFact]);
+      await c.query('ALTER TABLE facts ENABLE TRIGGER USER');
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      expect((await pageSeen(late, lateDoc, lateFact)).json()).toEqual({ error: 'page_not_issued' });
+      await c.query('ROLLBACK TO SAVEPOINT newer');
+    });
+
     it('page images: a page that came out blank is not offered, so nothing can be confirmed from it', async () => {
       const { rid, docId, factId } = await withReading(62);
       await asOwner(FAC.a);
@@ -905,6 +967,11 @@ describe.skipIf(!url)('manual fact entry API', () => {
       expect((await pageLink(rid, docId)).json()).toEqual({ error: 'no_page_image' });
       expect((await pageLink(rid, docId, 3)).statusCode).toBe(200);
       expect((await pageSeen(rid, docId, factId)).json()).toEqual({ error: 'page_not_issued' });
+      expect((await post(factsUrl(rid), U.reviewer, { ...fact('ventilator_use', 'no'), confirms: factId })).json()).toEqual({ error: 'evidence_not_viewed' });
+      await asOwner(FAC.a);
+      await c.query('UPDATE documents SET blank_pages = NULL, page_images = NULL WHERE id = $1', [docId]);
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      expect((await pageLink(rid, docId)).json()).toEqual({ error: 'no_page_image' }); // processed before images were kept
     });
 
     it('page images: a document with no images has none to give', async () => {
@@ -941,7 +1008,7 @@ describe.skipIf(!url)('manual fact entry API', () => {
       expect((await pageSeen(rid, docId, id)).statusCode).toBe(204);
       await asOwner(FAC.a);
       const attrs = (await c.query("SELECT attrs FROM product_events WHERE referral_id = $1 AND event = 'evidence.viewed'", [rid])).rows;
-      expect(attrs).toEqual([{ attrs: { document_id: docId, page: 2, decisive: false } }]);
+      expect(attrs).toEqual([{ attrs: { fact_id: id, document_id: docId, page: 2, decisive: false } }]);
       await c.query("SELECT set_config('app.facility_id', '', true)");
     });
 
@@ -1070,6 +1137,11 @@ describe.skipIf(!url)('manual fact entry API', () => {
       await post(factsUrl(rid), U.reviewer, fact('ventilator_use', 'no'));
       await asOwner(FAC.a);
       expect((await c.query("SELECT event FROM product_events WHERE referral_id = $1 AND event LIKE 'fact.%'", [rid])).rows).toEqual([{ event: 'fact.corrected' }]);
+      expect((await c.query("SELECT single_source FROM facts WHERE referral_id = $1 AND source = 'user'", [rid])).rows).toEqual([{ single_source: true }]); // retyped, not checked: step 3 still sees it
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      await post(factsUrl(rid), U.reviewer, fact('ventilator_use', 'yes'));
+      await asOwner(FAC.a);
+      expect((await c.query("SELECT single_source FROM facts WHERE referral_id = $1 ORDER BY created_at DESC, value->>'value' DESC LIMIT 1", [rid])).rows).toEqual([{ single_source: false }]); // a different value is the person's own
       await c.query("SELECT set_config('app.facility_id', '', true)");
     });
 

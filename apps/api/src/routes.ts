@@ -53,10 +53,9 @@ interface Caller { userId: string; role: string; organizationId: string }
 
 /** Bind the facility, find its organisation, bind it, and read the caller's role there. 404 when any is invisible. */
 /** Has this person seen this reading's page since the reading was written? An older look was at some other reading. */
-const pageSeenFor = async (q: Query, fid: string, rid: string, user: string, factId: string, documentId: string, page: number) =>
-  ((await q(`SELECT 1 FROM product_events WHERE facility_id = $1 AND referral_id = $2 AND event = 'evidence.viewed' AND actor = $3
-     AND attrs->>'document_id' = $4 AND attrs->>'page' = $5 AND at >= (SELECT created_at FROM facts WHERE facility_id = $1 AND id = $6) LIMIT 1`,
-  [fid, rid, `user:${user}`, documentId, String(page), factId])).rowCount ?? 0) > 0;
+const pageSeenFor = async (q: Query, fid: string, rid: string, user: string, factId: string) =>
+  ((await q(`SELECT 1 FROM product_events WHERE facility_id = $1 AND referral_id = $2 AND event = 'evidence.viewed' AND actor = $3 AND attrs->>'fact_id' = $4 LIMIT 1`,
+  [fid, rid, `user:${user}`, factId])).rowCount ?? 0) > 0;
 
 async function enterFacility(q: Query, facilityId: string, userId: string): Promise<Caller> {
   await bindFacility(q, facilityId);
@@ -497,7 +496,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
         const confirming = b.confirms !== undefined;
         if (confirming) {
           if (!previous || previous.id !== b.confirms || previous.source !== 'ai' || !previous.evidence || JSON.stringify(previous.value) !== JSON.stringify(value)) throw new HttpError(409, 'fact_changed');
-          if (!await pageSeenFor(q, fid, rid, user, previous.id, previous.evidence.document_id, previous.evidence.page)) throw new HttpError(409, 'evidence_not_viewed');
+          if (!await pageSeenFor(q, fid, rid, user, previous.id)) throw new HttpError(409, 'evidence_not_viewed');
         }
         const kind = confirming ? 'fact.confirmed' : previous ? 'fact.corrected' : 'fact.entered';
         // A key that was ever specially protected stays protected: the flag carries to every correction, and the
@@ -507,7 +506,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
         const { rows } = await q<{ id: string }>(
           `INSERT INTO facts (facility_id, referral_id, key, value, source, note, as_of_date, is_critical, specially_protected, supersedes, created_by, single_source)
            VALUES ($1, $2, $3, $4, 'user', $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
-          [fid, rid, spec.key, value, note, asOf, spec.critical, protectedKey, previous?.id ?? null, `user:${user}`, confirming && previous?.single_source === true]);
+          [fid, rid, spec.key, value, note, asOf, spec.critical, protectedKey, previous?.id ?? null, `user:${user}`, previous?.single_source === true && JSON.stringify(previous.value) === JSON.stringify(value)]); // retyping a reading settles nothing about its one source
         const factId = rows[0]!.id;
         await audit(q, fid, user, kind, 'fact', factId);
         await emit(q, fid, rid, user, kind, { ...(protectedKey ? {} : { fact_key: spec.key }), decisive: spec.critical });
@@ -655,9 +654,8 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [fid, rid, d.amends ? 'T13' : 'T12', d.from, d.amends ? 'amended' : 'finalized', decisionId, `user:${user}`]);
     const decisive = ev.trace.confirmation_set ?? [];
-    // shortcut: a specially protected key is never named in an event, so it cannot count here; give events a fact id if the metric needs it
-    const seen = await q<{ n: string }>(`SELECT count(DISTINCT attrs->>'fact_key') AS n FROM product_events WHERE facility_id = $1 AND referral_id = $2
-      AND event = 'evidence.viewed' AND attrs->>'fact_key' = ANY($3::text[])`, [fid, rid, decisive]);
+    const seen = await q<{ n: string }>(`SELECT count(DISTINCT f.key) AS n FROM product_events e JOIN facts f ON f.facility_id = e.facility_id AND f.id = (e.attrs->>'fact_id')::uuid
+      WHERE e.facility_id = $1 AND e.referral_id = $2 AND e.event = 'evidence.viewed' AND f.key = ANY($3::text[])`, [fid, rid, decisive]);
     await emit(q, fid, rid, user, d.amends ? 'decision.amended' : 'decision.finalized', {
       decision_id: decisionId, evaluation_id: ev.id, outcome: d.decision, override: d.override, cosigner_present: d.request !== null,
       decisive_fact_count: decisive.length, decisive_viewed_count: Number(seen.rows[0]!.n),
@@ -936,11 +934,12 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
         const fact = (await currentFacts(q, fid, rid)).find((f) => f.id === factId && f.evidence?.document_id === did && f.evidence.page === page);
         if (!fact) throw new HttpError(404, 'not_found');
         const issued = await q(`SELECT 1 FROM product_events WHERE facility_id = $1 AND referral_id = $2 AND event = 'evidence.page_issued' AND actor = $3
-          AND attrs->>'document_id' = $4 AND attrs->>'page' = $5 AND at > now() - interval '10 minutes' LIMIT 1`, [fid, rid, `user:${user}`, did, String(page)]);
+          AND attrs->>'document_id' = $4 AND attrs->>'page' = $5 AND at > now() - interval '10 minutes'
+          AND at >= (SELECT created_at FROM facts WHERE facility_id = $1 AND id = $6) LIMIT 1`, [fid, rid, `user:${user}`, did, String(page), fact.id]);
         if (!issued.rowCount) throw new HttpError(409, 'page_not_issued');
         const ever = await q<{ p: boolean }>('SELECT bool_or(specially_protected) AS p FROM facts WHERE facility_id = $1 AND referral_id = $2 AND key = $3', [fid, rid, fact.key]);
-        if (await pageSeenFor(q, fid, rid, user, fact.id, did, page)) return; // once per person per reading, whatever the browser repeats
-        await emit(q, fid, rid, user, 'evidence.viewed', { ...(ever.rows[0]?.p === true ? {} : { fact_key: fact.key }), document_id: did, page, decisive: fact.is_critical });
+        if (await pageSeenFor(q, fid, rid, user, fact.id)) return; // once per person per reading, whatever the browser repeats
+        await emit(q, fid, rid, user, 'evidence.viewed', { fact_id: fact.id, ...(ever.rows[0]?.p === true ? {} : { fact_key: fact.key }), document_id: did, page, decisive: fact.is_critical });
       });
       return reply.code(204).send();
     } catch (err) { return fail(reply, err); }

@@ -29,7 +29,7 @@ Fuzzy matching waits on purpose: tuned without real OCR output it could let fabr
 
 Before real patient data or the non-demo deploy: run `unshare` on the demo's AL2023 at first deploy; give page images per-job
 credentials (the `compute-roles` worker role has no S3 access of its own).
-A corrupt JBIG2 or truncated JPEG can render blank. Such a page is recorded in `blank_pages` and not offered, so a person states the fact.
+A corrupt scan can render as one flat colour. Such a page is recorded in `blank_pages` and not offered, so a person states the fact. A partly corrupt image still shows what survived, and a person judges it. Very faint thin ink on a large scan can be flagged by mistake; that only holds the image back.
 
 `evidence.viewed` now records a page image that loaded in the reviewer's browser (step 2, done). It needs a link to that page from the last ten minutes. The browser reports the load, and no software shows that a person looked; sign-in decides who is asking.
 Until quote highlights land, a reviewer finds the passage by eye.

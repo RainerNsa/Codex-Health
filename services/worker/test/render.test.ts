@@ -56,6 +56,22 @@ test('a page of one flat colour is flagged blank, and a page with ink is not', a
   assert.ok(inked.length > 0 && inked.every((f) => !f));
 });
 
+test('a flat page of any colour is blank; faint or sparse ink is not', async () => {
+  const page = async (draw: (c: ReturnType<ReturnType<typeof createCanvas>['getContext']>) => void) => {
+    const canvas = createCanvas(400, 400);
+    const c = canvas.getContext('2d');
+    draw(c);
+    const flags: boolean[] = [];
+    await renderPages(canvas.toBuffer('image/png'), async (_n, _png, flat) => { flags.push(flat); });
+    return flags[0];
+  };
+  const fill = (colour: string) => (c: ReturnType<ReturnType<typeof createCanvas>['getContext']>) => { c.fillStyle = colour; c.fillRect(0, 0, 400, 400); };
+  for (const colour of ['#ffffff', '#808080', '#000000']) assert.equal(await page(fill(colour)), true, colour);
+  assert.equal(await page((c) => { fill('#ffffff')(c); c.fillStyle = '#f7f7f7'; c.fillRect(50, 50, 200, 20); }), true, 'within scanner noise'); // 8 off white
+  assert.equal(await page((c) => { fill('#ffffff')(c); c.fillStyle = '#f6f6f6'; c.fillRect(50, 50, 200, 20); }), false, 'just past it');
+  assert.equal(await page((c) => { fill('#ffffff')(c); c.fillStyle = '#000000'; c.fillRect(390, 390, 2, 2); }), false, 'one small mark');
+});
+
 test('pages come out in order, at twice their size', async () => {
   assert.deepEqual((await collect(blanks([100, 200]))).map((p) => size(p.png)), [[200, 200], [400, 400]]);
 });

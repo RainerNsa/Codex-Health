@@ -138,7 +138,7 @@ WHERE to_regclass('public.product_events') IS NOT NULL
     AND pg_get_functiondef('product_event_attrs_ok(text, jsonb)'::regprocedure) LIKE '%jsonb_each(%'
     AND (SELECT bool_and(pg_get_functiondef('product_event_allowed_attrs(text)'::regprocedure) LIKE '%''' || e || '''%')
          FROM unnest(ARRAY['referral.received', 'referral.uploaded', 'document.processed', 'document.failed', 'referral.ready',
-                            'review.started', 'review.ended', 'evidence.viewed', 'fact.confirmed', 'fact.corrected', 'fact.entered',
+                            'review.started', 'review.ended', 'evidence.page_issued', 'evidence.viewed', 'fact.confirmed', 'fact.corrected', 'fact.entered',
                             'evaluation.created', 'decision.finalized', 'decision.amended', 'referral.held', 'referral.info_requested',
                             'referral.escalated', 'pilot.outcome_recorded', 'pilot.adjudicated']) AS e)
   )
