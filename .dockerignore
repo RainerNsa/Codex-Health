@@ -2,6 +2,6 @@
 **/dist
 **/test-results
 .git
-.env
-.env.*
+**/.env
+**/.env.*
 infra

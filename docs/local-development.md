@@ -158,13 +158,13 @@ scripts/dev/stack.sh down
 
 Open http://127.0.0.1:5173. No cloud account, and every port stays on 127.0.0.1. Stop any `npm run dev` web server first: both use port 5173.
 
-The worker runs with `LOCAL_PIPELINE=1`, which it refuses outside `CODEX_ENV=development`. Pages are rendered in the same sandbox as on a server, then read by Tesseract. Facts come from a keyword search (`services/worker/src/local.ts`), **not AI**: it finds yes/no facts by words in their key, misses meaning, and can pick up a line that only mentions the word. Every such fact is low confidence and a person must state it. Do not judge extraction quality from this stack.
+The worker runs with `LOCAL_PIPELINE=1`, which it refuses outside `CODEX_ENV=development`. Pages are rendered in the same sandbox as on a server, then read by Tesseract inside that sandbox. Facts come from a keyword search (`services/worker/src/local.ts`), **not AI**: it finds yes/no facts by words in their key, misses meaning, and can pick up a line that only mentions the word. Every such fact is low confidence and a person must state it. Do not judge extraction quality from this stack.
 
 LocalStack keeps nothing across a restart while Postgres does, so after `stack.sh down` older referrals point at files that are gone. The worker restarts a few times at first start until the queues exist; that is expected.
 
 ### Moving to a server
 
-The image and the compose file carry over. These must change first:
+The image carries over; the compose overlay does not. The worker refuses `LOCAL_PIPELINE` anywhere but development on LocalStack, so a server that kept it stops at startup. These must change first:
 
 | Here | On a server |
 | --- | --- |
