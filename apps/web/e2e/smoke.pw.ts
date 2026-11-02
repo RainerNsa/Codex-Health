@@ -110,7 +110,7 @@ test('a reading can be confirmed only once its page image has loaded', async ({ 
   await page.route('**/documents/*/pages/*/seen', (route) => { seen.push(route.request().postDataJSON().fact); return route.fulfill({ status: 204 }); });
   await fact.getByRole('button', { name: /Show page/ }).click();
   await expect.poll(() => seen.length).toBe(1);
-  expect(seen[0]).toMatch(/^[0-9a-f-]{36}$/); // the real API refuses a look that names no reading
+  expect(seen[0]).toBe('ventilator_use'); // the mocked reading's id: the real API refuses a look that names no reading
   await fact.getByRole('button', { name: 'Rotate page' }).click();
   await expect(fact.getByRole('img')).toHaveCSS('transform', /matrix/);
   const saved = page.waitForRequest((r) => r.method() === 'POST' && r.url().includes('/facts'));
