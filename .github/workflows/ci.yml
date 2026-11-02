@@ -246,6 +246,12 @@ jobs:
         run: npm test -w @codex-health/worker
       - name: API against the database (manual fact entry as codex_app under RLS; auth stub, test env only)
         run: npm test -w @codex-health/api
+      - name: Browser tests (the reviewer's screens, including that Confirm waits for a loaded page image)
+        run: |
+          node scripts/dev/seed-synthetic.mjs
+          npx playwright install --with-deps chromium
+          (cd apps/api && CODEX_ENV=development node --disable-sigusr1 src/server.ts &)
+          npm run test:e2e -w @codex-health/web
       - name: RLS enumeration and grant checks
         # Exit 0 only. A SKIP (2) here means DATABASE_URL was lost, which is a CI bug, not a pass.
         run: node scripts/checks/db-grants.mjs

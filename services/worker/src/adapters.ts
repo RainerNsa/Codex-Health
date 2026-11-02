@@ -49,10 +49,15 @@ export function textractOcr(send: Send, bucket: string, pollMs = 2000, timeoutMs
  *  rewrites the same objects, and images of a job that stopped part-way are never referenced (the bucket's lifecycle expires them). kmsKeyId: the bucket refuses any write that does not ask for SSE-KMS; LocalStack runs without one. */
 export function s3PageImages(send: Send, bucket: string, kmsKeyId?: string, render = renderPages): Ports['render'] {
   const sse = kmsKeyId ? { ServerSideEncryption: 'aws:kms' as const, SSEKMSKeyId: kmsKeyId } : {};
-  return async (doc: DocumentRef): Promise<number> => {
+  return async (doc: DocumentRef) => {
     const r = await send(new GetObjectCommand({ Bucket: bucket, Key: doc.storage_key }));
     const bytes = await (r['Body'] as { transformToByteArray(): Promise<Uint8Array> }).transformToByteArray();
-    return render(bytes, (page, png) => send(new PutObjectCommand({ Bucket: bucket, Key: pageImageKey(doc.storage_key, page), Body: png, ContentType: 'image/png', ...sse })));
+    const blank: number[] = [];
+    const images = await render(bytes, async (page, png, flat) => {
+      if (flat) blank.push(page);
+      await send(new PutObjectCommand({ Bucket: bucket, Key: pageImageKey(doc.storage_key, page), Body: png, ContentType: 'image/png', ...sse }));
+    });
+    return { images, blank };
   };
 }
 

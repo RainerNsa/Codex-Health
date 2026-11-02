@@ -4,12 +4,14 @@
 // re-evaluates. Responses carry ids, codes and the reviewer's own entries; errors never echo request content.
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { evaluate, ENGINE_VERSION, isRealDate, parseFactValue, type Fact, type FactValue } from '@codex-health/rules-engine';
+import { pageImageKey } from '@codex-health/shared';
 import { bindFacility, bindOrganization, type Query, type Tx } from './db.ts';
 import { userFromHeaders } from './auth.ts';
 import { loadSettings as loadStored, NOT_SWITCHABLE, PROFILE_KEYS, RuleSetRefused, type RuleSet } from './ruleset.ts';
 import type { Enqueue } from './queue.ts';
 import { MAX_DOCUMENT_BYTES, sniff, UPLOAD_TTL_SECONDS, VIEW_TTL_SECONDS, type Storage } from './storage.ts';
 
+const PAGE = /^[1-9]\d{0,5}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MAX_RETRIES = 3; // per document: past this it is not a passing fault, and a person replaces it or marks it not applicable
 const ANY_ROUTE_PER_MINUTE = 600;
@@ -50,6 +52,11 @@ class HttpError extends Error {
 interface Caller { userId: string; role: string; organizationId: string }
 
 /** Bind the facility, find its organisation, bind it, and read the caller's role there. 404 when any is invisible. */
+/** Has this person seen this reading's page since the reading was written? An older look was at some other reading. */
+const pageSeenFor = async (q: Query, fid: string, rid: string, user: string, factId: string) =>
+  ((await q(`SELECT 1 FROM product_events WHERE facility_id = $1 AND referral_id = $2 AND event = 'evidence.viewed' AND actor = $3 AND attrs->>'fact_id' = $4 LIMIT 1`,
+  [fid, rid, `user:${user}`, factId])).rowCount ?? 0) > 0;
+
 async function enterFacility(q: Query, facilityId: string, userId: string): Promise<Caller> {
   await bindFacility(q, facilityId);
   const fac = await q<{ organization_id: string }>('SELECT organization_id FROM facilities WHERE facility_id = $1', [facilityId]);
@@ -489,9 +496,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
         const confirming = b.confirms !== undefined;
         if (confirming) {
           if (!previous || previous.id !== b.confirms || previous.source !== 'ai' || !previous.evidence || JSON.stringify(previous.value) !== JSON.stringify(value)) throw new HttpError(409, 'fact_changed');
-          const viewed = await q(`SELECT 1 FROM product_events WHERE facility_id = $1 AND referral_id = $2 AND event = 'evidence.viewed' AND actor = $3
-            AND attrs->>'document_id' = $4 AND attrs->>'page' = $5 LIMIT 1`, [fid, rid, `user:${user}`, previous.evidence.document_id, String(previous.evidence.page)]);
-          if (viewed.rows.length === 0) throw new HttpError(409, 'evidence_not_viewed');
+          if (!await pageSeenFor(q, fid, rid, user, previous.id)) throw new HttpError(409, 'evidence_not_viewed');
         }
         const kind = confirming ? 'fact.confirmed' : previous ? 'fact.corrected' : 'fact.entered';
         // A key that was ever specially protected stays protected: the flag carries to every correction, and the
@@ -501,7 +506,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
         const { rows } = await q<{ id: string }>(
           `INSERT INTO facts (facility_id, referral_id, key, value, source, note, as_of_date, is_critical, specially_protected, supersedes, created_by, single_source)
            VALUES ($1, $2, $3, $4, 'user', $5, $6, $7, $8, $9, $10, $11) RETURNING id`,
-          [fid, rid, spec.key, value, note, asOf, spec.critical, protectedKey, previous?.id ?? null, `user:${user}`, confirming && previous?.single_source === true]);
+          [fid, rid, spec.key, value, note, asOf, spec.critical, protectedKey, previous?.id ?? null, `user:${user}`, previous?.single_source === true && JSON.stringify(previous.value) === JSON.stringify(value)]); // retyping a reading settles nothing about its one source
         const factId = rows[0]!.id;
         await audit(q, fid, user, kind, 'fact', factId);
         await emit(q, fid, rid, user, kind, { ...(protectedKey ? {} : { fact_key: spec.key }), decisive: spec.critical });
@@ -648,9 +653,12 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
       `INSERT INTO referral_transitions (facility_id, referral_id, transition, from_status, to_status, decision_id, created_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [fid, rid, d.amends ? 'T13' : 'T12', d.from, d.amends ? 'amended' : 'finalized', decisionId, `user:${user}`]);
+    const decisive = ev.trace.confirmation_set ?? [];
+    const seen = await q<{ n: string }>(`SELECT count(DISTINCT f.key) AS n FROM product_events e JOIN facts f ON f.facility_id = e.facility_id AND f.id = (e.attrs->>'fact_id')::uuid
+      WHERE e.facility_id = $1 AND e.referral_id = $2 AND e.event = 'evidence.viewed' AND f.key = ANY($3::text[])`, [fid, rid, decisive]);
     await emit(q, fid, rid, user, d.amends ? 'decision.amended' : 'decision.finalized', {
       decision_id: decisionId, evaluation_id: ev.id, outcome: d.decision, override: d.override, cosigner_present: d.request !== null,
-      decisive_fact_count: (ev.trace.confirmation_set ?? []).length, decisive_viewed_count: 0, // no source documents to view in manual entry
+      decisive_fact_count: decisive.length, decisive_viewed_count: Number(seen.rows[0]!.n),
     });
   };
 
@@ -868,7 +876,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
   });
 
   // a short-lived link to one document on this referral (SPEC §12.1, XF-11, I4): a read of the record, audited; never the key
-  app.get<{ Params: { fid: string; rid: string; did: string }; Querystring: { fact?: string } }>('/api/facilities/:fid/referrals/:rid/documents/:did/view', async (req, reply) => {
+  app.get<{ Params: { fid: string; rid: string; did: string } }>('/api/facilities/:fid/referrals/:rid/documents/:did/view', async (req, reply) => {
     try {
       const user = caller(req.headers);
       const { fid, rid } = ids(req.params);
@@ -883,14 +891,57 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
         const doc = (await q<{ storage_key: string; status: string }>("SELECT storage_key, status FROM documents WHERE facility_id = $1 AND referral_id = $2 AND id = $3 AND status IN ('processed', 'failed', 'unreadable')", [fid, rid, did])).rows[0];
         if (!doc) throw new HttpError(404, 'not_found');
         await audit(q, fid, user, 'document.viewed', 'document', did);
-        // opened from a fact: counted only when that fact really cites this document
-        const fact = (await currentFacts(q, fid, rid)).find((f) => f.id === req.query.fact && f.evidence?.document_id === did);
-        if (fact?.evidence) {
-          const ever = await q<{ p: boolean }>('SELECT bool_or(specially_protected) AS p FROM facts WHERE facility_id = $1 AND referral_id = $2 AND key = $3', [fid, rid, fact.key]);
-          await emit(q, fid, rid, user, 'evidence.viewed', { ...(ever.rows[0]?.p === true ? {} : { fact_key: fact.key }), document_id: did, page: fact.evidence.page, decisive: fact.is_critical });
-        }
         return { url: await s3.presignGet(doc.storage_key, doc.status === 'processed' ? 'inline' : 'attachment'), expires_in: VIEW_TTL_SECONDS };
       }));
+    } catch (err) { return fail(reply, err); }
+  });
+
+  // A page image for a person to check a reading against (I2): the renderer's PNG, never the sender's file.
+  app.get<{ Params: { fid: string; rid: string; did: string; page: string } }>('/api/facilities/:fid/referrals/:rid/documents/:did/pages/:page', async (req, reply) => {
+    try {
+      const user = caller(req.headers);
+      const { page: raw, ...rest } = req.params;
+      const { fid, rid, did } = ids(rest);
+      if (!PAGE.test(raw)) throw new HttpError(404, 'not_found');
+      const page = Number(raw);
+      const s3 = needStorage();
+      return reply.send(await tx(async (q) => {
+        const who = await enter(q, fid, user);
+        if (!READ_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
+        const doc = (await q<{ storage_key: string; page_images: number | null; blank_pages: number[] | null }>("SELECT storage_key, page_images, blank_pages FROM documents WHERE facility_id = $1 AND referral_id = $2 AND id = $3 AND status = 'processed'", [fid, rid, did])).rows[0];
+        if (!doc) throw new HttpError(404, 'not_found');
+        if (page > (doc.page_images ?? 0) || doc.blank_pages?.includes(page)) throw new HttpError(404, 'no_page_image'); // a TIFF has none, a corrupt scan comes out blank: a person states the fact
+        await audit(q, fid, user, 'document.page_issued', 'document', did);
+        await emit(q, fid, rid, user, 'evidence.page_issued', { document_id: did, page });
+        return { url: await s3.presignGet(pageImageKey(doc.storage_key, page), 'inline'), expires_in: VIEW_TTL_SECONDS };
+      }));
+    } catch (err) { return fail(reply, err); }
+  });
+
+  // The browser says the image has loaded (I2). Only this counts as the page being seen, and Confirm rests on it. It must name a
+  // current reading that cites this page, and this person must have been given a link to this page.
+  app.post<{ Params: { fid: string; rid: string; did: string; page: string }; Body: unknown }>('/api/facilities/:fid/referrals/:rid/documents/:did/pages/:page/seen', async (req, reply) => {
+    try {
+      const user = caller(req.headers);
+      const { page: raw, ...rest } = req.params;
+      const { fid, rid, did } = ids(rest);
+      const page = Number(raw);
+      const factId = ((req.body ?? {}) as { fact?: unknown }).fact;
+      if (!PAGE.test(raw) || typeof factId !== 'string' || !UUID.test(factId)) throw new HttpError(404, 'not_found');
+      await tx(async (q) => {
+        const who = await enter(q, fid, user);
+        if (!READ_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
+        const fact = (await currentFacts(q, fid, rid)).find((f) => f.id === factId && f.evidence?.document_id === did && f.evidence.page === page);
+        if (!fact) throw new HttpError(404, 'not_found');
+        const issued = await q(`SELECT 1 FROM product_events WHERE facility_id = $1 AND referral_id = $2 AND event = 'evidence.page_issued' AND actor = $3
+          AND attrs->>'document_id' = $4 AND attrs->>'page' = $5 AND at > now() - interval '10 minutes'
+          AND at >= (SELECT created_at FROM facts WHERE facility_id = $1 AND id = $6) LIMIT 1`, [fid, rid, `user:${user}`, did, String(page), fact.id]);
+        if (!issued.rowCount) throw new HttpError(409, 'page_not_issued');
+        const ever = await q<{ p: boolean }>('SELECT bool_or(specially_protected) AS p FROM facts WHERE facility_id = $1 AND referral_id = $2 AND key = $3', [fid, rid, fact.key]);
+        if (await pageSeenFor(q, fid, rid, user, fact.id)) return; // once per person per reading, whatever the browser repeats
+        await emit(q, fid, rid, user, 'evidence.viewed', { fact_id: fact.id, ...(ever.rows[0]?.p === true ? {} : { fact_key: fact.key }), document_id: did, page, decisive: fact.is_critical });
+      });
+      return reply.code(204).send();
     } catch (err) { return fail(reply, err); }
   });
 

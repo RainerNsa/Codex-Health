@@ -290,7 +290,7 @@ resource "aws_cloudfront_response_headers_policy" "web" {
   name = "codex-health-demo-web"
   security_headers_config {
     content_security_policy {
-      content_security_policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://${module.storage.bucket_name}.s3.${var.region}.amazonaws.com https://${module.storage.bucket_name}.s3.amazonaws.com; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+      content_security_policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data: https://${module.storage.bucket_name}.s3.${var.region}.amazonaws.com https://${module.storage.bucket_name}.s3.amazonaws.com; connect-src 'self' https://${module.storage.bucket_name}.s3.${var.region}.amazonaws.com https://${module.storage.bucket_name}.s3.amazonaws.com; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
       override                = true
     }
     content_type_options {

@@ -63,7 +63,7 @@ test('evidence: quotes stay text, and what did not verify says so in words', asy
   await expect(page.getByText('<img src=x onerror=alert(1)>', { exact: false }).first()).toBeVisible();
   expect(await page.locator('img[src="x"]').count()).toBe(0);
   await expect(page.getByRole('button', { name: 'Confirm this reading' })).toHaveCount(0); // nothing is confirmable until its page is opened
-  await expect(page.getByText('Open the page to confirm this reading.').first()).toBeVisible();
+  await expect(page.getByText('Show the page to confirm this reading.').first()).toBeVisible();
   await check(page, 'light-desktop-evidence');
 });
 
@@ -81,20 +81,38 @@ async function overlaid(browser: Browser, overlay: Record<string, unknown>) {
   return page;
 }
 
-test('a reading can be confirmed once its page is opened, and only while the link was live', async ({ browser }) => {
+const PIXEL = Buffer.from('iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mNkYPhfDwAChwGA60e6kgAAAABJRU5ErkJggg==', 'base64');
+
+test('a reading can be confirmed only once its page image has loaded', async ({ browser }) => {
   const page = await overlaid(browser, { facts: [aiFact('ventilator_use', 'no', true, 'high')] });
-  await page.route('**/documents/*/view*', (route) => route.fulfill({ json: { url: 'http://127.0.0.1:5173/zz-page', expires_in: 1 } }));
+  const seen: string[] = [];
+  await page.route('**/documents/*/pages/*/seen', (route) => { seen.push(route.request().url()); return route.fulfill({ status: 204 }); });
+  await page.route('**/documents/*/pages/3', (route) => route.fulfill({ json: { url: 'http://127.0.0.1:5173/zz-page.png', expires_in: 120 } }));
+  await page.route('**/zz-page.png', (route) => route.fulfill({ status: 403, body: 'expired' }));
   const fact = page.getByRole('listitem').filter({ hasText: 'ventilator use' });
-  await fact.getByRole('button', { name: 'View document' }).click();
-  await expect(fact.getByRole('link')).toBeVisible();
-  await expect(fact.getByRole('link')).toHaveCount(0, { timeout: 3000 }); // an expired link is gone, so it cannot count as opening the page
+  const show = fact.getByRole('button', { name: /Show page/ });
+
+  await show.click(); // the link was given but the image never came: not seen
+  await expect(page.getByText('The page could not be shown')).toBeVisible();
+  await expect(fact.getByRole('img')).toHaveCount(0);
+  await expect(fact.getByRole('button', { name: 'Confirm this reading' })).toHaveCount(0);
+  expect(seen).toEqual([]);
+
+  await page.unroute('**/zz-page.png');
+  await page.route('**/zz-page.png', (route) => route.fulfill({ body: PIXEL, contentType: 'image/png' }));
+  await page.unroute('**/documents/*/pages/*/seen');
+  await page.route('**/documents/*/pages/*/seen', (route) => route.fulfill({ status: 500, json: { error: 'internal' } }));
+  await show.click(); // shown, but the record of it failed: no Confirm
+  await expect(page.getByText('The page could not be shown')).toBeVisible();
   await expect(fact.getByRole('button', { name: 'Confirm this reading' })).toHaveCount(0);
 
-  await page.unroute('**/documents/*/view*');
-  await page.route('**/documents/*/view*', (route) => route.fulfill({ json: { url: 'http://127.0.0.1:5173/zz-page', expires_in: 120 } }));
-  await fact.getByRole('button', { name: 'View document' }).click();
-  const [popup] = await Promise.all([page.waitForEvent('popup'), fact.getByRole('link').click()]);
-  await popup.close();
+  await page.unroute('**/documents/*/pages/*/seen');
+  await page.route('**/documents/*/pages/*/seen', (route) => { seen.push(route.request().postDataJSON().fact); return route.fulfill({ status: 204 }); });
+  await fact.getByRole('button', { name: /Show page/ }).click();
+  await expect.poll(() => seen.length).toBe(1);
+  expect(seen[0]).toBe('ventilator_use'); // the mocked reading's id: the real API refuses a look that names no reading
+  await fact.getByRole('button', { name: 'Rotate page' }).click();
+  await expect(fact.getByRole('img')).toHaveCSS('transform', /matrix/);
   const saved = page.waitForRequest((r) => r.method() === 'POST' && r.url().includes('/facts'));
   await fact.getByRole('button', { name: 'Confirm this reading' }).click();
   expect((await saved).postDataJSON().key).toBe('ventilator_use');
