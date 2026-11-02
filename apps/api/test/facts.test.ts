@@ -856,7 +856,7 @@ describe.skipIf(!url)('manual fact entry API', () => {
 
     it('page images: a link to the same page of another document counts for nothing', async () => {
       const { rid, docId, factId } = await withReading(65);
-      const other = (await upload(rid, PDF(66))).json().documents[0].id as string;
+      const other = (await upload(rid, PDF(66))).json().documents.find((d: { id: string }) => d.id !== docId).id as string;
       await asOwner(FAC.a);
       await c.query("UPDATE documents SET status = 'processed', page_images = 3 WHERE id = $1", [other]);
       await c.query("SELECT set_config('app.facility_id', '', true)");
