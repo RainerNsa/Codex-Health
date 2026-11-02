@@ -51,7 +51,7 @@ draft referrals to the local database. First run needs `npx playwright install c
 - Fake people are obviously fake: `ZZTEST, Patient`, `ZZTEST, Reviewer`, emails on `example.invalid`.
 - `.env` holds only the placeholders from `.env.example`. No real key, account id, bucket or hostname,
   ever, even temporarily. `AWS_ACCESS_KEY_ID=test` is LocalStack's documented dummy value.
-- Local services never call Bedrock, Textract, OpenAI or Anthropic. `BEDROCK_MODEL_ID` stays a placeholder.
+- Local services never call Bedrock, Textract, OpenAI or Anthropic, and no local AI model runs here. `BEDROCK_MODEL_ID` stays a placeholder.
 - If you suspect real data reached a local machine, stop, do not delete anything, and tell the technical
   founder the same day (it is a potential reportable incident, see `../ops/COO-BRIEF.md` decision 1).
 
@@ -147,3 +147,29 @@ after each one. Or add synthetic PDF or image files under **Documents**: the bro
 LocalStack bucket on a five-minute signed URL, and the API checks each file's hash, size and type before it counts.
 **Submit for processing** then hands the referral to the pipeline, which arrives at M4: until then a processing
 referral stays there. The LocalStack credentials are its fixed local placeholders, not secrets. The Viewer can open a referral but not change it. Every write and every read is audited.
+
+## The whole product on one machine
+
+```bash
+scripts/dev/stack.sh up     # builds one image; starts Postgres, LocalStack, API, worker, web
+scripts/dev/stack.sh logs
+scripts/dev/stack.sh down
+```
+
+Open http://127.0.0.1:5173. No cloud account, and every port stays on 127.0.0.1. Stop any `npm run dev` web server first: both use port 5173.
+
+The worker runs with `LOCAL_PIPELINE=1`, which it refuses outside `CODEX_ENV=development`. Pages are rendered in the same sandbox as on a server, then read by Tesseract inside that sandbox. Facts come from a keyword search (`services/worker/src/local.ts`), **not AI**: it finds yes/no facts by words in their key, misses meaning, and can pick up a line that only mentions the word. Every such fact is low confidence and a person must state it. Do not judge extraction quality from this stack.
+
+LocalStack keeps nothing across a restart while Postgres does, so after `stack.sh down` older referrals point at files that are gone. The worker restarts a few times at first start until the queues exist; that is expected.
+
+### Moving to a server
+
+The image carries over; the compose overlay does not. The worker refuses `LOCAL_PIPELINE` anywhere but development on LocalStack, so a server that kept it stops at startup. These must change first:
+
+| Here | On a server |
+| --- | --- |
+| `LOCAL_PIPELINE=1` | Remove it, set `BEDROCK_MODEL_ID` and `S3_DOCUMENTS_KMS_KEY_ID`; needs AWS and the funding gate |
+| LocalStack | Real S3 and SQS; remove `AWS_ENDPOINT_URL`, the test keys and `network_mode` |
+| Placeholder passwords, local stub sign-in | Secrets from the server; real sign-in before any real data |
+| Docker's seccomp and AppArmor profiles off for the worker | A narrow profile; before real data the renderer moves to its own host or task |
+| `vite preview` | A proper static server or CDN with TLS in front |

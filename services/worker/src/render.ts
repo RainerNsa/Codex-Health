@@ -20,12 +20,14 @@ const canvasPackages = resolve(pdfjs, '../@napi-rs');
 
 export const NODE_FLAGS = (child: string) => ['--permission', '--allow-addons', `--allow-fs-read=${child}`, `--allow-fs-read=${pdfjs}`, `--allow-fs-read=${canvasPackages}`];
 
-function command(child: string): [string, string[]] {
-  const node = [process.execPath, ...NODE_FLAGS(child), child];
-  if (process.platform !== 'linux') return [node[0]!, node.slice(1)]; // a developer's machine; synthetic files only
+/** The same operating-system jail for anything that reads what a sender supplied. On a developer's Mac: synthetic files only. */
+export function jailed(argv: string[]): [string, string[]] {
+  if (process.platform !== 'linux') return [argv[0]!, argv.slice(1)];
   const jail = ['/usr/bin/unshare', '--user', '--map-root-user', '--net', '--pid', '--fork', '--kill-child', '--ipc'];
-  return ['/bin/sh', ['-c', `ulimit -c 0; ulimit -f 0; ulimit -d ${MAX_DATA_KB}; exec "$@"`, 'sh', ...jail, ...node]];
+  return ['/bin/sh', ['-c', `ulimit -c 0; ulimit -f 0; ulimit -d ${MAX_DATA_KB}; exec "$@"`, 'sh', ...jail, ...argv]];
 }
+
+const command = (child: string) => jailed([process.execPath, ...NODE_FLAGS(child), child]);
 
 /** Hands each page to onPage as a PNG, in order, one at a time, and returns how many. Output from the child is hostile too. */
 export async function renderPages(bytes: Uint8Array, onPage: (page: number, png: Buffer) => Promise<unknown>,
