@@ -42,7 +42,7 @@ export function EvidencePanel({ view, facility, user, busy, onConfirm, form }: {
     try {
       await pageSeen(facility, view.referral.id, user, f.evidence.document_id, f.evidence.page, f.id);
       setOpened((now) => [...now, f.id]);
-    } catch (err) { setMsg(problem(err)); }
+    } catch (err) { setShown(null); setMsg(problem(err)); } // cleared so Show loads it again and tries the record again
   };
   const anyAi = view.facts.some((f) => f.source === 'ai');
   return (

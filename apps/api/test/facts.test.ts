@@ -814,6 +814,8 @@ describe.skipIf(!url)('manual fact entry API', () => {
       expect(link.json().url).toContain(`/documents/${FAC.a}/${rid}/pages/`);
       expect(link.json().url).toContain('2.png');
       expect(link.json().url).toContain('X-Amz-Expires=120');
+      expect(link.json().url).toContain('response-content-disposition=inline');
+      expect(link.json().url).toContain('response-cache-control=no-store');
       await asOwner(FAC.a);
       expect(await count("SELECT count(*) AS n FROM audit_log WHERE action = 'document.page_issued' AND entity_id = $1", [docId])).toBe(1);
       await c.query("SELECT set_config('app.facility_id', '', true)");
@@ -830,10 +832,48 @@ describe.skipIf(!url)('manual fact entry API', () => {
       expect((await confirm()).statusCode).toBe(201);
 
       expect((await pageLink(rid, docId, 4)).json()).toEqual({ error: 'no_page_image' }); // past the last page
-      for (const bad of ['0', '-1', '1.5', 'x']) expect((await docApp.inject({ method: 'GET', url: `${refUrl(rid)}/documents/${docId}/pages/${bad}`, headers: as(U.reviewer) })).statusCode).toBe(404);
+      for (const bad of ['0', '-1', '1.5', 'x', '1e0', '0x2', '%202', '02']) expect((await docApp.inject({ method: 'GET', url: `${refUrl(rid)}/documents/${docId}/pages/${bad}`, headers: as(U.reviewer) })).statusCode).toBe(404);
       expect((await pageLink(await newReferral(), docId)).statusCode).toBe(404); // another referral's document
       expect((await pageLink(rid, docId, 2, U.viewer)).statusCode).toBe(403);
       expect((await docApp.inject({ method: 'GET', url: `/api/facilities/${FAC.b}/referrals/${rid}/documents/${docId}/pages/2`, headers: as(U.reviewer) })).statusCode).toBe(404); // another facility
+    });
+
+    it('page images: one look counts once, and it does not carry over to a newer reading of that page', async () => {
+      const { rid, docId, factId } = await withReading(47);
+      await pageLink(rid, docId);
+      for (let i = 0; i < 3; i += 1) expect((await pageSeen(rid, docId, factId)).statusCode).toBe(204);
+      expect(await viewed(rid)).toHaveLength(1);
+      await asOwner(FAC.a);
+      const newer = (await c.query(`INSERT INTO facts (facility_id, referral_id, key, value, source, evidence, confidence_band, supersedes, created_at, created_by) VALUES ($1, $2, 'ventilator_use', $3, 'ai', $4, 'high', $5, clock_timestamp() + interval '1 second', 'worker:zz') RETURNING id`,
+        [FAC.a, rid, { type: 'tri_state', value: 'no' }, { document_id: docId, page: 2, quote: 'SYNTHETIC not on a ventilator today', verified: true, span: null, coordinates: null }, factId])).rows[0].id as string;
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      expect((await post(factsUrl(rid), U.reviewer, { ...fact('ventilator_use', 'no'), confirms: newer })).json()).toEqual({ error: 'evidence_not_viewed' });
+    });
+
+    it('page images: only a processed document shows a page', async () => {
+      const { rid, docId } = await withReading(48);
+      await asOwner(FAC.a);
+      await c.query("UPDATE documents SET status = 'failed' WHERE id = $1", [docId]);
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      expect((await pageLink(rid, docId)).json()).toEqual({ error: 'not_found' });
+    });
+
+    it('a decision reports how many decisive facts had their page seen', async () => {
+      const { rid, docId, factId } = await withReading(46);
+      await post(factsUrl(rid), U.reviewer, fact('recent_aggression', 'no'));
+      await post(factsUrl(rid), U.reviewer, fact('daily_skilled_need', 'yes'));
+      await pageLink(rid, docId);
+      await pageSeen(rid, docId, factId);
+      const confirmed = await post(factsUrl(rid), U.reviewer, { ...fact('ventilator_use', 'no'), confirms: factId });
+      await asOwner(FAC.a);
+      await c.query("UPDATE referrals SET status = 'ready_for_review' WHERE id = $1", [rid]);
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      expect((await finalize(rid, U.reviewer, { evaluation_id: confirmed.json().evaluation.id, decision: 'admit' })).statusCode).toBeLessThan(300);
+      await asOwner(FAC.a);
+      const done = (await c.query("SELECT attrs FROM product_events WHERE referral_id = $1 AND event = 'decision.finalized'", [rid])).rows[0].attrs;
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      expect(done.decisive_viewed_count).toBe(1);
+      expect(done.decisive_fact_count).toBeGreaterThanOrEqual(1);
     });
 
     it('page images: a document with no images has none to give', async () => {

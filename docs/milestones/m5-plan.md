@@ -28,7 +28,7 @@ Fuzzy matching waits on purpose: tuned without real OCR output it could let fabr
 ## Open
 
 Before real patient data or the non-demo deploy: run `unshare` on the demo's AL2023 at first deploy; give page images per-job
-credentials (the `compute-roles` worker role has no S3 access of its own); make per-referral deletion list the `pages/` prefix.
+credentials (the `compute-roles` worker role has no S3 access of its own).
 A corrupt JBIG2 or truncated JPEG can render blank: a person sees an empty page and cannot confirm from it.
 
 `evidence.viewed` now records a page image that loaded in the reviewer's browser (step 2, done). The browser reports it, so a tampered browser could still claim it; sign-in decides who is asking.

@@ -100,8 +100,15 @@ test('a reading can be confirmed only once its page image has loaded', async ({ 
 
   await page.unroute('**/zz-page.png');
   await page.route('**/zz-page.png', (route) => route.fulfill({ body: PIXEL, contentType: 'image/png' }));
-  await show.click();
-  await expect(fact.getByRole('img')).toBeVisible();
+  await page.unroute('**/documents/*/pages/*/seen');
+  await page.route('**/documents/*/pages/*/seen', (route) => route.fulfill({ status: 500, json: { error: 'internal' } }));
+  await show.click(); // shown, but the record of it failed: no Confirm
+  await expect(page.getByText('The page could not be shown')).toBeVisible();
+  await expect(fact.getByRole('button', { name: 'Confirm this reading' })).toHaveCount(0);
+
+  await page.unroute('**/documents/*/pages/*/seen');
+  await page.route('**/documents/*/pages/*/seen', (route) => { seen.push(route.request().url()); return route.fulfill({ status: 204 }); });
+  await fact.getByRole('button', { name: /Show page/ }).click();
   await expect.poll(() => seen.length).toBe(1);
   await fact.getByRole('button', { name: 'Rotate page' }).click();
   await expect(fact.getByRole('img')).toHaveCSS('transform', /matrix/);

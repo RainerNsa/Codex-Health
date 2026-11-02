@@ -11,6 +11,7 @@ import { loadSettings as loadStored, NOT_SWITCHABLE, PROFILE_KEYS, RuleSetRefuse
 import type { Enqueue } from './queue.ts';
 import { MAX_DOCUMENT_BYTES, sniff, UPLOAD_TTL_SECONDS, VIEW_TTL_SECONDS, type Storage } from './storage.ts';
 
+const PAGE = /^[1-9]\d{0,5}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MAX_RETRIES = 3; // per document: past this it is not a passing fault, and a person replaces it or marks it not applicable
 const ANY_ROUTE_PER_MINUTE = 600;
@@ -51,6 +52,12 @@ class HttpError extends Error {
 interface Caller { userId: string; role: string; organizationId: string }
 
 /** Bind the facility, find its organisation, bind it, and read the caller's role there. 404 when any is invisible. */
+/** Has this person seen this reading's page since the reading was written? An older look was at some other reading. */
+const pageSeenFor = async (q: Query, fid: string, rid: string, user: string, factId: string, documentId: string, page: number) =>
+  ((await q(`SELECT 1 FROM product_events WHERE facility_id = $1 AND referral_id = $2 AND event = 'evidence.viewed' AND actor = $3
+     AND attrs->>'document_id' = $4 AND attrs->>'page' = $5 AND at >= (SELECT created_at FROM facts WHERE facility_id = $1 AND id = $6) LIMIT 1`,
+  [fid, rid, `user:${user}`, documentId, String(page), factId])).rowCount ?? 0) > 0;
+
 async function enterFacility(q: Query, facilityId: string, userId: string): Promise<Caller> {
   await bindFacility(q, facilityId);
   const fac = await q<{ organization_id: string }>('SELECT organization_id FROM facilities WHERE facility_id = $1', [facilityId]);
@@ -490,9 +497,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
         const confirming = b.confirms !== undefined;
         if (confirming) {
           if (!previous || previous.id !== b.confirms || previous.source !== 'ai' || !previous.evidence || JSON.stringify(previous.value) !== JSON.stringify(value)) throw new HttpError(409, 'fact_changed');
-          const viewed = await q(`SELECT 1 FROM product_events WHERE facility_id = $1 AND referral_id = $2 AND event = 'evidence.viewed' AND actor = $3
-            AND attrs->>'document_id' = $4 AND attrs->>'page' = $5 LIMIT 1`, [fid, rid, `user:${user}`, previous.evidence.document_id, String(previous.evidence.page)]);
-          if (viewed.rows.length === 0) throw new HttpError(409, 'evidence_not_viewed');
+          if (!await pageSeenFor(q, fid, rid, user, previous.id, previous.evidence.document_id, previous.evidence.page)) throw new HttpError(409, 'evidence_not_viewed');
         }
         const kind = confirming ? 'fact.confirmed' : previous ? 'fact.corrected' : 'fact.entered';
         // A key that was ever specially protected stays protected: the flag carries to every correction, and the
@@ -649,9 +654,13 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
       `INSERT INTO referral_transitions (facility_id, referral_id, transition, from_status, to_status, decision_id, created_by)
        VALUES ($1, $2, $3, $4, $5, $6, $7)`,
       [fid, rid, d.amends ? 'T13' : 'T12', d.from, d.amends ? 'amended' : 'finalized', decisionId, `user:${user}`]);
+    const decisive = ev.trace.confirmation_set ?? [];
+    // shortcut: a specially protected key is never named in an event, so it cannot count here; give events a fact id if the metric needs it
+    const seen = await q<{ n: string }>(`SELECT count(DISTINCT attrs->>'fact_key') AS n FROM product_events WHERE facility_id = $1 AND referral_id = $2
+      AND event = 'evidence.viewed' AND attrs->>'fact_key' = ANY($3::text[])`, [fid, rid, decisive]);
     await emit(q, fid, rid, user, d.amends ? 'decision.amended' : 'decision.finalized', {
       decision_id: decisionId, evaluation_id: ev.id, outcome: d.decision, override: d.override, cosigner_present: d.request !== null,
-      decisive_fact_count: (ev.trace.confirmation_set ?? []).length, decisive_viewed_count: 0, // no source documents to view in manual entry
+      decisive_fact_count: decisive.length, decisive_viewed_count: Number(seen.rows[0]!.n),
     });
   };
 
@@ -895,8 +904,8 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
       const user = caller(req.headers);
       const { page: raw, ...rest } = req.params;
       const { fid, rid, did } = ids(rest);
+      if (!PAGE.test(raw)) throw new HttpError(404, 'not_found');
       const page = Number(raw);
-      if (!Number.isInteger(page) || page < 1) throw new HttpError(404, 'not_found');
       const s3 = needStorage();
       return reply.send(await tx(async (q) => {
         const who = await enter(q, fid, user);
@@ -920,7 +929,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
       const { fid, rid, did } = ids(rest);
       const page = Number(raw);
       const factId = ((req.body ?? {}) as { fact?: unknown }).fact;
-      if (!Number.isInteger(page) || page < 1 || typeof factId !== 'string' || !UUID.test(factId)) throw new HttpError(404, 'not_found');
+      if (!PAGE.test(raw) || typeof factId !== 'string' || !UUID.test(factId)) throw new HttpError(404, 'not_found');
       await tx(async (q) => {
         const who = await enter(q, fid, user);
         if (!READ_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
@@ -930,6 +939,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
           AND at > now() - interval '10 minutes' LIMIT 1`, [fid, did, `user:${user}`]);
         if (!issued.rowCount) throw new HttpError(409, 'page_not_issued');
         const ever = await q<{ p: boolean }>('SELECT bool_or(specially_protected) AS p FROM facts WHERE facility_id = $1 AND referral_id = $2 AND key = $3', [fid, rid, fact.key]);
+        if (await pageSeenFor(q, fid, rid, user, fact.id, did, page)) return; // once per person per reading, whatever the browser repeats
         await emit(q, fid, rid, user, 'evidence.viewed', { ...(ever.rows[0]?.p === true ? {} : { fact_key: fact.key }), document_id: did, page, decisive: fact.is_critical });
       });
       return reply.code(204).send();
