@@ -611,6 +611,19 @@ describe.skipIf(!url)('manual fact entry API', () => {
     await c.query('ROLLBACK TO SAVEPOINT demoted');
   });
 
+  it('amend: a purged referral offers no amendment, and the database refuses one', async () => {
+    const { rid, ev } = await withFacts(['ventilator_use', 'no'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
+    await move(rid, U.reviewer, { action: 'submit' });
+    await finalize(rid, U.reviewer, { evaluation_id: ev.id, decision: 'admit' });
+    await asOwner(FAC.a);
+    await c.query('UPDATE referrals SET purged_at = now() WHERE id = $1', [rid]);
+    await c.query("SELECT set_config('app.facility_id', '', true)");
+    expect((await get(refUrl(rid), U.admin)).json().actions).toEqual([]);
+    const body = { evaluation_id: ev.id, decision: 'do_not_admit', override_reason: 'SYNTHETIC: reason', amendment_reason: 'SYNTHETIC: reason' };
+    expect((await amend(rid, U.admin, body)).json()).toEqual({ error: 'rejected' });
+    expect((await get(refUrl(rid), U.admin)).json().decisions).toHaveLength(1);
+  });
+
   it('amend: an Admit amendment holds under the settings the evaluation was made under, not only the current ones', async () => {
     // a review-rule input left unknown: the Reviewer records Do Not Admit
     const r = await withFacts(['ventilator_use', 'no'], ['daily_skilled_need', 'unknown'], ['recent_aggression', 'unknown']);
