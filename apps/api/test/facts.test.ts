@@ -876,6 +876,37 @@ describe.skipIf(!url)('manual fact entry API', () => {
       expect(done.decisive_fact_count).toBeGreaterThanOrEqual(1);
     });
 
+    it('page images: a link is good for its own page, and for ten minutes', async () => {
+      const { rid, docId, factId } = await withReading(61);
+      await pageLink(rid, docId, 3); // this document, another page
+      expect((await pageSeen(rid, docId, factId)).json()).toEqual({ error: 'page_not_issued' });
+      const age = async (minutes: number) => { // the row's time is never writer-chosen, so only the table's owner can age it, and it all rolls back
+        await c.query('SAVEPOINT aged');
+        await c.query('ALTER TABLE product_events DISABLE TRIGGER USER');
+        await asOwner(FAC.a);
+        await c.query("UPDATE product_events SET at = at - make_interval(mins => $2) WHERE referral_id = $1 AND event = 'evidence.page_issued'", [rid, minutes]);
+        await c.query('ALTER TABLE product_events ENABLE TRIGGER USER');
+        await c.query("SELECT set_config('app.facility_id', '', true)");
+      };
+      await pageLink(rid, docId);
+      await age(11);
+      expect((await pageSeen(rid, docId, factId)).json()).toEqual({ error: 'page_not_issued' });
+      await c.query('ROLLBACK TO SAVEPOINT aged');
+      await age(9);
+      expect((await pageSeen(rid, docId, factId)).statusCode).toBe(204);
+      await c.query('ROLLBACK TO SAVEPOINT aged');
+    });
+
+    it('page images: a page that came out blank is not offered, so nothing can be confirmed from it', async () => {
+      const { rid, docId, factId } = await withReading(62);
+      await asOwner(FAC.a);
+      await c.query("UPDATE documents SET blank_pages = '{2}' WHERE id = $1", [docId]);
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      expect((await pageLink(rid, docId)).json()).toEqual({ error: 'no_page_image' });
+      expect((await pageLink(rid, docId, 3)).statusCode).toBe(200);
+      expect((await pageSeen(rid, docId, factId)).json()).toEqual({ error: 'page_not_issued' });
+    });
+
     it('page images: a document with no images has none to give', async () => {
       const { rid, docId, factId } = await withReading(59);
       await pageLink(rid, docId);

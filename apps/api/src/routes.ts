@@ -910,18 +910,18 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
       return reply.send(await tx(async (q) => {
         const who = await enter(q, fid, user);
         if (!READ_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
-        const doc = (await q<{ storage_key: string; page_images: number | null }>("SELECT storage_key, page_images FROM documents WHERE facility_id = $1 AND referral_id = $2 AND id = $3 AND status = 'processed'", [fid, rid, did])).rows[0];
+        const doc = (await q<{ storage_key: string; page_images: number | null; blank_pages: number[] | null }>("SELECT storage_key, page_images, blank_pages FROM documents WHERE facility_id = $1 AND referral_id = $2 AND id = $3 AND status = 'processed'", [fid, rid, did])).rows[0];
         if (!doc) throw new HttpError(404, 'not_found');
-        if (page > (doc.page_images ?? 0)) throw new HttpError(404, 'no_page_image'); // a TIFF has none: a person states the fact
+        if (page > (doc.page_images ?? 0) || doc.blank_pages?.includes(page)) throw new HttpError(404, 'no_page_image'); // a TIFF has none, a corrupt scan comes out blank: a person states the fact
         await audit(q, fid, user, 'document.page_issued', 'document', did);
+        await emit(q, fid, rid, user, 'evidence.page_issued', { document_id: did, page });
         return { url: await s3.presignGet(pageImageKey(doc.storage_key, page), 'inline'), expires_in: VIEW_TTL_SECONDS };
       }));
     } catch (err) { return fail(reply, err); }
   });
 
   // The browser says the image has loaded (I2). Only this counts as the page being seen, and Confirm rests on it. It must name a
-  // current reading that cites this page, and this person must have been given a link to the document.
-  // shortcut: the audit row names the document, not the page; ids only, so a browser could claim another page of a document it opened.
+  // current reading that cites this page, and this person must have been given a link to this page.
   app.post<{ Params: { fid: string; rid: string; did: string; page: string }; Body: unknown }>('/api/facilities/:fid/referrals/:rid/documents/:did/pages/:page/seen', async (req, reply) => {
     try {
       const user = caller(req.headers);
@@ -935,8 +935,8 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
         if (!READ_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
         const fact = (await currentFacts(q, fid, rid)).find((f) => f.id === factId && f.evidence?.document_id === did && f.evidence.page === page);
         if (!fact) throw new HttpError(404, 'not_found');
-        const issued = await q(`SELECT 1 FROM audit_log WHERE facility_id = $1 AND action = 'document.page_issued' AND entity_id = $2 AND actor = $3
-          AND at > now() - interval '10 minutes' LIMIT 1`, [fid, did, `user:${user}`]);
+        const issued = await q(`SELECT 1 FROM product_events WHERE facility_id = $1 AND referral_id = $2 AND event = 'evidence.page_issued' AND actor = $3
+          AND attrs->>'document_id' = $4 AND attrs->>'page' = $5 AND at > now() - interval '10 minutes' LIMIT 1`, [fid, rid, `user:${user}`, did, String(page)]);
         if (!issued.rowCount) throw new HttpError(409, 'page_not_issued');
         const ever = await q<{ p: boolean }>('SELECT bool_or(specially_protected) AS p FROM facts WHERE facility_id = $1 AND referral_id = $2 AND key = $3', [fid, rid, fact.key]);
         if (await pageSeenFor(q, fid, rid, user, fact.id, did, page)) return; // once per person per reading, whatever the browser repeats

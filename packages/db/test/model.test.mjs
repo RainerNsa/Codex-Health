@@ -77,6 +77,7 @@ test('referral data model', { skip: !url && 'DATABASE_URL not set' }, async (t) 
       await bind(c, FAC.a);
       await insertDoc(FAC.a, refs.a, 'one');
       await rejects(c, () => c.query("INSERT INTO documents (facility_id, referral_id, type, sha256, storage_key, page_images) VALUES ($1, $2, 'other', decode($3, 'hex'), $4, 1)", [FAC.a, refs.a, 'ab'.repeat(32), docKey(FAC.a, refs.a, 'ab'.repeat(32))]), /page images are reported by the pipeline/);
+      await rejects(c, () => c.query("INSERT INTO documents (facility_id, referral_id, type, sha256, storage_key, blank_pages) VALUES ($1, $2, 'other', decode($3, 'hex'), $4, '{1}')", [FAC.a, refs.a, 'ab'.repeat(32), docKey(FAC.a, refs.a, 'ab'.repeat(32))]), /page images are reported by the pipeline/);
       await rejects(c, () => c.query("UPDATE documents SET page_images = -1 WHERE facility_id = $1", [FAC.a]), /"documents_page_images_check"/);
       await rejects(c, () => insertDoc(FAC.a, refs.a, 'two', { status: 'not_applicable', reason: '  ' }), /"documents_check1"/);
       await rejects(c, () => insertDoc(FAC.a, refs.a, 'three', { status: 'uploaded', reason: 'SYNTHETIC reason' }), /"documents_check1"/);

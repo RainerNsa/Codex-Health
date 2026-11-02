@@ -47,6 +47,15 @@ test('every page of a scanned packet comes out as a PNG with ink on it', async (
   for (const p of pages) { assert.ok(p.png.subarray(0, 8).equals(PNG)); assert.ok(await ink(p.png) > 0.001); }
 });
 
+test('a page of one flat colour is flagged blank, and a page with ink is not', async () => {
+  const flags: boolean[] = [];
+  await renderPages(blanks([100, 100]), async (_n, _png, flat) => { flags.push(flat); });
+  assert.deepEqual(flags, [true, true]);
+  const inked: boolean[] = [];
+  await renderPages(buildPacket(plan()[0], loadSettings()).pdf(), async (_n, _png, flat) => { inked.push(flat); });
+  assert.ok(inked.length > 0 && inked.every((f) => !f));
+});
+
 test('pages come out in order, at twice their size', async () => {
   assert.deepEqual((await collect(blanks([100, 200]))).map((p) => size(p.png)), [[200, 200], [400, 400]]);
 });

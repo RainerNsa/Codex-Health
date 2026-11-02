@@ -30,7 +30,7 @@ export function jailed(argv: string[]): [string, string[]] {
 const command = (child: string) => jailed([process.execPath, ...NODE_FLAGS(child), child]);
 
 /** Hands each page to onPage as a PNG, in order, one at a time, and returns how many. Output from the child is hostile too. */
-export async function renderPages(bytes: Uint8Array, onPage: (page: number, png: Buffer) => Promise<unknown>,
+export async function renderPages(bytes: Uint8Array, onPage: (page: number, png: Buffer, blank: boolean) => Promise<unknown>,
   { child = CHILD, timeoutMs = TIMEOUT_MS, maxOutput = MAX_OUTPUT_BYTES } = {}): Promise<number> {
   const [file, args] = command(child);
   const proc = spawn(file, args, { env: {}, stdio: ['pipe', 'pipe', 'ignore'] });
@@ -62,14 +62,15 @@ export async function renderPages(bytes: Uint8Array, onPage: (page: number, png:
       if (size > maxOutput) throw new RenderRefused();
       held = Buffer.concat([held, chunk]);
       while (held.length >= 4) {
-        const length = held.readUInt32BE(0);
+        const head = held.readUInt32BE(0);
+        const length = head & 0x7fffffff; // a child that lies about blank can only hold a page back from a person
         if (length > MAX_FRAME_BYTES) throw new RenderRefused();
         if (held.length < 4 + length) break;
         const png = held.subarray(4, 4 + length);
         pages += 1;
         if (pages > MAX_PAGES || !png.subarray(0, PNG.length).equals(PNG)) throw new RenderRefused();
         pause();
-        await onPage(pages, png);
+        await onPage(pages, png, head !== length);
         run();
         held = held.subarray(4 + length);
       }
