@@ -808,9 +808,9 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
       const replaces = b.replaces as string | undefined;
       const s3 = needStorage();
       // 1. may this user add a document here at all (short transaction, no storage I/O)
-      const precheck = async (q: Query) => {
-        const who = await enter(q, fid, user);
-        limit(`upload:${user}`, UPLOADS_PER_MINUTE);
+      const precheck = async (q: Query, first: boolean) => {
+        const who = first ? await enter(q, fid, user) : await enterFacility(q, fid, user); // once the file has moved a 429 would lose it
+        if (first) limit(`upload:${user}`, UPLOADS_PER_MINUTE);
         if (!WRITE_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
         const status = await lockForUpload(q, fid, rid);
         // T4: on a partial failure, a new document replaces one that failed (and only then)
@@ -823,7 +823,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
         if (dup.rowCount) throw new HttpError(409, 'document_duplicate');
         return { who, status };
       };
-      await tx(precheck);
+      await tx((q) => precheck(q, true));
       // 2. the declared hash, the size cap and the file signature, checked on the stored bytes themselves
       const found = await s3.inspect(quarantineKey(fid, rid, sha));
       if (!found) throw new HttpError(409, 'upload_missing');
@@ -842,7 +842,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
       }
       // 4. record it, re-checking state under the lock
       const body = await tx(async (q) => {
-        const { who, status } = await precheck(q);
+        const { who, status } = await precheck(q, false);
         const ruleSet = await loadSettings(q, fid, who.organizationId);
         if (replaces !== undefined) {
           await q("UPDATE documents SET status = 'not_applicable', not_applicable_reason = 'Replaced by a new upload', updated_at = now() WHERE facility_id = $1 AND id = $2", [fid, replaces]);
