@@ -1,7 +1,7 @@
 // The deletion job (SPEC §9), first half. A person runs it for one facility with an explicit cut-off, so no retention
 // period lives in code. It previews unless --apply is passed. It runs as the owner, bound to that facility; files go first,
 // so a failure part-way leaves a referral the next run still finds. Only ids and counts are printed.
-// shortcut: manual, closed referrals only, no legal hold; schedule it once counsel has set the periods and holds.
+// shortcut: manual, closed referrals only, no legal hold, and transition notes, override and amendment reasons remain; finish and schedule it once counsel has ruled.
 // Backups, the dead-letter queue and Textract's store age out on their own clocks; the deletion drill (M6) proves that.
 import { pathToFileURL } from 'node:url';
 import { DeleteObjectCommand, ListObjectVersionsCommand, S3Client } from '@aws-sdk/client-s3';
@@ -56,7 +56,6 @@ export async function purge(tx: Tx, send: Send, bucket: string, facility: string
       await q('DELETE FROM facts WHERE facility_id = $1 AND referral_id = $2', scope);
       await q('DELETE FROM documents WHERE facility_id = $1 AND referral_id = $2', scope);
       await q('DELETE FROM product_events WHERE facility_id = $1 AND referral_id = $2', scope);
-      await q("UPDATE referral_transitions SET note = '[purged]' WHERE facility_id = $1 AND referral_id = $2 AND note IS NOT NULL", scope);
       await q('UPDATE referrals SET purged_at = now() WHERE facility_id = $1 AND id = $2', scope);
       await q('INSERT INTO audit_log (facility_id, actor, action, entity_type, entity_id) VALUES ($1, $2, $3, $4, $5)', [facility, ACTOR, 'referral.purged', 'referral', id]);
       purged += 1;

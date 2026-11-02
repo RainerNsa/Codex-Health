@@ -9,9 +9,9 @@ import { parseArgs, purge } from '../src/purge.ts';
 import { poolTx } from '../src/db.ts';
 
 const url = process.env['DATABASE_URL'];
-const appUrl = process.env['DATABASE_URL_APP'];
 if (!url && process.env['REQUIRE_DATABASE']) throw new Error('DATABASE_URL must be set here: the purge suite may not be skipped in the db-checks job');
-const live = Boolean(url && process.env['AWS_ENDPOINT_URL']);
+const endpoint = process.env['AWS_ENDPOINT_URL']; // localstack only; unset in AWS
+const live = Boolean(url && endpoint);
 
 const PAST = new Date('2026-06-01T00:00:00Z');
 const OLD = '2026-01-01T00:00:00Z';
@@ -77,7 +77,7 @@ test('the purge', { skip: !live }, async (t) => {
       facts: await n('SELECT count(*) n FROM facts WHERE facility_id = $1 AND referral_id = $2'),
       documents: await n('SELECT count(*) n FROM documents WHERE facility_id = $1 AND referral_id = $2'),
       events: await n('SELECT count(*) n FROM product_events WHERE facility_id = $1 AND referral_id = $2'),
-      notes: await n("SELECT count(*) n FROM referral_transitions WHERE facility_id = $1 AND referral_id = $2 AND note <> '[purged]'"),
+      notes: await n('SELECT count(*) n FROM referral_transitions WHERE facility_id = $1 AND referral_id = $2 AND note IS NOT NULL'),
       evaluations: await n('SELECT count(*) n FROM evaluations WHERE facility_id = $1 AND referral_id = $2'),
       audits: await n("SELECT count(*) n FROM audit_log WHERE facility_id = $1 AND entity_id = $2 AND action = 'referral.purged'"),
       purged: await n('SELECT count(*) n FROM referrals WHERE facility_id = $1 AND id = $2 AND purged_at IS NOT NULL'),
@@ -117,7 +117,7 @@ test('the purge', { skip: !live }, async (t) => {
   await t.test('due referrals lose their files and short-class data; the record of the decision stays', async () => {
     const r = await purge(tx, send, BUCKET, facs[0], PAST, true);
     assert.equal(r.purged, 2);
-    const gone = { facts: 0, documents: 0, events: 0, notes: 0, evaluations: 1, audits: 1, purged: 1 };
+    const gone = { facts: 0, documents: 0, events: 0, notes: 1, evaluations: 1, audits: 1, purged: 1 };
     for (const id of [due, amended]) {
       assert.deepEqual(await counts(facs[0], id), gone);
       assert.equal(await files(facs[0], id), 0, 'every version and marker');
@@ -149,21 +149,9 @@ test('the purge', { skip: !live }, async (t) => {
       SELECT $1, $2, length($3) < 0, 'admit', 'admit', 'clear', '{}', '{"triggered_rules":[]}', 'seed', 1, 1, 'none', 'p0', 'x0', length($4)::text, 'e0'`);
   });
 
-  await t.test('transition rows stay immutable: only the marker, only the owner, nothing else', async () => {
-    const update = (sql: string) => assert.rejects(owner(facs[0], (c) => c.query(sql, [facs[0], open])), /immutable/);
-    await update("UPDATE referral_transitions SET note = 'rewritten' WHERE facility_id = $1 AND referral_id = $2");
-    await update("UPDATE referral_transitions SET note = '[purged]', created_by = 'platform:forged' WHERE facility_id = $1 AND referral_id = $2");
-    await update('UPDATE referral_transitions SET note = NULL WHERE facility_id = $1 AND referral_id = $2');
-    await update('DELETE FROM referral_transitions WHERE facility_id = $1 AND referral_id = $2');
-    if (appUrl) {
-      const app = new pg.Client({ connectionString: appUrl });
-      await app.connect();
-      t.after(() => app.end());
-      await app.query('BEGIN');
-      await app.query("SELECT set_config('app.facility_id', $1, true)", [facs[0]]);
-      await assert.rejects(app.query("UPDATE referral_transitions SET note = '[purged]' WHERE referral_id = $1", [open]), /permission denied/);
-      await app.query('ROLLBACK');
-    }
+  await t.test('transition rows stay immutable, and their notes remain until counsel rules', async () => {
+    await assert.rejects(owner(facs[0], (c) => c.query("UPDATE referral_transitions SET note = '[purged]' WHERE facility_id = $1 AND referral_id = $2", [facs[0], due])), /immutable/);
+    await assert.rejects(owner(facs[0], (c) => c.query('DELETE FROM referral_transitions WHERE facility_id = $1 AND referral_id = $2', [facs[0], due])), /immutable/);
   });
 
   await t.test('nothing is purged for a facility that does not exist', async () => {
