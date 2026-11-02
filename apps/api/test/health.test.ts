@@ -31,6 +31,8 @@ it('demo: every request without CloudFront\'s origin secret is refused, health i
   for (const headers of [{}, { [ORIGIN_HEADER]: 'wrong' }, { [ORIGIN_HEADER]: secret.slice(1) }]) {
     expect((await app.inject({ method: 'GET', url: '/health', headers })).statusCode).toBe(404);
   }
+  // same length in characters, more bytes: refused, not a crash
+  expect((await app.inject({ method: 'GET', url: '/health', headers: { [ORIGIN_HEADER]: 'é'.repeat(secret.length) } })).statusCode).toBe(404);
   expect((await app.inject({ method: 'GET', url: '/health', headers: { [ORIGIN_HEADER]: secret } })).statusCode).toBe(200);
   await app.close();
 });

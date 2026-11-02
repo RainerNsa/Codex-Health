@@ -8,7 +8,7 @@ export type Tx = <T>(fn: (q: Query) => Promise<T>) => Promise<T>;
 
 /** Production/dev: a pool connected as codex_app (DATABASE_URL_APP). */
 export function poolTx(connectionString: string): { tx: Tx; close: () => Promise<void> } {
-  const pool = new pg.Pool({ connectionString, max: 10 });
+  const pool = new pg.Pool({ connectionString, max: 10, statement_timeout: 30_000, connectionTimeoutMillis: 10_000 });
   const tx: Tx = async (fn) => {
     const client = await pool.connect();
     try {

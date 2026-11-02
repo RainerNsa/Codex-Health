@@ -1045,6 +1045,27 @@ describe.skipIf(!url)('manual fact entry API', () => {
       expect((await ask()).json()).toEqual({ error: 'rate_limited' });
     });
 
+    it('rate limits: review time has its own budget, every route has one, and only members can spend either', async () => {
+      const rid = await newReferral();
+      const limited = buildServer({ tx, auth: 'local-stub', env: 'test', storage: s3Storage(BUCKET) });
+      const uploads = () => post(`${refUrl(rid)}/documents/uploads`, U.admin, { sha256: sha(PDF(18)), bytes: PDF(18).length }, limited);
+      const time = () => post(`${refUrl(rid)}/review-time`, U.admin, { active_ms: 1000 }, limited);
+      const stranger = '00000000-0000-4000-8000-0000000000ff';
+      for (let i = 0; i < 61; i += 1) expect((await post(`${refUrl(rid)}/review-time`, stranger, { active_ms: 1000 }, limited)).statusCode).toBe(404);
+      for (let i = 0; i < 60; i += 1) expect((await time()).statusCode).not.toBe(429);
+      expect((await time()).json()).toEqual({ error: 'rate_limited' });
+      expect((await uploads()).statusCode).not.toBe(429);
+      // a document spends one upload call: its last step must not be refused once the file has moved
+      const body = PDF(19);
+      const link = await post(`${refUrl(rid)}/documents/uploads`, U.reviewer, { sha256: sha(body), bytes: body.length }, limited);
+      expect((await fetch(link.json().url, { method: 'PUT', body })).status).toBe(200);
+      for (let i = 0; i < 28; i += 1) expect((await post(`${refUrl(rid)}/documents/uploads`, U.reviewer, { sha256: sha(PDF(20)), bytes: PDF(20).length }, limited)).statusCode).not.toBe(429);
+      expect((await post(`${refUrl(rid)}/documents`, U.reviewer, { sha256: sha(body), type: 'face_sheet' }, limited)).statusCode).toBe(201);
+      const read = () => limited.inject({ method: 'GET', url: refUrl(rid), headers: as(U.admin) });
+      for (let i = 0; i < 600 - 62; i += 1) expect((await read()).statusCode).toBe(200);
+      expect((await read()).json()).toEqual({ error: 'rate_limited' });
+    }, 30_000);
+
     it('upload: adding a document to a referral in review sends it back to processing (T6)', async () => {
       const { rid } = await withFacts(['daily_skilled_need', 'yes']);
       await move(rid, U.reviewer, { action: 'submit' });
@@ -1256,6 +1277,11 @@ describe.skipIf(!url)('manual fact entry API', () => {
 
 // The transaction helper production actually runs, against the real codex_app login (read-only probes).
 describe.skipIf(!appUrl)('poolTx as codex_app', () => {
+  it('a stuck query cannot hold a connection for ever', async () => {
+    const db = poolTx(appUrl!);
+    expect((await db.tx((q) => q('SHOW statement_timeout'))).rows[0]).toEqual({ statement_timeout: '30s' });
+    await db.close();
+  });
   it('runs as codex_app, clears bindings between transactions, and survives a failed one', async () => {
     const db = poolTx(appUrl!);
     try {
