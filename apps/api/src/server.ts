@@ -1,6 +1,6 @@
 import Fastify, { type FastifyInstance } from 'fastify';
 import { fileURLToPath } from 'node:url';
-import { timingSafeEqual } from 'node:crypto';
+import { createHash, timingSafeEqual } from 'node:crypto';
 import { assertAuthAllowed, type AuthMode } from './auth.ts';
 import { poolTx, type Tx } from './db.ts';
 import { sqsEnqueue, type Enqueue } from './queue.ts';
@@ -35,7 +35,8 @@ export interface ServerOptions {
 }
 
 export const ORIGIN_HEADER = 'x-codex-origin';
-const sameSecret = (a: string, b: string) => a.length === b.length && timingSafeEqual(Buffer.from(a), Buffer.from(b));
+const digest = (s: string) => createHash('sha256').update(s).digest();
+const sameSecret = (a: string, b: string) => timingSafeEqual(digest(a), digest(b));
 
 export function buildServer(opts: ServerOptions = {}): FastifyInstance {
   const app = Fastify({ logger: false, bodyLimit: 16 * 1024 });

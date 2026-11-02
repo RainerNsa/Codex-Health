@@ -12,6 +12,9 @@ import { MAX_DOCUMENT_BYTES, sniff, UPLOAD_TTL_SECONDS, VIEW_TTL_SECONDS, type S
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MAX_RETRIES = 3; // per document: past this it is not a passing fault, and a person replaces it or marks it not applicable
+const ANY_ROUTE_PER_MINUTE = 600;
+const UPLOADS_PER_MINUTE = 30;
+const REVIEW_TIMES_PER_MINUTE = 60;
 const WRITE_ROLES = new Set(['facility_admin', 'admissions_reviewer']);
 // Patient-level reads: Reviewers and Admins only. A Viewer sees no referral (SPEC §6: engineering default "none"
 // for patient-level Viewer reads, pending founder item 8; aggregates arrive with the rollup table).
@@ -47,7 +50,7 @@ class HttpError extends Error {
 interface Caller { userId: string; role: string; organizationId: string }
 
 /** Bind the facility, find its organisation, bind it, and read the caller's role there. 404 when any is invisible. */
-async function enter(q: Query, facilityId: string, userId: string): Promise<Caller> {
+async function enterFacility(q: Query, facilityId: string, userId: string): Promise<Caller> {
   await bindFacility(q, facilityId);
   const fac = await q<{ organization_id: string }>('SELECT organization_id FROM facilities WHERE facility_id = $1', [facilityId]);
   const organizationId = fac.rows[0]?.organization_id;
@@ -285,6 +288,21 @@ async function referralView(q: Query, facilityId: string, referralId: string, ru
 }
 
 export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: Storage | null; enqueue?: Enqueue | null }): void {
+  // Counted after enter(), so only a facility's members can spend a budget or add an entry; that bounds the map.
+  // shortcut: an in-process limit keyed on the user; a shared limit (WAF or a store) when the API runs as more than one process
+  const recent = new Map<string, number[]>();
+  const limit = (bucket: string, max: number) => {
+    const now = Date.now();
+    const hits = (recent.get(bucket) ?? []).filter((t) => now - t < 60_000);
+    if (hits.length >= max) throw new HttpError(429, 'rate_limited');
+    hits.push(now);
+    recent.set(bucket, hits);
+  };
+  const enter = async (q: Query, facilityId: string, userId: string) => {
+    const who = await enterFacility(q, facilityId, userId);
+    limit(`all:${userId}`, ANY_ROUTE_PER_MINUTE);
+    return who;
+  };
   const { tx, storage } = deps;
   // shortcut: a referral stays in processing if this send fails after the commit; the watchdog in slice 6 (4.3) re-sends
   const enqueue = async (fid: string, rid: string) => {
@@ -338,9 +356,9 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
       const { fid, rid } = ids(req.params);
       const ms = ((req.body ?? {}) as { active_ms?: unknown }).active_ms;
       if (!Number.isInteger(ms) || (ms as number) < 1 || (ms as number) > MAX_ACTIVE_MS) throw new HttpError(400, 'invalid_review_time');
-      limit(user);
       await tx(async (q) => {
         const who = await enter(q, fid, user);
+        limit(`time:${user}`, REVIEW_TIMES_PER_MINUTE);
         if (!READ_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
         const ref = await q('SELECT 1 FROM referrals WHERE facility_id = $1 AND id = $2', [fid, rid]);
         if (!ref.rowCount) throw new HttpError(404, 'not_found');
@@ -739,16 +757,6 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
   const quarantineKey = (fid: string, rid: string, sha: string) => `quarantine/${fid}/${rid}/${sha}`;
   const documentKey = (fid: string, rid: string, sha: string) => `documents/${fid}/${rid}/${sha}`;
   const needStorage = () => { if (!storage) throw new HttpError(503, 'storage_unavailable'); return storage; };
-  // shortcut: an in-process limit (30 upload calls a minute per user); a shared limit (WAF or a store) when the API
-  // runs as more than one process
-  const recent = new Map<string, number[]>();
-  const limit = (user: string) => {
-    const now = Date.now();
-    const hits = (recent.get(user) ?? []).filter((t) => now - t < 60_000);
-    if (hits.length >= 30) throw new HttpError(429, 'rate_limited');
-    hits.push(now);
-    recent.set(user, hits);
-  };
   /** Lock the referral and check staff may still add a document to it; returns its status. */
   const lockForUpload = async (q: Query, fid: string, rid: string) => {
     const ref = await q<{ status: string }>('SELECT status FROM referrals WHERE facility_id = $1 AND id = $2 FOR UPDATE', [fid, rid]);
@@ -767,9 +775,9 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
         throw new HttpError(400, 'invalid_document');
       }
       const s3 = needStorage();
-      limit(user);
       const body = await tx(async (q) => {
         const who = await enter(q, fid, user);
+        limit(`upload:${user}`, UPLOADS_PER_MINUTE);
         if (!WRITE_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
         await lockForUpload(q, fid, rid);
         const docs = await q<{ n: string; dup: boolean }>(
@@ -799,10 +807,10 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
       const sha = b.sha256;
       const replaces = b.replaces as string | undefined;
       const s3 = needStorage();
-      limit(user);
       // 1. may this user add a document here at all (short transaction, no storage I/O)
       const precheck = async (q: Query) => {
         const who = await enter(q, fid, user);
+        limit(`upload:${user}`, UPLOADS_PER_MINUTE);
         if (!WRITE_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
         const status = await lockForUpload(q, fid, rid);
         // T4: on a partial failure, a new document replaces one that failed (and only then)
@@ -891,9 +899,9 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
     try {
       const user = caller(req.headers);
       const { fid, rid } = ids(req.params);
-      limit(user);
       const body = await tx(async (q) => {
         const who = await enter(q, fid, user);
+        limit(`upload:${user}`, UPLOADS_PER_MINUTE);
         if (!WRITE_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
         const ruleSet = await loadSettings(q, fid, who.organizationId);
         const ref = await q<{ status: string }>('SELECT status FROM referrals WHERE facility_id = $1 AND id = $2 FOR UPDATE', [fid, rid]);

@@ -1045,6 +1045,20 @@ describe.skipIf(!url)('manual fact entry API', () => {
       expect((await ask()).json()).toEqual({ error: 'rate_limited' });
     });
 
+    it('rate limits: review time has its own budget, every route has one, and only members can spend either', async () => {
+      const rid = await newReferral();
+      const limited = buildServer({ tx, auth: 'local-stub', env: 'test', storage: s3Storage(BUCKET) });
+      const uploads = () => post(`${refUrl(rid)}/documents/uploads`, U.admin, { sha256: sha(PDF(18)), bytes: PDF(18).length }, limited);
+      const time = () => post(`${refUrl(rid)}/review-time`, U.admin, { active_ms: 1000 }, limited);
+      for (let i = 0; i < 30; i += 1) expect((await time()).statusCode).not.toBe(429);
+      expect((await uploads()).statusCode).not.toBe(429);
+      const stranger = '00000000-0000-4000-8000-0000000000ff';
+      for (let i = 0; i < 31; i += 1) expect((await post(`${refUrl(rid)}/review-time`, stranger, { active_ms: 1000 }, limited)).statusCode).toBe(404);
+      const read = () => limited.inject({ method: 'GET', url: refUrl(rid), headers: as(U.reviewer) });
+      for (let i = 0; i < 600; i += 1) expect((await read()).statusCode).toBe(200);
+      expect((await read()).json()).toEqual({ error: 'rate_limited' });
+    });
+
     it('upload: adding a document to a referral in review sends it back to processing (T6)', async () => {
       const { rid } = await withFacts(['daily_skilled_need', 'yes']);
       await move(rid, U.reviewer, { action: 'submit' });
@@ -1256,6 +1270,11 @@ describe.skipIf(!url)('manual fact entry API', () => {
 
 // The transaction helper production actually runs, against the real codex_app login (read-only probes).
 describe.skipIf(!appUrl)('poolTx as codex_app', () => {
+  it('a stuck query cannot hold a connection for ever', async () => {
+    const db = poolTx(appUrl!);
+    expect((await db.tx((q) => q('SHOW statement_timeout'))).rows[0]).toEqual({ statement_timeout: '30s' });
+    await db.close();
+  });
   it('runs as codex_app, clears bindings between transactions, and survives a failed one', async () => {
     const db = poolTx(appUrl!);
     try {

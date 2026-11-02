@@ -285,6 +285,33 @@ data "aws_cloudfront_origin_request_policy" "all_but_host" {
   name = "Managed-AllViewerExceptHostHeader"
 }
 
+# The web app's own headers; the API sets its own (apps/api/src/server.ts). Same policy as apps/web/vite.config.ts.
+resource "aws_cloudfront_response_headers_policy" "web" {
+  name = "codex-health-demo-web"
+  security_headers_config {
+    content_security_policy {
+      content_security_policy = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self' https://${module.storage.bucket_name}.s3.${var.region}.amazonaws.com https://${module.storage.bucket_name}.s3.amazonaws.com; object-src 'none'; base-uri 'none'; form-action 'self'; frame-ancestors 'none'"
+      override                = true
+    }
+    content_type_options {
+      override = true
+    }
+    frame_options {
+      frame_option = "DENY"
+      override     = true
+    }
+    referrer_policy {
+      referrer_policy = "no-referrer"
+      override        = true
+    }
+    strict_transport_security {
+      access_control_max_age_sec = 31536000
+      include_subdomains         = true
+      override                   = true
+    }
+  }
+}
+
 resource "aws_cloudfront_distribution" "demo" {
   enabled             = true
   comment             = "Codex Health demo (synthetic data only)"
@@ -322,6 +349,9 @@ resource "aws_cloudfront_distribution" "demo" {
     cached_methods         = ["GET", "HEAD"]
     cache_policy_id        = data.aws_cloudfront_cache_policy.optimized.id
     compress               = true
+
+    response_headers_policy_id = aws_cloudfront_response_headers_policy.web.id
+
     function_association {
       event_type   = "viewer-request"
       function_arn = aws_cloudfront_function.gate.arn
