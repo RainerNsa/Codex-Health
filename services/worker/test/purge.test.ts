@@ -11,6 +11,7 @@ import { poolTx } from '../src/db.ts';
 const url = process.env['DATABASE_URL'];
 if (!url && process.env['REQUIRE_DATABASE']) throw new Error('DATABASE_URL must be set here: the purge suite may not be skipped in the db-checks job');
 const endpoint = process.env['AWS_ENDPOINT_URL']; // localstack only; unset in AWS
+if (!endpoint && process.env['REQUIRE_DATABASE']) throw new Error('the LocalStack address must be set here: the purge suite may not be skipped in the db-checks job');
 const live = Boolean(url && endpoint);
 
 const PAST = new Date('2026-06-01T00:00:00Z');
@@ -112,11 +113,14 @@ test('the purge', { skip: !live }, async (t) => {
     const failing: typeof send = async (c) => { if (c instanceof DeleteObjectCommand && ++calls > 2) throw new Error('down'); return send(c); };
     await assert.rejects(purge(tx, failing, BUCKET, facs[0], PAST, true), /down/);
     assert.deepEqual(await counts(facs[0], due), whole);
+    await assert.rejects(owner(facs[0], (c) => c.query(`INSERT INTO facts (facility_id, referral_id, key, value, source, note, created_by) VALUES ($1, $2, 'recent_aggression', '{"type":"tri_state","value":"no"}', 'user', $3, $4)`, [facs[0], due, S, USER])), /has been purged/, 'frozen from the moment it was claimed');
+    await owner(facs[0], (c) => c.query('UPDATE referrals SET updated_at = now() WHERE facility_id = $1 AND id = $2', [facs[0], due])); // a claim stays due whatever moved since
   });
 
   await t.test('due referrals lose their files and short-class data; the record of the decision stays', async () => {
     const r = await purge(tx, send, BUCKET, facs[0], PAST, true);
     assert.equal(r.purged, 2);
+    assert.equal(await files(facs[0], recent), 7);
     const gone = { facts: 0, documents: 0, events: 0, notes: 1, evaluations: 1, audits: 1, purged: 1 };
     for (const id of [due, amended]) {
       assert.deepEqual(await counts(facs[0], id), gone);
@@ -129,6 +133,21 @@ test('the purge', { skip: !live }, async (t) => {
     assert.deepEqual(await counts(facs[0], recent), whole);
     assert.deepEqual(await counts(facs[1], foreign), whole);
     for (const [f, id] of [[facs[0], open], [facs[0], recent], [facs[1], foreign]] as const) assert.equal(await files(f, id), 7);
+  });
+
+  await t.test('a referral more than a page of files long is emptied, and an amendment before the claim wins', async () => {
+    const big = await seed(facs[0], 'finalized');
+    for (let i = 0; i < 1100; i += 1) await send(new PutObjectCommand({ Bucket: BUCKET, Key: `documents/${facs[0]}/${big}/pages/aa/${i}.png`, Body: 'x' }));
+    const late = await seed(facs[0], 'finalized', '2026-01-02T00:00:00Z'); // listed after big, so big's deletes reach it first
+    const reopening: typeof send = async (c) => {
+      if (c instanceof DeleteObjectCommand) await owner(facs[0], (o) => o.query('UPDATE referrals SET updated_at = now() WHERE facility_id = $1 AND id = $2 AND purge_started_at IS NULL', [facs[0], late]));
+      return send(c);
+    };
+    const r = await purge(tx, reopening, BUCKET, facs[0], PAST, true);
+    assert.equal(r.purged, 1);
+    assert.equal(await files(facs[0], big), 0);
+    assert.deepEqual(await counts(facs[0], late), whole);
+    assert.equal(await files(facs[0], late), 7, 'not claimed, so not one file touched');
   });
 
   await t.test('a second run finds nothing and writes no second audit row', async () => {
@@ -144,9 +163,19 @@ test('the purge', { skip: !live }, async (t) => {
   await t.test('a purged referral takes no new data, from anyone', async () => {
     const insert = (sql: string, refused = /has been purged/) => assert.rejects(owner(facs[0], (c) => c.query(sql, [facs[0], due, S, USER])), refused);
     await insert(`INSERT INTO facts (facility_id, referral_id, key, value, source, note, created_by) VALUES ($1, $2, 'ventilator_use', '{"type":"tri_state","value":"no"}', 'user', $3, $4)`);
-    await insert(`INSERT INTO referral_transitions (facility_id, referral_id, transition, from_status, to_status, note, created_by) SELECT $1, $2, 'T8', 'ready_for_review', 'on_hold', $3, $4`, /purged|not ready_for_review/);
+    await insert(`INSERT INTO documents (facility_id, referral_id, type, sha256, storage_key) SELECT $1::uuid, $2::uuid, 'other', sha256(($3 || $4)::bytea), 'documents/' || $1::text || '/' || $2::text || '/' || encode(sha256(($3 || $4)::bytea), 'hex')`);
     await insert(`INSERT INTO evaluations (facility_id, referral_id, raw, outcome, clinical_outcome, financial_status, sub_reasons, trace, criteria_document_ref, rule_set_version, facility_profile_version, model_id, prompt_version, extractor_version, ocr_engine_version, engine_version)
       SELECT $1, $2, length($3) < 0, 'admit', 'admit', 'clear', '{}', '{"triggered_rules":[]}', 'seed', 1, 1, 'none', 'p0', 'x0', length($4)::text, 'e0'`);
+  });
+
+  await t.test('a purged referral gains no events: opening it writes nothing back', async () => {
+    await owner(facs[0], (c) => c.query(`INSERT INTO product_events (facility_id, referral_id, actor, event, attrs) VALUES ($1, $2, $3, 'referral.held', '{}')`, [facs[0], due, USER]));
+    assert.equal((await counts(facs[0], due)).events, 0);
+  });
+
+  await t.test('the refusal stands on every table that takes data about a referral, for every role', async () => {
+    const { rows } = await pool.query(`SELECT tgrelid::regclass::text AS t FROM pg_trigger WHERE tgname = 'refuse_purged_referral' AND tgenabled = 'A' ORDER BY 1`);
+    assert.deepEqual(rows.map((r) => r.t), ['decision_requests', 'decisions', 'documents', 'evaluations', 'facts']);
   });
 
   await t.test('transition rows stay immutable, and their notes remain until counsel rules', async () => {

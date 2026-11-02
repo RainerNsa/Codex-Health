@@ -1,7 +1,9 @@
 // The deletion job (SPEC §9), first half. A person runs it for one facility with an explicit cut-off, so no retention
-// period lives in code. It previews unless --apply is passed. It runs as the owner, bound to that facility; files go first,
-// so a failure part-way leaves a referral the next run still finds. Only ids and counts are printed.
+// period lives in code. It previews unless --apply is passed. It runs as the owner, bound to that facility. It claims the
+// referral, which freezes it, then deletes files, then rows, so a failure part-way leaves a referral the next run finishes.
+// Only ids and counts are printed.
 // shortcut: manual, closed referrals only, no legal hold, and transition notes, override and amendment reasons remain; finish and schedule it once counsel has ruled.
+// Evaluation traces keep codes, counts and dates, and the job has no AWS role yet: compute-roles grants no version listing or delete.
 // Backups, the dead-letter queue and Textract's store age out on their own clocks; the deletion drill (M6) proves that.
 import { pathToFileURL } from 'node:url';
 import { DeleteObjectCommand, ListObjectVersionsCommand, S3Client } from '@aws-sdk/client-s3';
@@ -11,7 +13,8 @@ import { poolTx } from './db.ts';
 import type { Query, Tx } from './pipeline.ts';
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-const DUE = "status IN ('finalized', 'amended') AND purged_at IS NULL AND updated_at < $2";
+// a claimed referral stays due whatever happened since: a run that stopped part-way must be finished
+const DUE = "status IN ('finalized', 'amended') AND purged_at IS NULL AND (purge_started_at IS NOT NULL OR updated_at < $2)";
 const ACTOR = 'platform:purge';
 
 async function bind(q: Query, facility: string) {
@@ -47,11 +50,14 @@ export async function purge(tx: Tx, send: Send, bucket: string, facility: string
   let purged = 0;
   let files = 0;
   for (const id of due) {
+    const claimed = await tx(async (q) => {
+      await bind(q, facility);
+      return (await q(`UPDATE referrals SET purge_started_at = coalesce(purge_started_at, now()) WHERE facility_id = $1 AND ${DUE} AND id = $3`, [facility, before, id])).rowCount;
+    });
+    if (!claimed) continue; // reopened by an amendment since the list was read
     files += await deleteFiles(send, bucket, facility, id);
     await tx(async (q) => {
       await bind(q, facility);
-      const held = await q(`SELECT 1 FROM referrals WHERE facility_id = $1 AND ${DUE} AND id = $3 FOR UPDATE`, [facility, before, id]);
-      if (!held.rowCount) return;
       const scope = [facility, id];
       await q('DELETE FROM facts WHERE facility_id = $1 AND referral_id = $2', scope);
       await q('DELETE FROM documents WHERE facility_id = $1 AND referral_id = $2', scope);

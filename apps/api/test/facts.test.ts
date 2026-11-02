@@ -616,7 +616,7 @@ describe.skipIf(!url)('manual fact entry API', () => {
     await move(rid, U.reviewer, { action: 'submit' });
     await finalize(rid, U.reviewer, { evaluation_id: ev.id, decision: 'admit' });
     await asOwner(FAC.a);
-    await c.query('UPDATE referrals SET purged_at = now() WHERE id = $1', [rid]);
+    await c.query('UPDATE referrals SET purge_started_at = now() WHERE id = $1', [rid]);
     await c.query("SELECT set_config('app.facility_id', '', true)");
     expect((await get(refUrl(rid), U.admin)).json().actions).toEqual([]);
     const body = { evaluation_id: ev.id, decision: 'do_not_admit', override_reason: 'SYNTHETIC: reason', amendment_reason: 'SYNTHETIC: reason' };
