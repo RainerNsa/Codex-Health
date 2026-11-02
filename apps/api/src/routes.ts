@@ -4,7 +4,7 @@
 // re-evaluates. Responses carry ids, codes and the reviewer's own entries; errors never echo request content.
 import type { FastifyInstance, FastifyReply } from 'fastify';
 import { evaluate, ENGINE_VERSION, isRealDate, parseFactValue, type Fact, type FactValue } from '@codex-health/rules-engine';
-import { bindFacility, bindOrganization, type Query, type Tx } from './db.ts';
+import { bindFacility, bindOrganization, countHit, type Query, type Tx } from './db.ts';
 import { userFromHeaders } from './auth.ts';
 import { loadSettings as loadStored, NOT_SWITCHABLE, PROFILE_KEYS, RuleSetRefused, type RuleSet } from './ruleset.ts';
 import type { Enqueue } from './queue.ts';
@@ -287,20 +287,15 @@ async function referralView(q: Query, facilityId: string, referralId: string, ru
   };
 }
 
-export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: Storage | null; enqueue?: Enqueue | null }): void {
-  // Counted after enter(), so only a facility's members can spend a budget or add an entry; that bounds the map.
-  // shortcut: an in-process limit keyed on the user; a shared limit (WAF or a store) when the API runs as more than one process
-  const recent = new Map<string, number[]>();
-  const limit = (bucket: string, max: number) => {
-    const now = Date.now();
-    const hits = (recent.get(bucket) ?? []).filter((t) => now - t < 60_000);
-    if (hits.length >= max) throw new HttpError(429, 'rate_limited');
-    hits.push(now);
-    recent.set(bucket, hits);
+export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; counter?: Tx; storage: Storage | null; enqueue?: Enqueue | null }): void {
+  // Counted after enter(), so only a facility's members can spend a budget or add a row. Shared by every API process.
+  const limit = async (q: Query, facilityId: string, bucket: string, max: number) => {
+    const hits = deps.counter ? await deps.counter(async (own) => { await bindFacility(own, facilityId); return countHit(own, facilityId, bucket); }) : await countHit(q, facilityId, bucket);
+    if (hits > max) throw new HttpError(429, 'rate_limited');
   };
   const enter = async (q: Query, facilityId: string, userId: string) => {
     const who = await enterFacility(q, facilityId, userId);
-    limit(`all:${userId}`, ANY_ROUTE_PER_MINUTE);
+    await limit(q, facilityId, `all:${userId}`, ANY_ROUTE_PER_MINUTE);
     return who;
   };
   const { tx, storage } = deps;
@@ -358,7 +353,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
       if (!Number.isInteger(ms) || (ms as number) < 1 || (ms as number) > MAX_ACTIVE_MS) throw new HttpError(400, 'invalid_review_time');
       await tx(async (q) => {
         const who = await enter(q, fid, user);
-        limit(`time:${user}`, REVIEW_TIMES_PER_MINUTE);
+        await limit(q, fid, `time:${user}`, REVIEW_TIMES_PER_MINUTE);
         if (!READ_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
         const ref = await q('SELECT 1 FROM referrals WHERE facility_id = $1 AND id = $2', [fid, rid]);
         if (!ref.rowCount) throw new HttpError(404, 'not_found');
@@ -777,7 +772,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
       const s3 = needStorage();
       const body = await tx(async (q) => {
         const who = await enter(q, fid, user);
-        limit(`upload:${user}`, UPLOADS_PER_MINUTE);
+        await limit(q, fid, `upload:${user}`, UPLOADS_PER_MINUTE);
         if (!WRITE_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
         await lockForUpload(q, fid, rid);
         const docs = await q<{ n: string; dup: boolean }>(
@@ -810,7 +805,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
       // 1. may this user add a document here at all (short transaction, no storage I/O)
       const precheck = async (q: Query, first: boolean) => {
         const who = first ? await enter(q, fid, user) : await enterFacility(q, fid, user); // once the file has moved a 429 would lose it
-        if (first) limit(`upload:${user}`, UPLOADS_PER_MINUTE);
+        if (first) await limit(q, fid, `upload:${user}`, UPLOADS_PER_MINUTE);
         if (!WRITE_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
         const status = await lockForUpload(q, fid, rid);
         // T4: on a partial failure, a new document replaces one that failed (and only then)
@@ -901,7 +896,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
       const { fid, rid } = ids(req.params);
       const body = await tx(async (q) => {
         const who = await enter(q, fid, user);
-        limit(`upload:${user}`, UPLOADS_PER_MINUTE);
+        await limit(q, fid, `upload:${user}`, UPLOADS_PER_MINUTE);
         if (!WRITE_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
         const ruleSet = await loadSettings(q, fid, who.organizationId);
         const ref = await q<{ status: string }>('SELECT status FROM referrals WHERE facility_id = $1 AND id = $2 FOR UPDATE', [fid, rid]);

@@ -23,6 +23,7 @@ const HEADERS: Readonly<Record<string, string>> = {
 export interface ServerOptions {
   /** Database access; omitted only for the /health-only test. */
   tx?: Tx;
+  counter?: Tx;
   auth?: AuthMode;
   env?: string;
   /** Document storage; without it the upload routes answer 503 storage_unavailable. */
@@ -65,7 +66,7 @@ export function buildServer(opts: ServerOptions = {}): FastifyInstance {
 
   if (opts.tx) {
     assertAuthAllowed(opts.auth ?? 'local-stub', opts.env, opts.originSecret);
-    registerRoutes(app, { tx: opts.tx, storage: opts.storage ?? null, enqueue: opts.enqueue ?? null });
+    registerRoutes(app, { tx: opts.tx, counter: opts.counter, storage: opts.storage ?? null, enqueue: opts.enqueue ?? null });
   }
   return app;
 }
@@ -81,6 +82,6 @@ if (process.argv[1] === fileURLToPath(import.meta.url)) {
   const queueUrl = process.env['SQS_PROCESSING_QUEUE_URL'];
   // the demo listens for CloudFront on the network; everything else stays on the loopback interface
   const host = env === 'demo' ? '0.0.0.0' : '127.0.0.1';
-  await buildServer({ tx: db.tx, auth: 'local-stub', env, storage: bucket ? s3Storage(bucket, process.env['S3_DOCUMENTS_KMS_KEY_ID']) : null, originSecret: env === 'demo' ? process.env['DEMO_ORIGIN_SECRET'] : undefined, enqueue: queueUrl ? sqsEnqueue(queueUrl) : null }).listen({ host, port });
+  await buildServer({ tx: db.tx, counter: db.counter, auth: 'local-stub', env, storage: bucket ? s3Storage(bucket, process.env['S3_DOCUMENTS_KMS_KEY_ID']) : null, originSecret: env === 'demo' ? process.env['DEMO_ORIGIN_SECRET'] : undefined, enqueue: queueUrl ? sqsEnqueue(queueUrl) : null }).listen({ host, port });
   console.log(`api listening on ${host}:${port}`);
 }

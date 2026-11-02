@@ -61,6 +61,7 @@ async function seed(c) {
     await asOrg(c, ORG_OF[key]);
     await c.query('INSERT INTO facilities (facility_id, organization_id, name) VALUES ($1, $2, $3)', [id, ORG_OF[key], `ZZTEST Facility ${key}`]);
     await c.query('INSERT INTO referrals (facility_id) VALUES ($1)', [id]);
+    await c.query("INSERT INTO rate_limits (facility_id, bucket) VALUES ($1, 'all:zztest')", [id]);
     const user = key.startsWith('a') ? USER.a : USER.b;
     await c.query("INSERT INTO user_facility_roles (user_id, facility_id, role) VALUES ($1, $2, 'admissions_reviewer')", [user, id]);
     await audit(c, id);
@@ -135,7 +136,7 @@ test('row-level security, organisation isolation, audit immutability, the hash c
           await asFacility(c, FAC.a1);
         }
         // Exact readable-table count per role: a dropped or added SELECT grant must be a visible change here.
-        assert.equal(checked, { codex_app: 12, codex_worker: 7 }[role], `${role} could read ${checked} tenant tables`);
+        assert.equal(checked, { codex_app: 13, codex_worker: 7 }[role], `${role} could read ${checked} tenant tables`);
       });
     }
 
@@ -326,6 +327,7 @@ test('row-level security, organisation isolation, audit immutability, the hash c
         'codex_app facts INSERT', 'codex_app facts SELECT',
         'codex_app organizations SELECT',
         'codex_app product_events INSERT', 'codex_app product_events SELECT',
+        'codex_app rate_limits INSERT', 'codex_app rate_limits SELECT', 'codex_app rate_limits UPDATE',
         'codex_app referral_transitions INSERT', 'codex_app referral_transitions SELECT',
         'codex_app referrals INSERT (facility_id)', 'codex_app referrals SELECT', 'codex_app referrals UPDATE (updated_at)',
         'codex_app rule_sets SELECT',

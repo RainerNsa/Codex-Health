@@ -6,7 +6,7 @@ import { afterAll, beforeAll, beforeEach, describe, expect, it } from 'vitest';
 import pg from 'pg';
 import { buildServer } from '../src/server.ts';
 import { DEV_USER_HEADER } from '../src/auth.ts';
-import { poolTx, type Tx } from '../src/db.ts';
+import { poolTx, type Query, type Tx } from '../src/db.ts';
 import { sqsEnqueue } from '../src/queue.ts';
 import { s3Storage } from '../src/storage.ts';
 import { CreateBucketCommand, HeadObjectCommand, S3Client } from '@aws-sdk/client-s3';
@@ -645,9 +645,14 @@ describe.skipIf(!url)('manual fact entry API', () => {
   const BUCKET = process.env['S3_DOCUMENTS_BUCKET'] ?? 'codex-health-documents-local';
   const withS3 = !!process.env['AWS_ENDPOINT_URL']; // localstack only
   if (!withS3 && process.env['REQUIRE_DATABASE']) throw new Error('AWS_ENDPOINT_URL (localstack) must be set here: the document tests may not be skipped in the db-checks job');
-  // rebuilt for each test: the upload rate limit counts per server, and the suite would otherwise add up to it
+  // budgets cleared for each test: the suite would otherwise add up to the upload limit
   let docApp = buildServer({ tx, auth: 'local-stub', env: 'test', storage: withS3 ? s3Storage(BUCKET) : null });
-  beforeEach(() => { docApp = buildServer({ tx, auth: 'local-stub', env: 'test', storage: withS3 ? s3Storage(BUCKET) : null }); });
+  beforeEach(async () => {
+    docApp = buildServer({ tx, auth: 'local-stub', env: 'test', storage: withS3 ? s3Storage(BUCKET) : null });
+    await asOwner(FAC.a);
+    await c.query('DELETE FROM rate_limits');
+    await c.query("SELECT set_config('app.facility_id', '', true)");
+  });
   const PDF = (n: number) => Buffer.from(`%PDF-1.4\nZZTEST synthetic document ${n}\n`);
   const sha = (b: Buffer) => createHash('sha256').update(b).digest('hex');
   /** Upload like the browser: ask for a URL, PUT the bytes, then ask the API to check and record them. */
@@ -1060,7 +1065,14 @@ describe.skipIf(!url)('manual fact entry API', () => {
 
     it('rate limits: review time has its own budget, every route has one, and only members can spend either', async () => {
       const rid = await newReferral();
-      const limited = buildServer({ tx, auth: 'local-stub', env: 'test', storage: s3Storage(BUCKET) });
+      // a stand-in for the store: every savepoint here rolls back with its request, and in production a refused request still counts
+      const counts = new Map<string, number>();
+      const counter = (async (fn: (q: Query) => Promise<unknown>) => fn((async (sql: string, params: string[] = []) => {
+        if (!sql.includes('rate_limits')) return { rows: [] };
+        counts.set(params[1]!, (counts.get(params[1]!) ?? 0) + 1);
+        return { rows: [{ hits: counts.get(params[1]!) }] };
+      }) as unknown as Query)) as Tx;
+      const limited = buildServer({ tx, counter, auth: 'local-stub', env: 'test', storage: s3Storage(BUCKET) });
       const uploads = () => post(`${refUrl(rid)}/documents/uploads`, U.admin, { sha256: sha(PDF(18)), bytes: PDF(18).length }, limited);
       const time = () => post(`${refUrl(rid)}/review-time`, U.admin, { active_ms: 1000 }, limited);
       const stranger = '00000000-0000-4000-8000-0000000000ff';

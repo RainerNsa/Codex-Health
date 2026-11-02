@@ -7,9 +7,9 @@ export type Query = <R extends pg.QueryResultRow = pg.QueryResultRow>(sql: strin
 export type Tx = <T>(fn: (q: Query) => Promise<T>) => Promise<T>;
 
 /** Production/dev: a pool connected as codex_app (DATABASE_URL_APP). */
-export function poolTx(connectionString: string): { tx: Tx; close: () => Promise<void> } {
-  const pool = new pg.Pool({ connectionString, max: 10, statement_timeout: 30_000, connectionTimeoutMillis: 10_000 });
-  const tx: Tx = async (fn) => {
+export function poolTx(connectionString: string): { tx: Tx; counter: Tx; close: () => Promise<void> } {
+  const open = (max: number) => new pg.Pool({ connectionString, max, statement_timeout: 30_000, connectionTimeoutMillis: 10_000 });
+  const over = (pool: pg.Pool): Tx => async (fn) => {
     const client = await pool.connect();
     try {
       await client.query('BEGIN');
@@ -23,7 +23,20 @@ export function poolTx(connectionString: string): { tx: Tx; close: () => Promise
       client.release();
     }
   };
-  return { tx, close: () => pool.end() };
+  const [pool, counts] = [open(10), open(2)];
+  // Its own connections: a hit must survive its request failing, and a request holding one connection must not wait on another from a full pool.
+  return { tx: over(pool), counter: over(counts), close: async () => { await Promise.all([pool.end(), counts.end()]); } };
+}
+
+/** How many times this budget has been spent in the current minute, this one included. The row lock makes it exact across processes.
+ *  shortcut: a fixed window, so a burst across a boundary can reach twice the limit; a sliding one if that ever matters. */
+export async function countHit(q: Query, facilityId: string, bucket: string): Promise<number> {
+  const { rows } = await q<{ hits: number }>(`INSERT INTO rate_limits (facility_id, bucket) VALUES ($1, $2)
+    ON CONFLICT (facility_id, bucket) DO UPDATE SET
+      hits = CASE WHEN rate_limits.started_at <= now() - interval '1 minute' THEN 1 ELSE rate_limits.hits + 1 END,
+      started_at = CASE WHEN rate_limits.started_at <= now() - interval '1 minute' THEN now() ELSE rate_limits.started_at END
+    RETURNING hits`, [facilityId, bucket]);
+  return rows[0]!.hits;
 }
 
 export const bindFacility = (q: Query, facilityId: string) => q("SELECT set_config('app.facility_id', $1, true)", [facilityId]);
