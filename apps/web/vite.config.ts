@@ -8,6 +8,8 @@ const CSP = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inl
 
 export default defineConfig({
   plugins: [react()],
+  // two pages: the site at / and the reviewer app at /demo.html, both plain files so any static host serves them
+  build: { rollupOptions: { input: { site: 'index.html', demo: 'demo.html' } } },
   server: { host: '127.0.0.1', proxy: { '/api': 'http://127.0.0.1:3000' } },
   preview: { headers: { 'Content-Security-Policy': CSP, 'X-Content-Type-Options': 'nosniff', 'Referrer-Policy': 'no-referrer' } },
 });

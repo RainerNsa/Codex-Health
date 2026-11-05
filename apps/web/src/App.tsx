@@ -133,7 +133,7 @@ export function App() {
               <Heading as="h1" size="lg" fontWeight="700">{inReferral ? <>Referral <chakra.span fontFamily="mono" fontWeight="400">{view.referral.id.slice(0, 8)}</chakra.span></> : SCREENS.find((s) => s.id === screen)?.label}</Heading>
               {inReferral && <StatusPill status={view.referral.status} />}
             </Flex>
-            <Sub>Internal build. Synthetic data only. Local sign-in stub: no real accounts.</Sub>
+            <Sub>Demo with synthetic data only. Never upload real patient documents. Local sign-in stub: no real accounts.</Sub>
           </Box>
           {inReferral
             ? <Button size="sm" variant="outline" onClick={() => setView(null)}><ArrowLeftIcon aria-hidden="true" /> Back to referrals</Button>

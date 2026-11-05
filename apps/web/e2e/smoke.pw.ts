@@ -19,7 +19,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
   for (const size of sizes) {
     test(`screens: ${colorScheme} ${size.name}`, async ({ browser }) => {
       const page = await (await browser.newContext({ colorScheme, viewport: size })).newPage();
-      await page.goto('/');
+      await page.goto('/demo.html');
       await expect(page.getByRole('heading', { name: 'Referrals', level: 1 })).toBeVisible();
       await check(page, `${colorScheme}-${size.name}-queue`);
 
@@ -55,7 +55,7 @@ test('evidence: quotes stay text, and what did not verify says so in words', asy
     const body = await res.json();
     await route.fulfill({ response: res, json: route.request().method() === 'POST' ? { ...body, facts: [aiFact('ventilator_use', 'no', true, 'high'), aiFact('recent_aggression', 'yes', false, 'high'), aiFact('daily_skilled_need', 'yes', true, 'low')] } : body });
   });
-  await page.goto('/');
+  await page.goto('/demo.html');
   await page.getByRole('button', { name: 'New referral' }).click();
   await expect(page.getByRole('heading', { name: 'Facts the recommendation rests on' })).toBeVisible();
   await expect(page.getByText('Quote not found on the page')).toBeVisible();
@@ -76,7 +76,7 @@ async function overlaid(browser: Browser, overlay: Record<string, unknown>) {
     const { referral, ...rest } = overlay as { referral?: object };
     await route.fulfill({ response: res, json: route.request().method() === 'POST' ? { ...body, ...rest, referral: { ...body.referral, ...referral } } : body });
   });
-  await page.goto('/');
+  await page.goto('/demo.html');
   await page.getByRole('button', { name: 'New referral' }).click();
   return page;
 }
@@ -138,7 +138,7 @@ test('a failed document: a refused copy says so, and a good one downloads, never
 
 test('the queue is home: a referral replaces it, Back returns, and the facility picker never shows another facility list', async ({ browser }) => {
   const page = await (await browser.newContext({ viewport: sizes[0] })).newPage();
-  await page.goto('/');
+  await page.goto('/demo.html');
   await page.getByRole('button', { name: 'New referral' }).click();
   await expect(page.getByRole('heading', { name: 'Recommendation', exact: true })).toBeVisible();
   await expect(page.getByRole('heading', { name: /^Referral / })).toBeVisible();
@@ -166,7 +166,7 @@ test('while documents are read the screen shows progress, and it follows the ref
     const res = await route.fetch();
     await route.fulfill({ response: res, json: await res.json() });
   });
-  await page.goto('/');
+  await page.goto('/demo.html');
   await page.getByRole('button', { name: 'New referral' }).click();
   await expect(page.getByText('Reading documents: 1 of 2 done.')).toBeVisible();
   await check(page, 'light-desktop-processing');
@@ -174,3 +174,17 @@ test('while documents are read the screen shows progress, and it follows the ref
   await expect.poll(() => reads).toBeGreaterThan(0);
   await expect(page.getByText('Reading documents')).toHaveCount(0); // the real referral is a draft: the poll brought the screen up to date
 });
+
+for (const colorScheme of ['light', 'dark'] as const) {
+  for (const size of sizes) {
+    test(`site: ${colorScheme} ${size.name}`, async ({ browser }) => {
+      const page = await (await browser.newContext({ colorScheme, viewport: size })).newPage();
+      await page.goto('/');
+      await expect(page.getByRole('heading', { level: 1 })).toHaveText('Admission decisions you can trace back to the page.');
+      await check(page, `${colorScheme}-${size.name}-site`);
+      await page.getByRole('link', { name: 'Open the demo' }).first().click();
+      await expect(page).toHaveURL(/\/demo\.html$/);
+      await expect(page.getByRole('heading', { name: 'Referrals', level: 1 })).toBeVisible();
+    });
+  }
+}
