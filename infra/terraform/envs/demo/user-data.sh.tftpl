@@ -112,4 +112,8 @@ sed -e 's/Codex Health API/Codex Health worker/' -e 's#apps/api#services/worker#
   /etc/systemd/system/codex-api.service > /etc/systemd/system/codex-worker.service
 systemctl daemon-reload
 systemctl enable --now codex-api codex-worker
+
+# --- five prepared referrals for showing the product, entered through the API like a person would --------------
+for i in $(seq 1 60); do curl -fs -H "x-codex-origin: ${origin_secret}" http://127.0.0.1:3000/health >/dev/null && break; sleep 2; done
+$AS_CODEX DEMO_ORIGIN_SECRET='${origin_secret}' node scripts/dev/seed-demo.mjs || echo "codex-health demo: seed-demo failed, the demo starts empty"
 echo "codex-health demo: ready"

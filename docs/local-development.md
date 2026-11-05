@@ -32,6 +32,7 @@ Then, as you need them:
 
 ```sh
 node scripts/dev/seed-synthetic.mjs   # 2 orgs x 2 facilities x 3 users, all named ZZTEST; idempotent
+node scripts/dev/seed-demo.mjs        # with the API running: five prepared referrals for a demo (see docs/deploy-demo.md); skips a facility that has referrals
 npm run check -w @codex-health/db        # the two CONSTRAINTS SQL checks; prints "db checks: all pass"
 npm test -w @codex-health/db             # migration-runner unit test + cross-facility/audit tests
 npm run dev:down                      # stop containers, keep data
@@ -156,7 +157,7 @@ scripts/dev/stack.sh logs
 scripts/dev/stack.sh down
 ```
 
-Open http://127.0.0.1:5173 for the site, or http://127.0.0.1:5173/demo.html for the app. No cloud account, and every port stays on 127.0.0.1. Stop any `npm run dev` web server first: both use port 5173.
+Open http://127.0.0.1:5173 for the site, or http://127.0.0.1:5173/app.html for the app. No cloud account, and every port stays on 127.0.0.1. Stop any `npm run dev` web server first: both use port 5173.
 
 The worker runs with `LOCAL_PIPELINE=1`, which it refuses outside `CODEX_ENV=development`. Pages are rendered in the same sandbox as on a server, then read by Tesseract inside that sandbox. Facts come from a keyword search (`services/worker/src/local.ts`), **not AI**: it finds yes/no facts by words in their key, misses meaning, and can pick up a line that only mentions the word. Every such fact is low confidence and a person must state it. Do not judge extraction quality from this stack.
 

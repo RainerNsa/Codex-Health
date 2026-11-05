@@ -1,4 +1,4 @@
-// Shared start-up for both pages (the site and the demo app): fonts, the theme, and the person's light or dark setting.
+// Shared start-up for both pages (the site and the app): fonts, the theme, and the person's light or dark setting.
 import { StrictMode, type ReactNode } from 'react';
 import { createRoot } from 'react-dom/client';
 import { ChakraProvider } from '@chakra-ui/react';
