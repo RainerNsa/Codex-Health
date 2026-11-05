@@ -70,7 +70,7 @@ aws ssm start-session --target "$(terraform output -raw server_instance_id)"
 sudo tail -f /var/log/cloud-init-output.log   # ends with "codex-health demo: ready"
 ```
 
-Open `demo_url`, enter the gate user name (`codex` unless changed) and your password, then pick a ZZTEST user.
+Open `demo_url` and enter the gate user name (`codex` unless changed) and your password. The site opens first; **Open the demo** leads to the app (`/demo.html`), where you pick a ZZTEST user. To show a contact button on the site, build with `VITE_CONTACT_EMAIL` set.
 
 ## Update to a newer commit
 
