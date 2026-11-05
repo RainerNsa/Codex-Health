@@ -32,7 +32,8 @@ Then, as you need them:
 
 ```sh
 node scripts/dev/seed-synthetic.mjs   # 2 orgs x 2 facilities x 3 users, all named ZZTEST; idempotent
-node scripts/dev/seed-demo.mjs        # with the API running: five prepared referrals for a demo (see docs/deploy-demo.md); skips a facility that has referrals
+node scripts/dev/seed-demo.mjs        # with the API running: five prepared referrals (see docs/deploy-demo.md); skips a facility that has referrals
+API_URL=http://127.0.0.1:5173 node scripts/dev/seed-demo.mjs   # the same, against the Docker stack (stack.sh up): its API is reached through the web server
 npm run check -w @codex-health/db        # the two CONSTRAINTS SQL checks; prints "db checks: all pass"
 npm test -w @codex-health/db             # migration-runner unit test + cross-facility/audit tests
 npm run dev:down                      # stop containers, keep data
