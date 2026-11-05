@@ -70,7 +70,20 @@ aws ssm start-session --target "$(terraform output -raw server_instance_id)"
 sudo tail -f /var/log/cloud-init-output.log   # ends with "codex-health demo: ready"
 ```
 
-Open `demo_url` and enter the gate user name (`codex` unless changed) and your password. The site opens first; **Open the demo** leads to the app (`/demo.html`), where you pick a ZZTEST user. To show a contact button on the site, build with `VITE_CONTACT_EMAIL` set.
+Open `demo_url` and enter the gate user name (`codex` unless changed) and your password. The site opens first; **Sign in** leads to the app (`/app.html`), where you pick a ZZTEST user. To show a contact button on the site, build with `VITE_CONTACT_EMAIL` set.
+
+The server enters five prepared referrals at ZZTEST Alpha Facility 1 at first boot (`scripts/dev/seed-demo.mjs`), through
+the API as the ZZTEST Reviewer, so the queue is not empty:
+
+| Referral | Status | What to show |
+| --- | --- | --- |
+| Admit | Ready for review | Record the decision as the Reviewer |
+| Missing information | Information requested | Ventilator use was never stated, so it stays Unknown and is asked for, never read as No |
+| Leadership review | Escalated, director of nursing | A review rule routes it to a person |
+| Do Not Admit | Finalized (Decided view) | The ventilator hard stop, decided as recommended; the rule trace under "Why" |
+| Co-sign waiting | Ready for review | A hard-stop fact was corrected, so the Reviewer's Admit waits for a second person: switch to ZZTEST Admin and co-sign |
+
+Each one can be shown once: a decision is final. Rebuild the server (below) to start over.
 
 ## Update to a newer commit
 

@@ -1,9 +1,9 @@
 // Manual fact entry (SPEC §5 T7, dev-alignment 2.1): the first reviewer-facing screen. Every value the API
-// returns is rendered as text (no HTML injection anywhere, CONSTRAINTS Floor). Defaults are the synthetic seed
-// (scripts/dev/seed-synthetic.mjs): ZZTEST Alpha Facility 1 and its Reviewer.
+// returns is rendered as text (no HTML injection anywhere, CONSTRAINTS Floor). The user and facility come from the
+// stand-in sign-in (SignIn.tsx), which offers only the synthetic seed (scripts/dev/seed-synthetic.mjs).
 import { useEffect, useState, type FormEvent } from 'react';
 import { Box, Button, Flex, Grid, Heading, HStack, Input, Progress as ChakraProgress, Table, Text, Textarea, chakra } from '@chakra-ui/react';
-import { ArrowLeftIcon, CheckCircleIcon, PlusIcon, ProhibitIcon, WarningCircleIcon, type Icon } from '@phosphor-icons/react';
+import { ArrowLeftIcon, CheckCircleIcon, PlusIcon, ProhibitIcon, SignOutIcon, WarningCircleIcon, type Icon } from '@phosphor-icons/react';
 import { amendReferral, ApiError, resolveFailures, retryFailed, uploadDocument, cosignRequest, createReferral, enterFact, finalizeReferral, getReferral, moveReferral, reevaluateReferral, requestCosign, type ReferralView, type Tri } from './api.ts';
 import { ReviewPanel } from './ReviewPanel.tsx';
 import { DocumentsPanel } from './DocumentsPanel.tsx';
@@ -14,19 +14,8 @@ import { Logo } from './Logo.tsx';
 import { Nav, Placeholder, SCREENS, type Screen } from './Placeholders.tsx';
 import { SettingsPanel } from './SettingsPanel.tsx';
 import { Callout, Field, Panel, Select, Sub, type Tone } from './ui.tsx';
+import { loadSession, SEED_FACILITIES, SEED_USERS, SignIn, storeSession, type Session } from './SignIn.tsx';
 
-// shortcut: the seeded facilities; a user's own list comes with real sign-in (M6), since listing them needs a new read policy
-const SEED_FACILITIES = [
-  { id: '00000000-0000-4000-8000-00000000f0a1', label: 'ZZTEST Alpha Facility 1' },
-  { id: '00000000-0000-4000-8000-00000000f0a2', label: 'ZZTEST Alpha Facility 2' },
-  { id: '00000000-0000-4000-8000-00000000f0b1', label: 'ZZTEST Beta Facility 1' },
-  { id: '00000000-0000-4000-8000-00000000f0b2', label: 'ZZTEST Beta Facility 2' },
-];
-const SEED_USERS = [
-  { id: '00000000-0000-4000-8000-0000000000e2', label: 'ZZTEST Reviewer' },
-  { id: '00000000-0000-4000-8000-0000000000e1', label: 'ZZTEST Admin' },
-  { id: '00000000-0000-4000-8000-0000000000e3', label: 'ZZTEST Viewer (read only)' },
-];
 const POLL_MS = 10_000;
 const OUTCOME_LABEL = { admit: 'Admit', needs_review: 'Needs Review', do_not_admit: 'Do Not Admit' } as const;
 const OUTCOME_LOOK: Record<string, { tone: Tone; icon: Icon }> = { admit: { tone: 'admit', icon: CheckCircleIcon }, needs_review: { tone: 'review', icon: WarningCircleIcon }, do_not_admit: { tone: 'stop', icon: ProhibitIcon } };
@@ -34,7 +23,7 @@ const REASON_LABEL: Record<string, string> = {
   missing_info: 'Missing information', clinical: 'Clinical review', financial: 'Financial review', leadership: 'Leadership review', processing_incomplete: 'Processing incomplete',
 };
 const ERROR_TEXT: Record<string, string> = {
-  unauthenticated: 'Choose a user first.', not_found: 'Not found, or not visible to this user at this facility.', forbidden: 'This user may read but not change this referral.',
+  unauthenticated: 'Sign in first.', not_found: 'Not found, or not visible to this user at this facility.', forbidden: 'This user may read but not change this referral.',
   invalid_fact: 'Check the entry: a value and a note are required, and the date must be real and not in the future.',
   facility_not_configured: 'This facility has no rule set or profile yet. An Admin sets them under Facility settings.',
   rule_set_refused: 'The organisation\'s rule set is invalid, so referrals cannot be evaluated until it is replaced.', referral_not_open: 'This referral is finalized; its facts are frozen and only the decision can be amended, by an Admin.',
@@ -71,8 +60,15 @@ const ERROR_TEXT: Record<string, string> = {
 const keyLabel = (k: string) => k.replaceAll('_', ' ');
 
 export function App() {
-  const [user, setUser] = useState(SEED_USERS[0]!.id);
-  const [facility, setFacility] = useState(SEED_FACILITIES[0]!.id);
+  const [session, setSession] = useState(loadSession);
+  const change = (s: Session | null) => { storeSession(s); setSession(s); };
+  // signing out unmounts the reviewer screen, which ends (and reports) any open review time under the old user
+  return session
+    ? <Reviewer {...session} onFacility={(facility) => change({ ...session, facility })} onSignOut={() => change(null)} />
+    : <SignIn onSignIn={change} />;
+}
+
+function Reviewer({ user, facility, onFacility, onSignOut }: Session & { onFacility: (id: string) => void; onSignOut: () => void }) {
   const [view, setView] = useState<ReferralView | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [busy, setBusy] = useState(false);
@@ -113,15 +109,16 @@ export function App() {
       {/* the rail is navy in both themes, so its focus ring uses the signal colour */}
       <Box as="header" bg="rail" color="railInk" css={{ '--chakra-colors-brand-solid': 'var(--chakra-colors-signal)' }}>
       <Flex direction="column" gap="6" p="4" position={{ lg: 'sticky' }} top="0" h={{ lg: '100dvh' }}>
-        <Logo />
+        <Box><Logo /><Text fontSize="xs" mt="2" opacity="0.85">Test environment</Text></Box>
         <Nav screen={screen} onSelect={setScreen} />
         <Grid mt={{ lg: 'auto' }} gap="3">
           <Field label="Facility">
-            <Select value={facility} onChange={setFacility}>{SEED_FACILITIES.map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}</Select>
+            <Select value={facility} onChange={onFacility}>{SEED_FACILITIES.map((f) => <option key={f.id} value={f.id}>{f.label}</option>)}</Select>
           </Field>
-          <Field label="Signed in as">
-            <Select value={user} onChange={setUser}>{SEED_USERS.map((u) => <option key={u.id} value={u.id}>{u.label}</option>)}</Select>
-          </Field>
+          <Flex align="center" justify="space-between" gap="2" wrap="wrap">
+            <Box fontSize="sm"><Text fontWeight="500">Signed in as</Text><Text>{SEED_USERS.find((u) => u.id === user)?.label}</Text></Box>
+            <Button size="xs" variant="outline" color="railInk" borderColor="railInk" _hover={{ bg: 'whiteAlpha.200' }} onClick={onSignOut}><SignOutIcon aria-hidden="true" /> Sign out</Button>
+          </Flex>
         </Grid>
       </Flex>
       </Box>
@@ -133,7 +130,6 @@ export function App() {
               <Heading as="h1" size="lg" fontWeight="700">{inReferral ? <>Referral <chakra.span fontFamily="mono" fontWeight="400">{view.referral.id.slice(0, 8)}</chakra.span></> : SCREENS.find((s) => s.id === screen)?.label}</Heading>
               {inReferral && <StatusPill status={view.referral.status} />}
             </Flex>
-            <Sub>Demo with synthetic data only. Never upload real patient documents. Local sign-in stub: no real accounts.</Sub>
           </Box>
           {inReferral
             ? <Button size="sm" variant="outline" onClick={() => setView(null)}><ArrowLeftIcon aria-hidden="true" /> Back to referrals</Button>

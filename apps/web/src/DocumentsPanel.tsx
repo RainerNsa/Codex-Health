@@ -74,6 +74,7 @@ export function DocumentsPanel({ view, busy, on, facility, user }: { view: Refer
             <input type="file" multiple accept="application/pdf,image/png,image/jpeg,image/tiff" disabled={busy} style={{ display: 'block' }}
               onChange={(e) => { const files = [...(e.target.files ?? [])]; if (files.length) void on.upload(files, type); e.target.value = ''; }} />
           </label>
+          <Text flexBasis="100%" color="muted">Test environment: upload test documents only, never real patient records.</Text>
         </Flex>
       )}
       {view.actions.includes('process') && <Button mt="3" size="sm" disabled={busy} onClick={() => void on.process()}>Submit for processing</Button>}
