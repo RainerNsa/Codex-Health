@@ -199,7 +199,7 @@ for (const colorScheme of ['light', 'dark'] as const) {
     await page.getByRole('radio', { name: 'ZZTEST Admin' }).check();
     await page.getByRole('button', { name: 'Sign in' }).click();
     await page.getByRole('button', { name: 'Audit trail' }).click();
-    await expect(page.getByText(/^Chain intact: all \d+ entries/)).toBeVisible();
+    await expect(page.getByText(/^No inconsistencies found in \d+ entries/)).toBeVisible();
     await check(page, `${colorScheme}-audit`);
     await page.getByRole('button', { name: /show only this referral's trail/ }).first().click();
     await expect(page.getByText(/^Showing the trail of/)).toBeVisible();

@@ -119,6 +119,6 @@ export const sendReviewTime = (facility: string, referral: string, user: string,
   }).catch(() => undefined);
 
 export interface AuditEntry { seq: number; at: string; actor: string; actor_name: string | null; action: string; entity_type: string; entity_id: string | null }
-export interface AuditPage { chain: { checked: number; broken: number[] }; entries: AuditEntry[]; next: string | null }
+export interface AuditPage { chain: { checked: number; broken: number[] } | null; entries: AuditEntry[]; next: string | null }
 export const getAudit = (facility: string, user: string, entity?: string, before?: string) =>
   call<AuditPage>(`/api/facilities/${facility}/audit?${new URLSearchParams({ ...(entity ? { entity } : {}), ...(before ? { before } : {}) })}`, user);
