@@ -20,14 +20,6 @@ const PLACEHOLDER: Partial<Record<Screen, { holds: string; meanwhile: string }>>
     holds: 'Referral counts by status and time from receipt to decision for this facility, built from the events recorded today.',
     meanwhile: 'The Referrals screen lists what needs staff, what is processing and what is decided.',
   },
-  history: {
-    holds: 'Every decided referral with its decisions, co-signs and amendments, searchable by date and outcome.',
-    meanwhile: 'The Decided view on the Referrals screen lists decided referrals; opening one shows its full decision history.',
-  },
-  criteria: {
-    holds: "The organisation's rule set versions, what changed between them, and which version each decision used.",
-    meanwhile: 'Facility settings shows the rule set version in force; every recommendation records the version it used.',
-  },
   users: {
     holds: 'Inviting staff to this facility and assigning their roles, with sign-in and multi-factor authentication.',
     meanwhile: 'Roles are provisioned by the platform; the local build uses fixed synthetic users.',
