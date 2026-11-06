@@ -7,7 +7,7 @@ yet. This plan covers what comes first and needs neither: a person confirms a ha
 | --- | --- | --- |
 | 1. Render | The worker turns each page into a PNG in a locked-down child process, before OCR. A file it cannot render fails with nothing written (XF-8) | No |
 | 2. Show and record (done) | The page image sits beside the fact. `evidence.viewed` fires when the image has loaded in the browser, and only then can the reading be confirmed | No |
-| 3. Enforce | Finalize is refused while a `single_source` hard-stop No has not been confirmed against its page (T12) | No |
+| 3. Enforce (done) | Retyping a one-document reading with the same value is refused where its page has an image (founder decision 2026-11-06), and finalize is refused while a `single_source` hard-stop No has not been confirmed against its page (T12) | No |
 | Later | Key-aware quote checks; fuzzy quote matching and its two 5.6 metrics, tuned on real Textract output; quote highlights from Textract word positions; the first real eval run | Yes |
 
 Fuzzy matching waits on purpose: tuned without real OCR output it could let fabricated quotes pass (I2).

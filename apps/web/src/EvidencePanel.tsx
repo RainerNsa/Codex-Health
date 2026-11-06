@@ -65,6 +65,7 @@ export function EvidencePanel({ view, facility, user, busy, onConfirm, form }: {
                 {f && <Text fontSize="xs" color="muted">{f.source === 'ai' ? 'Read by the AI' : `Stated by staff${f.as_of_date ? `, as of ${f.as_of_date}` : ''}`}</Text>}
                 {t && <Badge bg={`${t.tone}Soft`} color={t.tone}>{t.text}</Badge>}
                 {f?.single_source && <Badge bg="reviewSoft" color="review">One document only</Badge>}
+                {f?.source === 'ai' && f.single_source && <Text fontSize="xs" color="muted">Check it against the page before deciding.</Text>}
               </Flex>
               {f?.note && <Text mt="1" fontSize="xs">{f.note}</Text>}
               {f?.evidence && (

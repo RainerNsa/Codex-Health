@@ -48,6 +48,8 @@ const ERROR_TEXT: Record<string, string> = {
   evaluation_current: 'The recommendation is already up to date.',
   fact_changed: 'This reading changed since the screen loaded. Reload the referral and check it again.',
   evidence_not_viewed: 'Show the page before confirming this reading.',
+  confirm_against_page: 'Only one document gives this reading. Show its page and confirm it there; retyping the same value does not count as a check.',
+  page_check_required: 'A hard-stop reading from one document only has not been checked against its page. Show the page and confirm it, or enter what you found, before deciding.',
   retry_limit: 'This document has failed too many times. Replace it, or mark it not applicable.',
   cosign_required: 'This decision needs a second Admin to co-sign: file it for co-sign instead.',
   cosign_not_needed: 'This decision needs no co-sign: record it directly.',

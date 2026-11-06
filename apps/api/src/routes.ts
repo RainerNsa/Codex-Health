@@ -57,6 +57,9 @@ const pageSeenFor = async (q: Query, fid: string, rid: string, user: string, fac
   ((await q(`SELECT 1 FROM product_events WHERE facility_id = $1 AND referral_id = $2 AND event = 'evidence.viewed' AND actor = $3 AND attrs->>'fact_id' = $4 LIMIT 1`,
   [fid, rid, `user:${user}`, factId])).rowCount ?? 0) > 0;
 
+/** A page a person can check: rendered, and not blank. A TIFF has no images, a corrupt scan comes out blank: a person states the fact. */
+const hasPageImage = (doc: { page_images: number | null; blank_pages: number[] | null }, page: number) => page <= (doc.page_images ?? 0) && !doc.blank_pages?.includes(page);
+
 async function enterFacility(q: Query, facilityId: string, userId: string): Promise<Caller> {
   await bindFacility(q, facilityId);
   const fac = await q<{ organization_id: string }>('SELECT organization_id FROM facilities WHERE facility_id = $1', [facilityId]);
@@ -497,6 +500,11 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
         if (confirming) {
           if (!previous || previous.id !== b.confirms || previous.source !== 'ai' || !previous.evidence || JSON.stringify(previous.value) !== JSON.stringify(value)) throw new HttpError(409, 'fact_changed');
           if (!await pageSeenFor(q, fid, rid, user, previous.id)) throw new HttpError(409, 'evidence_not_viewed');
+        } else if (previous?.source === 'ai' && previous.single_source && previous.evidence && JSON.stringify(previous.value) === JSON.stringify(value)) {
+          // retyping it would pass for a check nobody made (founder decision 2026-11-06): confirm it against its page instead
+          const doc = (await q<{ page_images: number | null; blank_pages: number[] | null }>("SELECT page_images, blank_pages FROM documents WHERE facility_id = $1 AND referral_id = $2 AND id = $3 AND status = 'processed'",
+            [fid, rid, previous.evidence.document_id])).rows[0];
+          if (doc && hasPageImage(doc, previous.evidence.page)) throw new HttpError(409, 'confirm_against_page');
         }
         const kind = confirming ? 'fact.confirmed' : previous ? 'fact.corrected' : 'fact.entered';
         // A key that was ever specially protected stays protected: the flag carries to every correction, and the
@@ -617,6 +625,8 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
   };
   const finishCheck = async (q: Query, fid: string, rid: string, ruleSets: RuleSet[], ev: EvaluationRow, decision: 'admit' | 'do_not_admit', reason: string | null, status: string, latestDecision: string | null) => {
     const facts = await currentFacts(q, fid, rid);
+    // a hard-stop No only one document gives is checked against its page by a person first, whatever the decision (T12, XF-7b)
+    if (facts.some((f) => f.source === 'ai' && f.single_source)) throw new HttpError(409, 'page_check_required');
     if (!Array.isArray(ev.trace.confirmation_set) || confirmation(ev.trace.confirmation_set, facts).some((c) => !c.confirmed)) throw new HttpError(409, 'confirmation_incomplete');
     // a dispute between documents, or a document against a person, needs that fact stated again before an Admit (§3, I9)
     if (decision === 'admit' && ((ev.trace.disagreements ?? []).length > 0 || ruleSets.some((rs) => confirmation(admitKeys(rs, ev), facts).some((c) => !c.known)))) throw new HttpError(409, 'confirmation_incomplete');
@@ -910,7 +920,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
         if (!READ_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
         const doc = (await q<{ storage_key: string; page_images: number | null; blank_pages: number[] | null }>("SELECT storage_key, page_images, blank_pages FROM documents WHERE facility_id = $1 AND referral_id = $2 AND id = $3 AND status = 'processed'", [fid, rid, did])).rows[0];
         if (!doc) throw new HttpError(404, 'not_found');
-        if (page > (doc.page_images ?? 0) || doc.blank_pages?.includes(page)) throw new HttpError(404, 'no_page_image'); // a TIFF has none, a corrupt scan comes out blank: a person states the fact
+        if (!hasPageImage(doc, page)) throw new HttpError(404, 'no_page_image');
         await audit(q, fid, user, 'document.page_issued', 'document', did);
         await emit(q, fid, rid, user, 'evidence.page_issued', { document_id: did, page });
         return { url: await s3.presignGet(pageImageKey(doc.storage_key, page), 'inline'), expires_in: VIEW_TTL_SECONDS };
