@@ -15,6 +15,8 @@ const PAGE = /^[1-9]\d{0,5}$/;
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 const MAX_RETRIES = 3; // per document: past this it is not a passing fault, and a person replaces it or marks it not applicable
 const ANY_ROUTE_PER_MINUTE = 600;
+// a full chain check rehashes every row the facility ever wrote: an Admin's whole-log loads are kept to a handful a minute
+const AUDIT_CHECKS_PER_MINUTE = 10;
 const UPLOADS_PER_MINUTE = 30;
 const REVIEW_TIMES_PER_MINUTE = 60;
 const WRITE_ROLES = new Set(['facility_admin', 'admissions_reviewer']);
@@ -1127,6 +1129,51 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
           return v;
         });
         return { current: current?.ruleSetVersion ?? null, versions: versions.reverse() };
+      }));
+    } catch (err) { return fail(reply, err); }
+  });
+
+  // --- audit trail (M6): the facility's audit log for Admins, newest first, with the hash chain checked. Rows carry ids,
+  // codes and staff names only (the log never holds PHI). Paged by sequence number; one entity's trail with ?entity=.
+  app.get<{ Params: { fid: string }; Querystring: { before?: string; entity?: string } }>('/api/facilities/:fid/audit', async (req, reply) => {
+    try {
+      const user = caller(req.headers);
+      const { fid } = ids(req.params);
+      const { before, entity } = req.query;
+      if ((before !== undefined && (typeof before !== 'string' || !/^[1-9]\d{0,17}$/.test(before))) || (entity !== undefined && (typeof entity !== 'string' || !UUID.test(entity)))) throw new HttpError(400, 'invalid_query');
+      return reply.send(await tx(async (q) => {
+        const who = await enter(q, fid, user);
+        if (who.role !== 'facility_admin') throw new HttpError(403, 'forbidden');
+        // the chain is checked on the first page of the whole log only; paging and one entity's trail reuse that result.
+        // shortcut: rehashes the whole chain each time; check from the anchor job's last verified seq once anchoring runs
+        let chain: { checked: number; broken: number[] } | null = null;
+        if (before === undefined && entity === undefined) {
+          limit(`audit:${user}`, AUDIT_CHECKS_PER_MINUTE);
+          await q('SAVEPOINT chain_check');
+          try {
+            const r = (await q<{ checked: number; broken: string[] | null }>(
+              'SELECT count(*)::int AS checked, (array_agg(seq ORDER BY seq) FILTER (WHERE NOT ok))[1:50] AS broken FROM audit_chain_verify($1)', [fid])).rows[0]!;
+            chain = { checked: r.checked, broken: (r.broken ?? []).map(Number) }; // the first breaks are enough to act on
+            await q('RELEASE SAVEPOINT chain_check');
+          } catch (err) {
+            // P0002: nothing written yet at this facility (enter() has bound it, so this is not a wrong binding): nothing to check
+            if ((err as { code?: string }).code !== 'P0002') throw err;
+            await q('ROLLBACK TO SAVEPOINT chain_check');
+            chain = { checked: 0, broken: [] };
+          }
+        }
+        const { rows } = await q<Record<string, unknown>>(
+          `SELECT a.seq, a.at, a.actor, u.display_name AS actor_name, a.action, a.entity_type, a.entity_id
+           FROM audit_log a LEFT JOIN users u ON a.actor = 'user:' || u.id::text
+           WHERE a.facility_id = $1 AND ($2::bigint IS NULL OR a.seq < $2::bigint) AND ($3::uuid IS NULL OR a.entity_id = $3::uuid)
+           ORDER BY a.seq DESC LIMIT ${QUEUE_LIMIT + 1}`, [fid, before ?? null, entity ?? null]);
+        await audit(q, fid, user, 'audit.viewed', 'facility', fid); // reading the log is itself an access to record
+        const page = rows.slice(0, QUEUE_LIMIT);
+        return {
+          chain,
+          entries: page.map((r) => ({ ...r, seq: Number(r['seq']) })), // bigint arrives as text; a facility's chain stays far below 2^53
+          next: rows.length > QUEUE_LIMIT ? String(page.at(-1)!['seq']) : null,
+        };
       }));
     } catch (err) { return fail(reply, err); }
   });

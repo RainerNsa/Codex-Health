@@ -20,10 +20,6 @@ const PLACEHOLDER: Partial<Record<Screen, { holds: string; meanwhile: string }>>
     holds: 'Referral counts by status and time from receipt to decision for this facility, built from the events recorded today.',
     meanwhile: 'The Referrals screen lists what needs staff, what is processing and what is decided.',
   },
-  audit: {
-    holds: "The facility's audit log, with its hash-chain check and the daily anchors, for Admins.",
-    meanwhile: 'The audit log is already written for every read and change; this screen only makes it browsable.',
-  },
   users: {
     holds: 'Inviting staff to this facility and assigning their roles, with sign-in and multi-factor authentication.',
     meanwhile: 'Roles are provisioned by the platform; the local build uses fixed synthetic users.',

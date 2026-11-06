@@ -209,6 +209,25 @@ test('Needs Review: the queue groups it by reason, and Request information draft
   await check(page, 'queue-by-reason');
 });
 
+for (const colorScheme of ['light', 'dark'] as const) {
+  test(`audit trail: ${colorScheme}`, async ({ browser }) => {
+    const page = await (await browser.newContext({ colorScheme, viewport: sizes[0] })).newPage();
+    await signIn(page); // as the Reviewer: the trail is for Admins
+    await page.getByRole('button', { name: 'Audit trail' }).click();
+    await expect(page.getByText('The audit trail is for Admins.')).toBeVisible();
+    await page.getByRole('button', { name: 'Sign out' }).click();
+    await page.getByRole('radio', { name: 'ZZTEST Admin' }).check();
+    await page.getByRole('button', { name: 'Sign in' }).click();
+    await page.getByRole('button', { name: 'Audit trail' }).click();
+    await expect(page.getByText(/^No inconsistencies found in \d+ entries/)).toBeVisible();
+    await check(page, `${colorScheme}-audit`);
+    await page.getByRole('button', { name: /show only this referral's trail/ }).first().click();
+    await expect(page.getByText(/^Showing the trail of/)).toBeVisible();
+    await page.getByRole('button', { name: 'Show the whole log' }).click();
+    await expect(page.getByText(/^Showing the trail of/)).toHaveCount(0);
+  });
+}
+
 test('while documents are read the screen shows progress, and it follows the referral to review', async ({ browser }) => {
   const context = await browser.newContext({ viewport: sizes[0] });
   const page = await context.newPage();

@@ -125,3 +125,8 @@ export const listDecisions = (facility: string, user: string, f: HistoryFilter, 
 
 export interface CriteriaVersion { version: number; criteria_document_ref: string; created_at: string; created_by_name: string | null; rules: { id: string; name: string; kind: string; enabled: boolean }[]; added: string[]; removed: string[]; changed: string[]; decisions: number }
 export const getCriteria = (facility: string, user: string) => call<{ current: number | null; versions: CriteriaVersion[] }>(`/api/facilities/${facility}/criteria`, user);
+
+export interface AuditEntry { seq: number; at: string; actor: string; actor_name: string | null; action: string; entity_type: string; entity_id: string | null }
+export interface AuditPage { chain: { checked: number; broken: number[] } | null; entries: AuditEntry[]; next: string | null }
+export const getAudit = (facility: string, user: string, entity?: string, before?: string) =>
+  call<AuditPage>(`/api/facilities/${facility}/audit?${new URLSearchParams({ ...(entity ? { entity } : {}), ...(before ? { before } : {}) })}`, user);

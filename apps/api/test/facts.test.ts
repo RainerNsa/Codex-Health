@@ -329,6 +329,80 @@ describe.skipIf(!url)('manual fact entry API', () => {
     return { rid, ev: view!.evaluation };
   };
 
+  it('audit trail: Admins page through the facility\'s audit log, newest first, with the chain checked; the read is itself audited', async () => {
+    const rid = await newReferral();
+    const url = `/api/facilities/${FAC.a}/audit`;
+    const count = async (sql: string) => { await asOwner(FAC.a); const n = (await c.query(sql, [FAC.a])).rows[0].n as number; await c.query("SELECT set_config('app.facility_id', '', true)"); return n; };
+    const viewedRows = () => count("SELECT count(*)::int AS n FROM audit_log WHERE facility_id = $1 AND action = 'audit.viewed'");
+    const before = await viewedRows();
+    const first = (await get(url, U.admin)).json();
+    expect(await viewedRows()).toBe(before + 1); // one row per read
+    expect(first.entries.some((e: { action: string }) => e.action === 'audit.viewed')).toBe(false); // written after the read
+    expect(first.chain).toEqual({ checked: (await count('SELECT count(*)::int AS n FROM audit_log WHERE facility_id = $1')) - 1, broken: [] });
+    const seqs = first.entries.map((e: { seq: number }) => e.seq);
+    expect(seqs).toEqual([...seqs].sort((x: number, y: number) => y - x));
+    const created = first.entries.find((e: { action: string; entity_id: string }) => e.action === 'referral.created' && e.entity_id === rid);
+    expect(created).toEqual({ seq: expect.any(Number), at: expect.any(String), actor: `user:${U.reviewer}`, actor_name: expect.any(String), action: 'referral.created', entity_type: 'referral', entity_id: rid });
+    expect(Object.keys(first.entries[0]).sort()).toEqual(['action', 'actor', 'actor_name', 'at', 'entity_id', 'entity_type', 'seq']); // ids and codes only, never PHI
+    const one = (await get(`${url}?entity=${rid}`, U.admin)).json();
+    expect(one.entries.length).toBeGreaterThan(0);
+    expect(one.entries.every((e: { entity_id: string }) => e.entity_id === rid)).toBe(true);
+    for (const bad of ['before=0', 'before=x', 'before=1.5', 'before=', 'before=1&before=2', `before=${'9'.repeat(19)}`, 'entity=nope']) {
+      const r = await get(`${url}?${bad}`, U.admin);
+      expect([bad, r.statusCode, r.json()]).toEqual([bad, 400, { error: 'invalid_query' }]);
+    }
+    expect((await get(`${url}?entity=00000000-0000-4000-8000-0000000000ff`, U.admin)).json()).toEqual({ chain: null, entries: [], next: null }); // one entity's trail reuses the first page's check
+    expect((await get(url, U.reviewer)).statusCode).toBe(403);
+    expect((await get(url, U.viewer)).statusCode).toBe(403);
+    expect((await get(`/api/facilities/${FAC.b}/audit`, U.admin)).statusCode).toBe(404);
+    const after = (await get(url, U.admin)).json();
+    expect(after.entries[0]).toMatchObject({ action: 'audit.viewed', actor: `user:${U.admin}`, entity_type: 'facility', entity_id: FAC.a });
+    // pages of 100, newest first, with no gap or overlap; filler rows inside a savepoint make the boundaries exact
+    await asOwner(FAC.a);
+    await c.query('SAVEPOINT paging');
+    try {
+      for (let i = 0; i < 101; i++) await c.query("INSERT INTO audit_log (facility_id, actor, action, entity_type) VALUES ($1, 'platform:test', 'test.filler', 'facility')", [FAC.a]);
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      const p1 = (await get(url, U.admin)).json();
+      expect(p1.entries).toHaveLength(100);
+      expect((await get(`${url}?before=${p1.next}`, U.admin)).json().chain).toBeNull(); // later pages are not rechecked
+      expect(p1.next).toBe(String(p1.entries[99].seq));
+      expect((await get(`${url}?before=${p1.next}`, U.admin)).json().entries[0].seq).toBe(p1.entries[99].seq - 1);
+      const exact = (await get(`${url}?before=101`, U.admin)).json(); // exactly 100 rows match
+      expect([exact.entries.length, exact.next, exact.entries.at(-1).seq]).toEqual([100, null, 1]);
+      expect((await get(`${url}?before=102`, U.admin)).json().next).toBe('2');
+    } finally { await asOwner(FAC.a); await c.query('ROLLBACK TO SAVEPOINT paging'); }
+
+    // a row changed after it was written is reported, by sequence number, and only that row; the first 50 breaks at most
+    await c.query('SAVEPOINT tamper');
+    try {
+      for (let i = 0; i < 60; i++) await c.query("INSERT INTO audit_log (facility_id, actor, action, entity_type) VALUES ($1, 'platform:test', 'test.filler', 'facility')", [FAC.a]);
+      await c.query('ALTER TABLE audit_log DISABLE TRIGGER USER');
+      const target = (await c.query("SELECT seq FROM audit_log WHERE facility_id = $1 AND action = 'referral.created' AND entity_id = $2", [FAC.a, rid])).rows[0].seq;
+      await c.query("UPDATE audit_log SET action = 'referral.viewed' WHERE facility_id = $1 AND seq = $2", [FAC.a, target]);
+      await c.query('ALTER TABLE audit_log ENABLE TRIGGER USER');
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      expect((await get(url, U.admin)).json().chain.broken).toEqual([Number(target)]);
+      await asOwner(FAC.a);
+      await c.query('ALTER TABLE audit_log DISABLE TRIGGER USER');
+      await c.query("UPDATE audit_log SET action = 'zz.tampered' WHERE facility_id = $1 AND seq <= 51", [FAC.a]);
+      await c.query('ALTER TABLE audit_log ENABLE TRIGGER USER');
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      expect((await get(url, U.admin)).json().chain.broken).toEqual(Array.from({ length: 50 }, (_, i) => i + 1));
+      // a facility with nothing written yet has nothing to check: an empty result, never "intact" from a wrong binding
+      await asOwner(FAC.a);
+      await c.query('ALTER TABLE audit_log DISABLE TRIGGER USER');
+      await c.query('DELETE FROM audit_log WHERE facility_id = $1', [FAC.a]);
+      await c.query('ALTER TABLE audit_log ENABLE TRIGGER USER');
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      expect((await get(url, U.admin)).json()).toEqual({ chain: { checked: 0, broken: [] }, entries: [], next: null });
+    } finally { await asOwner(FAC.a); await c.query('ROLLBACK TO SAVEPOINT tamper'); await c.query("SELECT set_config('app.facility_id', '', true)"); }
+    // whole-log checks are kept to a handful a minute per Admin
+    const codes: number[] = [];
+    for (let i = 0; i < 11; i++) codes.push((await get(url, U.admin)).statusCode);
+    expect(codes).toContain(429);
+  });
+
   it('history: the facility\'s decisions, newest first, with their flags; filtered, paged and audited', async () => {
     const plain = await withFacts(['ventilator_use', 'no'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
     await move(plain.rid, U.reviewer, { action: 'submit' });
