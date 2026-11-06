@@ -57,6 +57,25 @@ const pageSeenFor = async (q: Query, fid: string, rid: string, user: string, fac
   ((await q(`SELECT 1 FROM product_events WHERE facility_id = $1 AND referral_id = $2 AND event = 'evidence.viewed' AND actor = $3 AND attrs->>'fact_id' = $4 LIMIT 1`,
   [fid, rid, `user:${user}`, factId])).rowCount ?? 0) > 0;
 
+/** A page a person can check: rendered, and not blank. A TIFF has no images, a corrupt scan comes out blank: a person states the fact. */
+const hasPageImage = (doc: { page_images: number | null; blank_pages: number[] | null }, page: number) => page <= (doc.page_images ?? 0) && !doc.blank_pages?.includes(page);
+
+interface Unchecked { id: string; key: string; value: FactValue; is_critical: boolean; evidence: { document_id: string; page: number; quote: string; verified?: boolean } }
+/** Per key, the latest AI reading when it is a one-document hard-stop No whose page has an image nobody has seen yet. A person's
+ *  later rows do not settle it: only the page does (founder decision 2026-11-06; a detour no -> unknown -> no, security review). */
+async function uncheckedReadings(q: Query, fid: string, rid: string): Promise<Map<string, Unchecked>> {
+  const { rows } = await q<Unchecked & { single_source: boolean; page_images: number | null; blank_pages: number[] | null; seen: boolean }>(
+    `SELECT DISTINCT ON (f.key) f.id, f.key, f.value, f.is_critical, f.evidence, f.single_source, d.page_images, d.blank_pages,
+            EXISTS (SELECT 1 FROM product_events e WHERE e.facility_id = f.facility_id AND e.referral_id = f.referral_id
+                    AND e.event = 'evidence.viewed' AND e.attrs->>'fact_id' = f.id::text) AS seen
+     FROM facts f LEFT JOIN documents d ON d.facility_id = f.facility_id AND d.referral_id = f.referral_id
+       AND d.id::text = f.evidence->>'document_id' AND d.status = 'processed'
+     WHERE f.facility_id = $1 AND f.referral_id = $2 AND f.source = 'ai'
+     ORDER BY f.key, f.created_at DESC, f.id`, [fid, rid]);
+  return new Map(rows.filter((r) => r.single_source && r.evidence && !r.seen && hasPageImage(r, r.evidence.page)).map((r) => [r.key, r]));
+}
+const sameValue = (a: FactValue, b: FactValue) => JSON.stringify(a) === JSON.stringify(b);
+
 async function enterFacility(q: Query, facilityId: string, userId: string): Promise<Caller> {
   await bindFacility(q, facilityId);
   const fac = await q<{ organization_id: string }>('SELECT organization_id FROM facilities WHERE facility_id = $1', [facilityId]);
@@ -216,6 +235,7 @@ async function referralView(q: Query, facilityId: string, referralId: string, ru
   if (!ref.rows[0]) throw new HttpError(404, 'not_found');
   const status = ref.rows[0].status;
   const facts = await currentFacts(q, facilityId, referralId);
+  const unchecked = await uncheckedReadings(q, facilityId, referralId);
   const ev = await latestEvaluation(q, facilityId, referralId);
   const history = await q<Record<string, unknown>>(
     `SELECT transition, from_status, to_status, note, department, requested_items, created_by, created_at
@@ -260,7 +280,9 @@ async function referralView(q: Query, facilityId: string, referralId: string, ru
     // the quote and where it is; the review screen renders it as text and labels what was not verified
     facts: facts.map((f) => ({ id: f.id, key: f.key, value: f.value, source: f.source, note: f.source === 'user' ? f.note : null, as_of_date: f.as_of_date,
       evidence: f.source === 'ai' && f.evidence ? { document_id: f.evidence.document_id, page: f.evidence.page, quote: f.evidence.quote, verified: f.evidence.verified === true } : null,
-      confidence_band: f.confidence_band, single_source: f.single_source })),
+      confidence_band: f.confidence_band, single_source: f.single_source,
+      // a person's row standing on a reading nobody has checked: the page to see before that value can be stated
+      check: f.source === 'user' && unchecked.has(f.key) ? { id: unchecked.get(f.key)!.id, evidence: (({ document_id, page, quote, verified }) => ({ document_id, page, quote, verified: verified === true }))(unchecked.get(f.key)!.evidence) } : null })),
     form: { fact_keys: ruleSet?.factKeys ?? [], note_max: NOTE_MAX, configured: ruleSet !== null, departments: DEPARTMENTS },
     evaluation: ev ?? null,
     changes: await whatChanged(q, facilityId, referralId, ev),
@@ -497,6 +519,10 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
         if (confirming) {
           if (!previous || previous.id !== b.confirms || previous.source !== 'ai' || !previous.evidence || JSON.stringify(previous.value) !== JSON.stringify(value)) throw new HttpError(409, 'fact_changed');
           if (!await pageSeenFor(q, fid, rid, user, previous.id)) throw new HttpError(409, 'evidence_not_viewed');
+        } else {
+          // typing the unchecked reading's value would pass for a check nobody made (founder decision 2026-11-06): see the page first
+          const unchecked = (await uncheckedReadings(q, fid, rid)).get(spec.key);
+          if (unchecked && sameValue(unchecked.value, value)) throw new HttpError(409, 'confirm_against_page');
         }
         const kind = confirming ? 'fact.confirmed' : previous ? 'fact.corrected' : 'fact.entered';
         // A key that was ever specially protected stays protected: the flag carries to every correction, and the
@@ -617,6 +643,10 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
   };
   const finishCheck = async (q: Query, fid: string, rid: string, ruleSets: RuleSet[], ev: EvaluationRow, decision: 'admit' | 'do_not_admit', reason: string | null, status: string, latestDecision: string | null) => {
     const facts = await currentFacts(q, fid, rid);
+    // a hard-stop No only one document gives is checked against its page by a person first, whatever the decision (T12, XF-7b)
+    // ...and a person's row that only repeats a reading nobody checked does not count as that check
+    const unchecked = await uncheckedReadings(q, fid, rid);
+    if (facts.some((f) => (f.source === 'ai' && f.single_source) || (unchecked.has(f.key) && sameValue(unchecked.get(f.key)!.value, f.value)))) throw new HttpError(409, 'page_check_required');
     if (!Array.isArray(ev.trace.confirmation_set) || confirmation(ev.trace.confirmation_set, facts).some((c) => !c.confirmed)) throw new HttpError(409, 'confirmation_incomplete');
     // a dispute between documents, or a document against a person, needs that fact stated again before an Admit (§3, I9)
     if (decision === 'admit' && ((ev.trace.disagreements ?? []).length > 0 || ruleSets.some((rs) => confirmation(admitKeys(rs, ev), facts).some((c) => !c.known)))) throw new HttpError(409, 'confirmation_incomplete');
@@ -910,7 +940,7 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
         if (!READ_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
         const doc = (await q<{ storage_key: string; page_images: number | null; blank_pages: number[] | null }>("SELECT storage_key, page_images, blank_pages FROM documents WHERE facility_id = $1 AND referral_id = $2 AND id = $3 AND status = 'processed'", [fid, rid, did])).rows[0];
         if (!doc) throw new HttpError(404, 'not_found');
-        if (page > (doc.page_images ?? 0) || doc.blank_pages?.includes(page)) throw new HttpError(404, 'no_page_image'); // a TIFF has none, a corrupt scan comes out blank: a person states the fact
+        if (!hasPageImage(doc, page)) throw new HttpError(404, 'no_page_image');
         await audit(q, fid, user, 'document.page_issued', 'document', did);
         await emit(q, fid, rid, user, 'evidence.page_issued', { document_id: did, page });
         return { url: await s3.presignGet(pageImageKey(doc.storage_key, page), 'inline'), expires_in: VIEW_TTL_SECONDS };
@@ -931,7 +961,9 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
       await tx(async (q) => {
         const who = await enter(q, fid, user);
         if (!READ_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
-        const fact = (await currentFacts(q, fid, rid)).find((f) => f.id === factId && f.evidence?.document_id === did && f.evidence.page === page);
+        // the current reading, or the unchecked one a person's later row stands on (the view offers it as `check`)
+        const cites = (f: { id: string; evidence: { document_id: string; page: number } | null }) => f.id === factId && f.evidence?.document_id === did && f.evidence.page === page;
+        const fact = (await currentFacts(q, fid, rid)).find(cites) ?? [...(await uncheckedReadings(q, fid, rid)).values()].find(cites);
         if (!fact) throw new HttpError(404, 'not_found');
         const issued = await q(`SELECT 1 FROM product_events WHERE facility_id = $1 AND referral_id = $2 AND event = 'evidence.page_issued' AND actor = $3
           AND attrs->>'document_id' = $4 AND attrs->>'page' = $5 AND at > now() - interval '10 minutes'

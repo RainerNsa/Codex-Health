@@ -3,7 +3,7 @@
 export type Tri = 'yes' | 'no' | 'unknown';
 export interface FactKey { key: string; critical: boolean; read_by: string[] }
 export interface Evidence { document_id: string; page: number; quote: string; verified: boolean }
-export interface FactRow { id: string; key: string; value: { type: string; value: unknown }; source: 'ai' | 'user'; note: string | null; as_of_date: string | null; evidence: Evidence | null; confidence_band: 'high' | 'medium' | 'low' | null; single_source: boolean }
+export interface FactRow { id: string; key: string; value: { type: string; value: unknown }; source: 'ai' | 'user'; note: string | null; as_of_date: string | null; evidence: Evidence | null; confidence_band: 'high' | 'medium' | 'low' | null; single_source: boolean; check?: { id: string; evidence: Evidence } | null }
 export interface TraceEntry { rule_id: string; kind: string; result: Tri; inputs: { key: string; presence: Tri; value?: string | number }[] }
 export interface Evaluation {
   id: string;
