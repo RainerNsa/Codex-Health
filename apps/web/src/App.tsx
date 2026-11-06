@@ -15,15 +15,12 @@ import { CriteriaPanel } from './CriteriaPanel.tsx';
 import { HistoryPanel } from './HistoryPanel.tsx';
 import { Nav, Placeholder, SCREENS, type Screen } from './Placeholders.tsx';
 import { SettingsPanel } from './SettingsPanel.tsx';
-import { Callout, Field, Panel, Select, Sub, type Tone } from './ui.tsx';
+import { Callout, Field, Panel, REASON_LABEL, Select, Sub, type Tone } from './ui.tsx';
 import { loadSession, SEED_FACILITIES, SEED_USERS, SignIn, storeSession, type Session } from './SignIn.tsx';
 
 const POLL_MS = 10_000;
 const OUTCOME_LABEL = { admit: 'Admit', needs_review: 'Needs Review', do_not_admit: 'Do Not Admit' } as const;
 const OUTCOME_LOOK: Record<string, { tone: Tone; icon: Icon }> = { admit: { tone: 'admit', icon: CheckCircleIcon }, needs_review: { tone: 'review', icon: WarningCircleIcon }, do_not_admit: { tone: 'stop', icon: ProhibitIcon } };
-const REASON_LABEL: Record<string, string> = {
-  missing_info: 'Missing information', clinical: 'Clinical review', financial: 'Financial review', leadership: 'Leadership review', processing_incomplete: 'Processing incomplete',
-};
 const ERROR_TEXT: Record<string, string> = {
   unauthenticated: 'Sign in first.', not_found: 'Not found, or not visible to this user at this facility.', forbidden: 'This user may read but not change this referral.',
   invalid_fact: 'Check the entry: a value and a note are required, and the date must be real and not in the future.',
@@ -249,7 +246,7 @@ function Recommendation({ view }: { view: ReferralView }) {
       {ev.raw && <Text mt="2" fontSize="sm" fontWeight="600">Preliminary: read by the AI from the documents. No person has confirmed these facts.</Text>}
       {list('Documents disagree, state again', ev.trace.disagreements ?? [])}
       {list('Missing critical information', ev.trace.missing)}
-      {list('Confirm first', ev.trace.blocking)}
+      {list('Would be Admit once known, most important first', ev.trace.blocking)}
       {list('Conflicting', ev.trace.conflicts)}
       {list('To confirm before a decision', ev.trace.confirmation_set ?? [])}
       <Text mt="1" fontSize="xs" color="muted">Clinical: {ev.clinical_outcome.replaceAll('_', ' ')} · Financial: {ev.financial_status}. Staff make the final decision.</Text>

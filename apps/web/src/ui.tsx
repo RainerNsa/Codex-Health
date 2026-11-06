@@ -43,4 +43,9 @@ export function Select({ value, onChange, children, label, required, disabled }:
   );
 }
 
+/** Why a referral needs review (the engine's sub-reason codes), in words. */
+export const REASON_LABEL: Record<string, string> = {
+  missing_info: 'Missing information', clinical: 'Clinical review', financial: 'Financial review', leadership: 'Leadership review', processing_incomplete: 'Processing incomplete',
+};
+
 export const Sub = ({ children }: { children: ReactNode }) => <Text fontSize="sm" color="muted">{children}</Text>;
