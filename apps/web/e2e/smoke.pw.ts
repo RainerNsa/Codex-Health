@@ -163,6 +163,32 @@ test('the queue is home: a referral replaces it, Back returns, and the facility 
   await expect(page.getByRole('button', { name: 'Open' })).toHaveCount(0);
 });
 
+test('Needs Review: the queue groups it by reason, and Request information drafts a plain-text request, decisive items first', async ({ browser }) => {
+  const page = await (await browser.newContext({ viewport: sizes[0] })).newPage();
+  await signIn(page);
+  await page.getByRole('button', { name: 'New referral' }).click();
+  for (const [key, value] of [['ventilator use', 'unknown'], ['recent aggression', 'no'], ['daily skilled need', 'yes']] as const) {
+    await page.getByRole('listitem').filter({ hasText: key }).getByRole('button', { name: 'Enter' }).click();
+    const form = page.getByRole('form', { name: new RegExp(key) });
+    await form.getByRole('radio', { name: value, exact: true }).check();
+    await form.getByLabel('Note').fill('SYNTHETIC ZZTEST note');
+    await form.getByRole('button', { name: 'Save' }).click();
+    await expect(page.getByRole('listitem').filter({ hasText: key }).getByText('Stated by staff')).toBeVisible();
+  }
+  await expect(page.getByText('Needs Review', { exact: true }).first()).toBeVisible();
+  await expect(page.getByText(/Would be Admit once known, most important first:.*ventilator use/)).toBeVisible();
+  await page.getByRole('button', { name: 'Submit for review' }).click();
+  await page.getByRole('button', { name: 'Request information' }).click();
+  await expect(page.getByRole('checkbox', { name: 'ventilator use (would be Admit once known)' })).toBeChecked();
+  await expect(page.getByLabel('Request for the hospital')).toHaveValue(/1\. ventilator use/);
+  await check(page, 'request-info');
+  await page.getByRole('button', { name: 'Back to referrals' }).click();
+  const reasons = page.getByRole('group', { name: 'Needs Review, by reason' });
+  await reasons.getByRole('button', { name: /^Missing information/ }).click();
+  await expect(page.getByRole('row').filter({ hasText: 'Do Not Admit' })).toHaveCount(0);
+  await check(page, 'queue-by-reason');
+});
+
 test('while documents are read the screen shows progress, and it follows the referral to review', async ({ browser }) => {
   const context = await browser.newContext({ viewport: sizes[0] });
   const page = await context.newPage();

@@ -8,6 +8,14 @@ import type { Action, DecisionBody, ReferralView } from './api.ts';
 import { Callout, Field, Panel, Select } from './ui.tsx';
 
 const keyLabel = (k: string) => k.replaceAll('_', ' ');
+/** The request for the sending hospital, as plain text to paste into the liaison's own email or fax: what is needed, most
+ *  decisive first. No patient details: the liaison adds who it is about in their own channel. */
+export function requestText(items: string[], note: string): string {
+  const lines = ['We are reviewing this referral for admission and need the following before we can decide:', '', ...items.map((k, i) => `${i + 1}. ${keyLabel(k)}`)];
+  if (note.trim()) lines.push('', note.trim());
+  return lines.join('\n');
+}
+
 const ACTION_LABEL: Record<Action, string> = {
   submit: 'Submit for review', hold: 'Hold', request_info: 'Request information', escalate: 'Escalate', resume: 'Resume review', finalize: 'Record decision',
   reevaluate: 'Re-evaluate with current settings', cosign: 'Co-sign the filed decision', amend: 'Amend the decision',
@@ -33,6 +41,7 @@ export function ReviewPanel({ view, busy, on }: { view: ReferralView; busy: bool
   const [note, setNote] = useState('');
   const [department, setDepartment] = useState('');
   const [items, setItems] = useState<string[]>([]);
+  const [copied, setCopied] = useState(false);
   const [decision, setDecision] = useState<'admit' | 'do_not_admit' | ''>('');
   const [amendmentReason, setAmendmentReason] = useState('');
   const ev = view.evaluation;
@@ -40,7 +49,7 @@ export function ReviewPanel({ view, busy, on }: { view: ReferralView; busy: bool
   const override = ev !== null && decision !== '' && decision !== ev.outcome;
   // a hard stop overridden to Admit, or any decision after a flipped hard-stop input, is filed for an Admin to co-sign
   const needsCosign = decision !== '' && (view.cosign.any || (decision === 'admit' && view.cosign.admit));
-  const reset = () => { setOpen(null); setNote(''); setDepartment(''); setItems([]); setDecision(''); setAmendmentReason(''); };
+  const reset = () => { setCopied(false); setOpen(null); setNote(''); setDepartment(''); setItems([]); setDecision(''); setAmendmentReason(''); };
   const amending = open === 'amend';
   const requestable = [...new Set([...(ev?.trace.blocking ?? []), ...(ev?.trace.missing ?? []), ...view.form.fact_keys.map((k) => k.key)])];
 
@@ -114,7 +123,7 @@ export function ReviewPanel({ view, busy, on }: { view: ReferralView; busy: bool
           {view.actions.filter((a) => a !== 'upload' && a !== 'resolve_failures' && a !== 'retry_failed' && a !== 'process').map((a) => (
             <Button key={a} size="sm" disabled={busy} aria-pressed={open === a} variant={a === 'finalize' ? 'solid' : 'outline'}
               onClick={() => (a === 'submit' ? void on.move({ action: 'submit' }) : a === 'reevaluate' ? void on.reevaluate()
-                : setOpen(open === a ? null : a))}>{ACTION_LABEL[a]}</Button>
+                : (setOpen(open === a ? null : a), a === 'request_info' && setItems(ev?.trace.blocking ?? [])))}>{ACTION_LABEL[a]}</Button>
           ))}
         </Flex>
       )}
@@ -126,7 +135,7 @@ export function ReviewPanel({ view, busy, on }: { view: ReferralView; busy: bool
               <chakra.legend fontWeight="600">What is needed (pick at least one)</chakra.legend>
               <Flex wrap="wrap" gap="3">
                 {requestable.map((k) => (
-                  <label key={k}><input type="checkbox" checked={items.includes(k)} onChange={(e) => setItems(e.target.checked ? [...items, k] : items.filter((x) => x !== k))} /> {keyLabel(k)}</label>
+                  <label key={k}><input type="checkbox" checked={items.includes(k)} onChange={(e) => { setCopied(false); setItems(e.target.checked ? [...items, k] : items.filter((x) => x !== k)); }} /> {keyLabel(k)}{ev?.trace.blocking.includes(k) ? ' (would be Admit once known)' : ''}</label>
                 ))}
               </Flex>
             </fieldset>
@@ -140,6 +149,15 @@ export function ReviewPanel({ view, busy, on }: { view: ReferralView; busy: bool
             </Field>
           )}
           <Box mt="2">{noteField(`Note${open === 'request_info' ? ' (optional)' : ''}`, note, setNote, open !== 'request_info')}</Box>
+          {open === 'request_info' && items.length > 0 && (
+            <Box mt="2">
+              <Field label="Request for the hospital" hint="Plain text, no patient details. Copy it into your own email or fax.">
+                <Textarea size="sm" readOnly rows={Math.min(10, items.length + 4)} value={requestText(requestable.filter((k) => items.includes(k)), note)} fontFamily="mono" fontSize="xs" />
+              </Field>
+              <Button type="button" mt="1" size="xs" variant="outline" onClick={() => void navigator.clipboard.writeText(requestText(requestable.filter((k) => items.includes(k)), note)).then(() => setCopied(true), () => setCopied(false))}>Copy request</Button>
+              {copied && <Text as="span" role="status" ml="2" fontSize="xs" color="muted">Copied.</Text>}
+            </Box>
+          )}
           <Button type="submit" mt="2" size="sm" disabled={busy || (open === 'request_info' ? items.length === 0 : !note.trim()) || (open === 'escalate' && !department)}>{ACTION_LABEL[open]}</Button>
         </chakra.form>
       )}
