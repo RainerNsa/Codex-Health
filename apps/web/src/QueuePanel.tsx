@@ -3,7 +3,7 @@
 import { useEffect, useRef, useState } from 'react';
 import { Badge, Button, HStack, Table, Text, VisuallyHidden } from '@chakra-ui/react';
 import { ApiError, listReferrals, type QueueFilter, type QueueRow } from './api.ts';
-import { Panel, Sub, type Tone } from './ui.tsx';
+import { Panel, REASON_LABEL, Sub, type Tone } from './ui.tsx';
 
 /** How long something has waited, at the coarse grain a queue needs. */
 export function age(iso: string, now = Date.now()): string {
@@ -27,6 +27,13 @@ export function StatusPill({ status }: { status: string }) {
   return tone ? <Badge bg={`${tone}Soft`} color={tone}>{STATUS_LABEL[status]}</Badge> : <Badge bg="canvas" color="ink">{STATUS_LABEL[status] ?? status}</Badge>;
 }
 
+/** Needs Review referrals in the loaded rows, counted by why they need review: most common first. */
+export function reasonCounts(rows: QueueRow[]): [string, number][] {
+  const counts = new Map<string, number>();
+  for (const r of rows) if (r.outcome === 'needs_review') for (const s of r.sub_reasons ?? []) counts.set(s, (counts.get(s) ?? 0) + 1);
+  return [...counts].sort((a, b) => b[1] - a[1] || a[0].localeCompare(b[0]));
+}
+
 const OUTCOME_LABEL: Record<string, string> = { admit: 'Admit', needs_review: 'Needs Review', do_not_admit: 'Do Not Admit' };
 const OUTCOME_TONE: Record<string, string> = { admit: 'admit', needs_review: 'review', do_not_admit: 'stop' };
 
@@ -35,6 +42,7 @@ export function QueuePanel({ facility, user, onOpen }: { facility: string; user:
   const [rows, setRows] = useState<QueueRow[] | null>(null);
   const [next, setNext] = useState<string | null>(null);
   const [msg, setMsg] = useState<string | null>(null);
+  const [reason, setReason] = useState<string | null>(null); // show only Needs Review referrals for this reason
   // only the latest request may update the list: a slow earlier answer never mixes into a newer one
   const latest = useRef(0);
   const load = async (f: QueueFilter, after?: string) => {
@@ -44,6 +52,7 @@ export function QueuePanel({ facility, user, onOpen }: { facility: string; user:
       const page = await listReferrals(facility, user, f, after);
       if (mine !== latest.current) return;
       setFilter(f);
+      if (!after) setReason(null);
       setRows(after ? [...(rows ?? []), ...page.referrals] : page.referrals);
       setNext(page.next);
     } catch (err) {
@@ -64,6 +73,15 @@ export function QueuePanel({ facility, user, onOpen }: { facility: string; user:
       </HStack>}>
       {msg && <Text role="status" fontSize="sm">{msg}</Text>}
       {rows && rows.length === 0 && <Sub>{EMPTY[filter]}</Sub>}
+      {rows && filter !== 'closed' && reasonCounts(rows).length > 0 && (
+        <HStack gap="1" mb="2" wrap="wrap" role="group" aria-label="Needs Review, by reason">
+          <Text fontSize="xs" color="muted" mr="1">Needs Review:</Text>
+          <Button size="xs" variant={reason === null ? 'solid' : 'ghost'} aria-pressed={reason === null} onClick={() => setReason(null)}>All referrals</Button>
+          {reasonCounts(rows).map(([r, n]) => (
+            <Button key={r} size="xs" variant={reason === r ? 'solid' : 'ghost'} aria-pressed={reason === r} onClick={() => setReason(reason === r ? null : r)}>{REASON_LABEL[r] ?? r} ({n})</Button>
+          ))}
+        </HStack>
+      )}
       {rows && rows.length > 0 && (
         <Table.ScrollArea tabIndex={0} position="relative">
           <Table.Root size="sm">
@@ -71,10 +89,11 @@ export function QueuePanel({ facility, user, onOpen }: { facility: string; user:
               <Table.ColumnHeader>Status</Table.ColumnHeader><Table.ColumnHeader>Recommendation</Table.ColumnHeader><Table.ColumnHeader>Documents</Table.ColumnHeader><Table.ColumnHeader>{filter === 'closed' ? 'Last change' : 'Waiting'}</Table.ColumnHeader><Table.ColumnHeader><VisuallyHidden>Open</VisuallyHidden></Table.ColumnHeader>
             </Table.Row></Table.Header>
             <Table.Body>
-              {rows.map((r) => (
+              {rows.filter((r) => reason === null || (r.outcome === 'needs_review' && (r.sub_reasons ?? []).includes(reason))).map((r) => (
                 <Table.Row key={r.id} bg="transparent">
                   <Table.Cell><StatusPill status={r.status} />{r.cosign_waiting ? ' · waiting for co-sign' : ''}</Table.Cell>
-                  <Table.Cell>{r.outcome ? <Badge bg={`${OUTCOME_TONE[r.outcome]}Soft`} color={OUTCOME_TONE[r.outcome]}>{OUTCOME_LABEL[r.outcome]}{r.raw ? ', preliminary' : ''}</Badge> : <Text as="span" color="muted">No facts yet</Text>}</Table.Cell>
+                  <Table.Cell>{r.outcome ? <Badge bg={`${OUTCOME_TONE[r.outcome]}Soft`} color={OUTCOME_TONE[r.outcome]}>{OUTCOME_LABEL[r.outcome]}{r.raw ? ', preliminary' : ''}</Badge> : <Text as="span" color="muted">No facts yet</Text>}
+                    {r.outcome === 'needs_review' && (r.sub_reasons ?? []).length > 0 && <Text fontSize="xs" color="muted" mt="0.5">{(r.sub_reasons ?? []).map((s) => REASON_LABEL[s] ?? s).join(' · ')}</Text>}</Table.Cell>
                   <Table.Cell>{r.documents}{r.failed_documents ? ` (${r.failed_documents} failed)` : ''}</Table.Cell>
                   <Table.Cell whiteSpace="nowrap" title={new Date(r.updated_at).toLocaleString()}>{filter === 'closed' ? new Date(r.updated_at).toLocaleString() : age(r.updated_at)}</Table.Cell>
                   <Table.Cell textAlign="end"><Button size="xs" variant="outline" onClick={() => onOpen(r.id)}>Open</Button></Table.Cell>
