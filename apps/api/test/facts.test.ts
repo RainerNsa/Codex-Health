@@ -350,6 +350,7 @@ describe.skipIf(!url)('manual fact entry API', () => {
     expect(first.decisions[0].id).toBe(o.id);
     expect((await get(`${url}?outcome=maybe`, U.reviewer)).json()).toEqual({ error: 'invalid_query' });
     expect((await get(`${url}?after=nonsense`, U.reviewer)).json()).toEqual({ error: 'invalid_query' });
+    expect((await get(`${url}?after=${encodeURIComponent('2026-01-01 99:00:00+00|00000000-0000-4000-8000-000000000000')}`, U.reviewer)).json()).toEqual({ error: 'invalid_query' }); // the time is checked too
     expect((await get(url, U.viewer)).statusCode).toBe(403);
     expect((await get(`/api/facilities/${FAC.b}/decisions`, U.reviewer)).statusCode).toBe(404);
     await asOwner(FAC.a);

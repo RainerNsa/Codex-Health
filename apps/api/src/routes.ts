@@ -412,8 +412,8 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
   const QUEUE_LIMIT = 100;
   /** Exactly the timestamp text the API issues as a cursor (Postgres' timestamptz output), and a real date. */
   const realTimestamp = (t: string) => {
-    const m = /^(\d{4})-(\d\d)-(\d\d) \d\d:\d\d:\d\d(\.\d{1,6})?[+-]\d\d(:\d\d)?$/.exec(t);
-    if (!m) return false;
+    const m = /^(\d{4})-(\d\d)-(\d\d) (\d\d):(\d\d):(\d\d)(\.\d{1,6})?[+-]\d\d(:\d\d)?$/.exec(t);
+    if (!m || Number(m[4]) > 23 || Number(m[5]) > 59 || Number(m[6]) > 59) return false;
     const d = new Date(Date.UTC(Number(m[1]), Number(m[2]) - 1, Number(m[3])));
     return d.getUTCFullYear() === Number(m[1]) && d.getUTCMonth() === Number(m[2]) - 1 && d.getUTCDate() === Number(m[3]);
   };
@@ -1103,20 +1103,21 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
       return reply.send(await tx(async (q) => {
         const who = await enter(q, fid, user);
         if (!READ_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
-        const sets = (await q<{ version: number; criteria_document_ref: string; rules: { id: string; name?: string; kind: string; enabled?: boolean }[]; created_at: string; created_by_name: string | null }>(
+        const sets = (await q<{ version: number; criteria_document_ref: string; rules: { id: string; name?: unknown; kind: string; enabled?: boolean }[]; created_at: string; created_by_name: string | null }>(
           `SELECT s.version, s.criteria_document_ref, s.rules, s.created_at, u.display_name AS created_by_name
            FROM rule_sets s LEFT JOIN users u ON s.created_by = 'user:' || u.id::text
            WHERE s.organization_id = $1 ORDER BY s.version`, [who.organizationId])).rows;
         const used = new Map((await q<{ v: number; n: number }>(
           `SELECT e.rule_set_version AS v, count(*)::int AS n FROM decisions d JOIN evaluations e ON e.facility_id = d.facility_id AND e.id = d.evaluation_id
            WHERE d.facility_id = $1 GROUP BY 1`, [fid])).rows.map((r) => [r.v, r.n]));
-        const current = await loadSettings(q, fid, who.organizationId);
+        // a refused rule set is exactly when an Admin needs to see what changed: the history still answers, with none in force
+        const current = await loadSettings(q, fid, who.organizationId).catch((err: unknown) => { if (err instanceof HttpError && err.code === 'rule_set_refused') return null; throw err; });
         let before = new Map<string, string>();
         const versions = sets.map((s) => {
           const now = new Map(s.rules.map((r) => [r.id, JSON.stringify(r)]));
           const v = {
             version: s.version, criteria_document_ref: s.criteria_document_ref, created_at: s.created_at, created_by_name: s.created_by_name,
-            rules: s.rules.map((r) => ({ id: r.id, name: r.name ?? r.id, kind: r.kind, enabled: r.enabled !== false })),
+            rules: s.rules.map((r) => ({ id: r.id, name: typeof r.name === 'string' && r.name.trim() ? r.name : r.id, kind: r.kind, enabled: r.enabled !== false })),
             added: [...now.keys()].filter((id) => !before.has(id)),
             removed: [...before.keys()].filter((id) => !now.has(id)),
             changed: [...now.keys()].filter((id) => before.has(id) && before.get(id) !== now.get(id)),
