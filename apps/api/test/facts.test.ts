@@ -329,6 +329,39 @@ describe.skipIf(!url)('manual fact entry API', () => {
     return { rid, ev: view!.evaluation };
   };
 
+  it('audit trail: Admins page through the facility\'s audit log, newest first, with the chain checked; the read is itself audited', async () => {
+    const rid = await newReferral();
+    const url = `/api/facilities/${FAC.a}/audit`;
+    const first = (await get(url, U.admin)).json();
+    expect(first.chain).toEqual({ checked: expect.any(Number), broken: [] });
+    expect(first.chain.checked).toBeGreaterThan(0);
+    const seqs = first.entries.map((e: { seq: number }) => e.seq);
+    expect(seqs).toEqual([...seqs].sort((x: number, y: number) => y - x));
+    const created = first.entries.find((e: { action: string; entity_id: string }) => e.action === 'referral.created' && e.entity_id === rid);
+    expect(created).toEqual({ seq: expect.any(Number), at: expect.any(String), actor: `user:${U.reviewer}`, actor_name: expect.any(String), action: 'referral.created', entity_type: 'referral', entity_id: rid });
+    expect(Object.keys(first.entries[0]).sort()).toEqual(['action', 'actor', 'actor_name', 'at', 'entity_id', 'entity_type', 'seq']); // ids and codes only, never PHI
+    const one = (await get(`${url}?entity=${rid}`, U.admin)).json();
+    expect(one.entries.length).toBeGreaterThan(0);
+    expect(one.entries.every((e: { entity_id: string }) => e.entity_id === rid)).toBe(true);
+    if (first.next) expect((await get(`${url}?before=${first.next}`, U.admin)).json().entries[0].seq).toBeLessThan(seqs.at(-1));
+    for (const bad of ['before=0', 'before=x', 'before=1.5', 'entity=nope']) expect((await get(`${url}?${bad}`, U.admin)).json()).toEqual({ error: 'invalid_query' });
+    expect((await get(url, U.reviewer)).statusCode).toBe(403);
+    expect((await get(url, U.viewer)).statusCode).toBe(403);
+    expect((await get(`/api/facilities/${FAC.b}/audit`, U.admin)).statusCode).toBe(404);
+    const after = (await get(url, U.admin)).json();
+    expect(after.entries[0]).toMatchObject({ action: 'audit.viewed', actor: `user:${U.admin}`, entity_type: 'facility', entity_id: FAC.a });
+    // a row changed after it was written is reported, by sequence number
+    await asOwner(FAC.a);
+    await c.query('SAVEPOINT tamper');
+    await c.query('ALTER TABLE audit_log DISABLE TRIGGER USER');
+    const target = (await c.query("SELECT seq FROM audit_log WHERE facility_id = $1 AND action = 'referral.created' AND entity_id = $2", [FAC.a, rid])).rows[0].seq;
+    await c.query("UPDATE audit_log SET action = 'referral.viewed' WHERE facility_id = $1 AND seq = $2", [FAC.a, target]);
+    await c.query('ALTER TABLE audit_log ENABLE TRIGGER USER');
+    await c.query("SELECT set_config('app.facility_id', '', true)");
+    expect((await get(url, U.admin)).json().chain.broken).toEqual([Number(target)]);
+    await c.query('ROLLBACK TO SAVEPOINT tamper');
+  });
+
   it('review: a manual-entry referral is submitted for review, then finalized on the evaluation the Reviewer saw', async () => {
     const { rid, ev } = await withFacts(['ventilator_use', 'no'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
     expect(ev.outcome).toBe('admit');

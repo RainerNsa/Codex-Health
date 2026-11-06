@@ -24,10 +24,6 @@ const PLACEHOLDER: Partial<Record<Screen, { holds: string; meanwhile: string }>>
     holds: 'Every decided referral with its decisions, co-signs and amendments, searchable by date and outcome.',
     meanwhile: 'The Decided view on the Referrals screen lists decided referrals; opening one shows its full decision history.',
   },
-  audit: {
-    holds: "The facility's audit log, with its hash-chain check and the daily anchors, for Admins.",
-    meanwhile: 'The audit log is already written for every read and change; this screen only makes it browsable.',
-  },
   criteria: {
     holds: "The organisation's rule set versions, what changed between them, and which version each decision used.",
     meanwhile: 'Facility settings shows the rule set version in force; every recommendation records the version it used.',

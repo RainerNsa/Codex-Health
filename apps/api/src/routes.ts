@@ -1057,6 +1057,37 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
     completeness: rs.completeness,
   };
 
+  // --- audit trail (M6): the facility's audit log for Admins, newest first, with the hash chain checked. Rows carry ids,
+  // codes and staff names only (the log never holds PHI). Paged by sequence number; one entity's trail with ?entity=.
+  app.get<{ Params: { fid: string }; Querystring: { before?: string; entity?: string } }>('/api/facilities/:fid/audit', async (req, reply) => {
+    try {
+      const user = caller(req.headers);
+      const { fid } = ids(req.params);
+      const { before, entity } = req.query;
+      if ((before !== undefined && (typeof before !== 'string' || !/^[1-9]\d{0,17}$/.test(before))) || (entity !== undefined && (typeof entity !== 'string' || !UUID.test(entity)))) throw new HttpError(400, 'invalid_query');
+      return reply.send(await tx(async (q) => {
+        const who = await enter(q, fid, user);
+        if (who.role !== 'facility_admin') throw new HttpError(403, 'forbidden');
+        // shortcut: recomputes the whole chain on every read; fine for a pilot facility's volume, move to the anchor job's last
+        // verified seq plus the rows after it when chains reach the hundreds of thousands
+        const chain = (await q<{ seq: string; ok: boolean }>('SELECT seq, ok FROM audit_chain_verify($1)', [fid])).rows;
+        const { rows } = await q<Record<string, unknown>>(
+          `SELECT a.seq, a.at, a.actor, u.display_name AS actor_name, a.action, a.entity_type, a.entity_id
+           FROM audit_log a LEFT JOIN users u ON a.actor = 'user:' || u.id::text
+           WHERE a.facility_id = $1 AND ($2::bigint IS NULL OR a.seq < $2::bigint) AND ($3::uuid IS NULL OR a.entity_id = $3::uuid)
+           ORDER BY a.seq DESC LIMIT ${QUEUE_LIMIT + 1}`, [fid, before ?? null, entity ?? null]);
+        await audit(q, fid, user, 'audit.viewed', 'facility', fid); // reading the log is itself an access to record
+        const page = rows.slice(0, QUEUE_LIMIT);
+        return {
+          // the first breaks are enough to act on; a whole list could be the whole chain
+          chain: { checked: chain.length, broken: chain.filter((r) => !r.ok).slice(0, 50).map((r) => Number(r.seq)) },
+          entries: page.map((r) => ({ ...r, seq: Number(r['seq']) })), // bigint arrives as text; a facility's chain stays far below 2^53
+          next: rows.length > QUEUE_LIMIT ? String(page.at(-1)!['seq']) : null,
+        };
+      }));
+    } catch (err) { return fail(reply, err); }
+  });
+
   app.get<{ Params: { fid: string } }>('/api/facilities/:fid/settings', async (req, reply) => {
     try {
       const user = caller(req.headers);
