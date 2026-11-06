@@ -329,6 +329,51 @@ describe.skipIf(!url)('manual fact entry API', () => {
     return { rid, ev: view!.evaluation };
   };
 
+  it('history: the facility\'s decisions, newest first, with their flags; filtered, paged and audited', async () => {
+    const plain = await withFacts(['ventilator_use', 'no'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
+    await move(plain.rid, U.reviewer, { action: 'submit' });
+    const a = (await finalize(plain.rid, U.reviewer, { evaluation_id: plain.ev.id, decision: 'admit' })).json().decision;
+    const nr = await withFacts(['ventilator_use', 'no'], ['recent_aggression', 'yes'], ['daily_skilled_need', 'yes']);
+    await move(nr.rid, U.reviewer, { action: 'submit' });
+    const o = (await finalize(nr.rid, U.reviewer, { evaluation_id: nr.ev.id, decision: 'do_not_admit', override_reason: 'SYNTHETIC: no bed' })).json().decision;
+    const url = `/api/facilities/${FAC.a}/decisions`;
+    const all = (await get(url, U.reviewer)).json();
+    const mine = all.decisions.filter((d: { id: string }) => d.id === a.id || d.id === o.id);
+    expect(mine).toEqual([
+      { id: o.id, referral_id: nr.rid, decided_at: expect.any(String), decision: 'do_not_admit', recommended_outcome: 'needs_review', override: true, hard_stop_override: false, amendment: false, cosigned: false, decided_by_name: expect.any(String), cosigned_by_name: null, rule_set_version: expect.any(Number) },
+      { id: a.id, referral_id: plain.rid, decided_at: expect.any(String), decision: 'admit', recommended_outcome: 'admit', override: false, hard_stop_override: false, amendment: false, cosigned: false, decided_by_name: expect.any(String), cosigned_by_name: null, rule_set_version: expect.any(Number) },
+    ]);
+    expect(JSON.stringify(all)).not.toContain('SYNTHETIC: no bed'); // reasons are read on the referral, never in a list
+    expect((await get(`${url}?override=1`, U.reviewer)).json().decisions.every((d: { override: boolean }) => d.override)).toBe(true);
+    expect((await get(`${url}?outcome=admit`, U.reviewer)).json().decisions.every((d: { decision: string }) => d.decision === 'admit')).toBe(true);
+    const first = (await get(`${url}?outcome=do_not_admit`, U.reviewer)).json();
+    expect(first.decisions[0].id).toBe(o.id);
+    expect((await get(`${url}?outcome=maybe`, U.reviewer)).json()).toEqual({ error: 'invalid_query' });
+    expect((await get(`${url}?after=nonsense`, U.reviewer)).json()).toEqual({ error: 'invalid_query' });
+    expect((await get(`${url}?after=${encodeURIComponent('2026-01-01 99:00:00+00|00000000-0000-4000-8000-000000000000')}`, U.reviewer)).json()).toEqual({ error: 'invalid_query' }); // the time is checked too
+    expect((await get(url, U.viewer)).statusCode).toBe(403);
+    expect((await get(`/api/facilities/${FAC.b}/decisions`, U.reviewer)).statusCode).toBe(404);
+    await asOwner(FAC.a);
+    expect((await c.query("SELECT count(*)::int AS n FROM audit_log WHERE facility_id = $1 AND action = 'decisions.listed'", [FAC.a])).rows[0].n).toBeGreaterThanOrEqual(4);
+    await c.query("SELECT set_config('app.facility_id', '', true)");
+  });
+
+  it('criteria versions: each rule set version, what changed from the one before, and how many decisions used it', async () => {
+    const r = await withFacts(['ventilator_use', 'no'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
+    await move(r.rid, U.reviewer, { action: 'submit' });
+    await finalize(r.rid, U.reviewer, { evaluation_id: r.ev.id, decision: 'admit' });
+    const body = (await get(`/api/facilities/${FAC.a}/criteria`, U.reviewer)).json();
+    const current = (await get(`/api/facilities/${FAC.a}/settings`, U.reviewer)).json();
+    const versions = body.versions as { version: number; rules: { id: string; name: string; kind: string }[]; added: string[]; removed: string[]; changed: string[]; decisions: number; criteria_document_ref: string; created_at: string; created_by_name: string | null }[];
+    expect(versions.map((v) => v.version)).toEqual([...versions.map((v) => v.version)].sort((x, y) => y - x));
+    expect(body.current).toBe(current.rule_set.version);
+    expect(versions.find((v) => v.version === body.current)!.decisions).toBeGreaterThanOrEqual(1);
+    const oldest = versions.at(-1)!;
+    expect([oldest.added.length, oldest.removed, oldest.changed]).toEqual([oldest.rules.length, [], []]);
+    for (const v of versions) expect(Object.keys(v.rules[0]!).sort()).toEqual(['enabled', 'id', 'kind', 'name']);
+    expect((await get(`/api/facilities/${FAC.a}/criteria`, U.viewer)).statusCode).toBe(403);
+  });
+
   it('review: a manual-entry referral is submitted for review, then finalized on the evaluation the Reviewer saw', async () => {
     const { rid, ev } = await withFacts(['ventilator_use', 'no'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
     expect(ev.outcome).toBe('admit');
