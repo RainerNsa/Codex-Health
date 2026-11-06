@@ -163,6 +163,26 @@ test('the queue is home: a referral replaces it, Back returns, and the facility 
   await expect(page.getByRole('button', { name: 'Open' })).toHaveCount(0);
 });
 
+for (const colorScheme of ['light', 'dark'] as const) {
+  test(`history and criteria versions: ${colorScheme}`, async ({ browser }) => {
+    const page = await (await browser.newContext({ colorScheme, viewport: sizes[0] })).newPage();
+    await signIn(page);
+    await page.getByRole('button', { name: 'Criteria versions' }).click();
+    await expect(page.getByRole('heading', { name: 'Criteria versions', level: 1 })).toBeVisible();
+    await expect(page.getByText('In force')).toBeVisible();
+    await check(page, `${colorScheme}-criteria`);
+    await page.getByRole('button', { name: 'History' }).click();
+    await expect(page.getByRole('heading', { name: 'History', level: 1 })).toBeVisible();
+    await expect(page.getByRole('button', { name: 'Overrides' })).toBeVisible();
+    await check(page, `${colorScheme}-history`);
+    const open = page.getByRole('button', { name: /^Open referral/ });
+    if (await open.count()) { // the local stack's seeded referrals include a decided one
+      await open.first().click();
+      await expect(page.getByRole('heading', { name: /^Referral / })).toBeVisible();
+    }
+  });
+}
+
 test('while documents are read the screen shows progress, and it follows the referral to review', async ({ browser }) => {
   const context = await browser.newContext({ viewport: sizes[0] });
   const page = await context.newPage();

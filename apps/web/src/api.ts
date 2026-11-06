@@ -117,3 +117,11 @@ export const sendReviewTime = (facility: string, referral: string, user: string,
   fetch(`/api/facilities/${facility}/referrals/${referral}/review-time`, {
     method: 'POST', keepalive: true, headers: { 'content-type': 'application/json', 'x-codex-dev-user': user }, body: JSON.stringify({ active_ms: activeMs }),
   }).catch(() => undefined);
+
+export interface HistoryRow { id: string; referral_id: string; decided_at: string; decision: 'admit' | 'do_not_admit'; recommended_outcome: Evaluation['outcome']; override: boolean; hard_stop_override: boolean; amendment: boolean; cosigned: boolean; decided_by_name: string | null; cosigned_by_name: string | null; rule_set_version: number }
+export interface HistoryFilter { outcome?: 'admit' | 'do_not_admit'; override?: boolean }
+export const listDecisions = (facility: string, user: string, f: HistoryFilter, after?: string) =>
+  call<{ decisions: HistoryRow[]; next: string | null }>(`/api/facilities/${facility}/decisions?${new URLSearchParams({ ...(f.outcome ? { outcome: f.outcome } : {}), ...(f.override ? { override: '1' } : {}), ...(after ? { after } : {}) })}`, user);
+
+export interface CriteriaVersion { version: number; criteria_document_ref: string; created_at: string; created_by_name: string | null; rules: { id: string; name: string; kind: string; enabled: boolean }[]; added: string[]; removed: string[]; changed: string[]; decisions: number }
+export const getCriteria = (facility: string, user: string) => call<{ current: number | null; versions: CriteriaVersion[] }>(`/api/facilities/${facility}/criteria`, user);
