@@ -1143,6 +1143,42 @@ describe.skipIf(!url)('manual fact entry API', () => {
       expect((await post(factsUrl(blank.rid), U.reviewer, fact('ventilator_use', 'no'))).statusCode).toBe(201); // a blank page: a person states it
     });
 
+    it('a detour through another value does not get round the page check (security review of step 3)', async () => {
+      const { rid, docId, factId } = await withReading(58);
+      await post(factsUrl(rid), U.reviewer, fact('recent_aggression', 'yes'));
+      await post(factsUrl(rid), U.reviewer, fact('daily_skilled_need', 'yes'));
+      expect((await post(factsUrl(rid), U.reviewer, fact('ventilator_use', 'unknown'))).statusCode).toBe(201);
+      expect((await post(factsUrl(rid), U.reviewer, fact('ventilator_use', 'yes'))).statusCode).toBe(201);
+      expect((await post(factsUrl(rid), U.reviewer, fact('ventilator_use', 'no'))).json()).toEqual({ error: 'confirm_against_page' });
+      // the view still points at the reading to check, and seeing its page is what lets the person state it
+      const now = (await get(refUrl(rid), U.reviewer)).json().facts.find((f: { key: string }) => f.key === 'ventilator_use');
+      expect([now.source, now.check]).toEqual(['user', { id: factId, evidence: { document_id: docId, page: 2, quote: 'SYNTHETIC not on a ventilator', verified: true } }]);
+      await pageLink(rid, docId);
+      expect((await pageSeen(rid, docId, factId)).statusCode).toBe(204);
+      const view = (await post(factsUrl(rid), U.reviewer, fact('ventilator_use', 'no'))).json();
+      expect(view.facts.find((f: { key: string }) => f.key === 'ventilator_use').check).toBeNull();
+      await asOwner(FAC.a);
+      await c.query("UPDATE referrals SET status = 'ready_for_review' WHERE id = $1", [rid]);
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      const done = await finalize(rid, U.reviewer, { evaluation_id: view.evaluation.id, decision: 'do_not_admit', override_reason: 'SYNTHETIC: no bed' });
+      expect(done.json()).toEqual({ error: 'cosign_required' }); // past the page check; the yes -> no flip still needs an Admin
+    });
+
+    it('with no page image a person states the reading, and the referral can be finalized', async () => {
+      const { rid, docId } = await withReading(59);
+      await asOwner(FAC.a);
+      await c.query('UPDATE documents SET page_images = 0 WHERE id = $1', [docId]);
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      expect((await post(factsUrl(rid), U.reviewer, fact('ventilator_use', 'no'))).statusCode).toBe(201);
+      await post(factsUrl(rid), U.reviewer, fact('recent_aggression', 'yes'));
+      const view = (await post(factsUrl(rid), U.reviewer, fact('daily_skilled_need', 'yes'))).json();
+      await asOwner(FAC.a);
+      await c.query("UPDATE referrals SET status = 'ready_for_review' WHERE id = $1", [rid]);
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      const done = await finalize(rid, U.reviewer, { evaluation_id: view.evaluation.id, decision: 'do_not_admit', override_reason: 'SYNTHETIC: no bed' });
+      expect([done.statusCode, done.json().referral.status]).toEqual([201, 'finalized']);
+    });
+
     it('finalize waits until a one-document reading is checked against its page (T12, XF-7b)', async () => {
       const { rid, docId, factId } = await withReading(57);
       await post(factsUrl(rid), U.reviewer, fact('recent_aggression', 'yes'));
@@ -1156,6 +1192,8 @@ describe.skipIf(!url)('manual fact entry API', () => {
       await pageLink(rid, docId);
       await pageSeen(rid, docId, factId);
       view = (await post(factsUrl(rid), U.reviewer, { ...fact('ventilator_use', 'no'), confirms: factId })).json();
+      view = (await post(factsUrl(rid), U.reviewer, fact('ventilator_use', 'no'))).json(); // checked once, it can be restated
+      expect(view.facts.find((f: { key: string }) => f.key === 'ventilator_use').source).toBe('user');
       const done = await finalize(rid, U.reviewer, dna(view.evaluation.id));
       expect([done.statusCode, done.json().referral.status]).toEqual([201, 'finalized']);
     });

@@ -54,6 +54,8 @@ export function EvidencePanel({ view, facility, user, busy, onConfirm, form }: {
           const f = view.facts.find((x) => x.key === k.key);
           const t = f?.source === 'ai' ? trust(f) : null;
           const known = f !== undefined && f.value.value !== null && f.value.value !== 'unknown';
+          // the page behind this row: its own, or the unchecked one-document reading a person's row stands on
+          const r = f?.check ? { ...f, id: f.check.id, evidence: f.check.evidence } : f;
           return (
             <Box as="li" key={k.key} listStyleType="none" borderTopWidth="1px" borderColor="line" py="2.5">
               <Flex wrap="wrap" align="center" gap="2">
@@ -68,23 +70,24 @@ export function EvidencePanel({ view, facility, user, busy, onConfirm, form }: {
                 {f?.source === 'ai' && f.single_source && <Text fontSize="xs" color="muted">Check it against the page before deciding.</Text>}
               </Flex>
               {f?.note && <Text mt="1" fontSize="xs">{f.note}</Text>}
-              {f?.evidence && (
+              {f?.check && <Text mt="1" fontSize="xs" color="review">{opened.includes(f.check.id) ? 'Page seen: the reading can now be stated.' : 'One document gave this reading and nobody has checked its page. Show it before stating the same value.'}</Text>}
+              {r?.evidence && (
                 <>
-                  <chakra.blockquote mt="1" pl="3" borderLeftWidth="3px" borderColor="line" fontFamily="mono" fontSize="xs" whiteSpace="pre-wrap" overflowWrap="anywhere">{f.evidence.quote}</chakra.blockquote>
-                  <Text mt="1" fontSize="xs" color="muted">{docLabel(f.evidence.document_id)}, page {f.evidence.page}</Text>
+                  <chakra.blockquote mt="1" pl="3" borderLeftWidth="3px" borderColor="line" fontFamily="mono" fontSize="xs" whiteSpace="pre-wrap" overflowWrap="anywhere">{r.evidence.quote}</chakra.blockquote>
+                  <Text mt="1" fontSize="xs" color="muted">{docLabel(r.evidence.document_id)}, page {r.evidence.page}</Text>
                 </>
               )}
               <Flex mt="1.5" wrap="wrap" align="center" gap="2">
-                {f?.evidence && <Button size="xs" variant="outline" disabled={busy} onClick={() => void show(f)}>Show page {f.evidence.page}</Button>}
-                {f && shown?.id === f.id && <Button size="xs" variant="ghost" onClick={() => setTurn((turn + 90) % 360)}>Rotate page</Button>}
+                {r?.evidence && <Button size="xs" variant="outline" disabled={busy} onClick={() => void show(r)}>Show page {r.evidence.page}</Button>}
+                {r && shown?.id === r.id && <Button size="xs" variant="ghost" onClick={() => setTurn((turn + 90) % 360)}>Rotate page</Button>}
                 {canWrite && f?.source === 'ai' && f.evidence && known && (opened.includes(f.id)
                   ? <Button size="xs" disabled={busy} onClick={() => onConfirm(f)}>Confirm this reading</Button>
                   : <Text fontSize="xs" color="muted">Show the page to confirm this reading.</Text>)}
                 {canWrite && <Button size="xs" variant="ghost" aria-expanded={editing === k.key} onClick={() => setEditing(editing === k.key ? null : k.key)}>{f ? 'Correct' : 'Enter'}</Button>}
               </Flex>
-              {f?.evidence && shown?.id === f.id && (
+              {r?.evidence && shown?.id === r.id && (
                 <Box mt="2" overflow="auto" maxH="80vh" borderWidth="1px" borderColor="line">
-                  <img src={shown.url} alt={`${docLabel(f.evidence.document_id)}, page ${f.evidence.page}`} onLoad={() => void loaded(f)}
+                  <img src={shown.url} alt={`${docLabel(r.evidence.document_id)}, page ${r.evidence.page}`} onLoad={() => void loaded(r)}
                     onError={() => { setShown(null); setMsg('The page could not be shown. Try again.'); }}
                     style={{ width: '100%', transform: `rotate(${turn}deg)`, transformOrigin: 'center' }} />
                 </Box>
