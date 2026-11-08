@@ -11,6 +11,7 @@ import { EvidencePanel } from './EvidencePanel.tsx';
 import { QueuePanel, StatusPill } from './QueuePanel.tsx';
 import { useReviewTimer } from './reviewTimer.ts';
 import { Logo } from './Logo.tsx';
+import { AuditPanel } from './AuditPanel.tsx';
 import { CriteriaPanel } from './CriteriaPanel.tsx';
 import { HistoryPanel } from './HistoryPanel.tsx';
 import { Nav, Placeholder, SCREENS, type Screen } from './Placeholders.tsx';
@@ -142,6 +143,7 @@ function Reviewer({ user, facility, onFacility, onSignOut }: Session & { onFacil
         {screen === 'settings' && <SettingsPanel facility={facility} user={user} />}
         {screen === 'history' && <HistoryPanel key={`${facility}:${user}`} facility={facility} user={user} onOpen={(id) => void run(() => getReferral(facility, id, user))} />}
         {screen === 'criteria' && <CriteriaPanel facility={facility} user={user} />}
+        {screen === 'audit' && <AuditPanel key={`${facility}:${user}`} facility={facility} user={user} />}
         <Placeholder screen={screen} />
 
         {/* a new facility or user starts an empty list: one person's queue never shows under another's name */}
