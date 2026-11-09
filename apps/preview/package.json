@@ -1,0 +1,17 @@
+{
+  "name": "@codex-health/preview",
+  "version": "0.0.0",
+  "private": true,
+  "description": "Browser preview for showing the product: the web app, the real API routes and the real migrations, running in the visitor's browser on an in-memory Postgres (PGlite) with synthetic data only. Not the product web bundle; never holds real data.",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "lint": "eslint --config ../../eslint.config.js src vite.config.ts",
+    "typecheck": "tsc --noEmit -p tsconfig.json",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.5.15"
+  }
+}
