@@ -436,17 +436,41 @@ describe.skipIf(!url)('manual fact entry API', () => {
     const url = `/api/facilities/${FAC.a}/dashboard`;
     const before = (await get(url, U.reviewer)).json();
     expect(Object.keys(before.counts).sort()).toEqual(['amended', 'draft', 'escalated', 'finalized', 'info_requested', 'on_hold', 'partial_failure', 'processing', 'ready_for_review']);
-    const r = await withFacts(['ventilator_use', 'no'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
-    await move(r.rid, U.reviewer, { action: 'submit' });
-    await finalize(r.rid, U.reviewer, { evaluation_id: r.ev.id, decision: 'admit' });
+    const decide = async () => {
+      const r = await withFacts(['ventilator_use', 'no'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
+      await move(r.rid, U.reviewer, { action: 'submit' });
+      await finalize(r.rid, U.reviewer, { evaluation_id: r.ev.id, decision: 'admit' });
+      return r;
+    };
+    const slow = await decide();
+    const amended = await decide();
+    await decide();
+    const old = await decide();
+    await amend(amended.rid, U.admin, { evaluation_id: amended.ev.id, decision: 'do_not_admit', override_reason: 'SYNTHETIC: no bed', amendment_reason: 'SYNTHETIC: capacity changed' });
     const after = (await get(url, U.reviewer)).json();
-    expect([after.counts.finalized - before.counts.finalized, after.decided.referrals - before.decided.referrals, after.decided.days]).toEqual([1, 1, 30]);
-    expect(after.decided.median_minutes).toBeGreaterThanOrEqual(0);
-    expect(JSON.stringify(after)).not.toContain(r.rid); // counts, never referral ids
+    expect([after.counts.finalized - before.counts.finalized, after.counts.amended - before.counts.amended, after.decided.referrals - before.decided.referrals, after.decided.days]).toEqual([3, 1, 4, 30]);
+    expect(JSON.stringify(after)).not.toContain(slow.rid); // counts, never referral ids
+    // known times: every decided referral created 10 min before its original decision, one 70 min before, and one
+    // decided 40 days ago. The median is 10 (a mean would not be); the amendment and the old decision are not counted.
+    await c.query('SAVEPOINT timed');
+    try {
+      await asOwner(FAC.a);
+      await c.query('SET CONSTRAINTS ALL IMMEDIATE'); // fire the queued deferred checks so the triggers can be paused
+      await c.query('ALTER TABLE referrals DISABLE TRIGGER USER');
+      await c.query('ALTER TABLE decisions DISABLE TRIGGER USER');
+      await c.query("UPDATE decisions SET decided_at = now() - interval '40 days' WHERE facility_id = $1 AND referral_id = $2", [FAC.a, old.rid]);
+      await c.query(`UPDATE referrals r SET created_at = d.decided_at - interval '10 minutes' FROM decisions d
+                     WHERE r.facility_id = $1 AND d.facility_id = $1 AND d.referral_id = r.id AND d.amends_decision_id IS NULL`, [FAC.a]);
+      await c.query("UPDATE referrals SET created_at = created_at - interval '60 minutes' WHERE facility_id = $1 AND id = $2", [FAC.a, slow.rid]);
+      await c.query('ALTER TABLE decisions ENABLE TRIGGER USER');
+      await c.query('ALTER TABLE referrals ENABLE TRIGGER USER');
+      await c.query("SELECT set_config('app.facility_id', '', true)");
+      expect((await get(url, U.reviewer)).json().decided).toEqual({ days: 30, referrals: after.decided.referrals - 1, median_minutes: 10 });
+    } finally { await c.query('ROLLBACK TO SAVEPOINT timed'); await c.query("SELECT set_config('app.facility_id', '', true)"); }
     expect((await get(url, U.viewer)).statusCode).toBe(403);
     expect((await get(`/api/facilities/${FAC.b}/dashboard`, U.reviewer)).statusCode).toBe(404);
     await asOwner(FAC.a);
-    expect((await c.query("SELECT count(*)::int AS n FROM audit_log WHERE facility_id = $1 AND action = 'dashboard.viewed'", [FAC.a])).rows[0].n).toBe(2);
+    expect((await c.query("SELECT count(*)::int AS n FROM audit_log WHERE facility_id = $1 AND action = 'dashboard.viewed'", [FAC.a])).rows[0].n).toBe(2); // the timed read was rolled back
     await c.query("SELECT set_config('app.facility_id', '', true)");
   });
 
