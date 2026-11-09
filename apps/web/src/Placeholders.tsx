@@ -16,10 +16,6 @@ export const SCREENS: { id: Screen; label: string; icon: Icon }[] = [
 ];
 
 const PLACEHOLDER: Partial<Record<Screen, { holds: string; meanwhile: string }>> = {
-  dashboard: {
-    holds: 'Referral counts by status and time from receipt to decision for this facility, built from the events recorded today.',
-    meanwhile: 'The Referrals screen lists what needs staff, what is processing and what is decided.',
-  },
   users: {
     holds: 'Inviting staff to this facility and assigning their roles, with sign-in and multi-factor authentication.',
     meanwhile: 'Roles are provisioned by the platform; the local build uses fixed synthetic users.',
