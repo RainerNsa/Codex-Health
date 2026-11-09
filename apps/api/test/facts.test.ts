@@ -432,6 +432,24 @@ describe.skipIf(!url)('manual fact entry API', () => {
     await c.query("SELECT set_config('app.facility_id', '', true)");
   });
 
+  it('dashboard: live counts by status and the median time to the original decision, aggregates only, audited', async () => {
+    const url = `/api/facilities/${FAC.a}/dashboard`;
+    const before = (await get(url, U.reviewer)).json();
+    expect(Object.keys(before.counts).sort()).toEqual(['amended', 'draft', 'escalated', 'finalized', 'info_requested', 'on_hold', 'partial_failure', 'processing', 'ready_for_review']);
+    const r = await withFacts(['ventilator_use', 'no'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
+    await move(r.rid, U.reviewer, { action: 'submit' });
+    await finalize(r.rid, U.reviewer, { evaluation_id: r.ev.id, decision: 'admit' });
+    const after = (await get(url, U.reviewer)).json();
+    expect([after.counts.finalized - before.counts.finalized, after.decided.referrals - before.decided.referrals, after.decided.days]).toEqual([1, 1, 30]);
+    expect(after.decided.median_minutes).toBeGreaterThanOrEqual(0);
+    expect(JSON.stringify(after)).not.toContain(r.rid); // counts, never referral ids
+    expect((await get(url, U.viewer)).statusCode).toBe(403);
+    expect((await get(`/api/facilities/${FAC.b}/dashboard`, U.reviewer)).statusCode).toBe(404);
+    await asOwner(FAC.a);
+    expect((await c.query("SELECT count(*)::int AS n FROM audit_log WHERE facility_id = $1 AND action = 'dashboard.viewed'", [FAC.a])).rows[0].n).toBe(2);
+    await c.query("SELECT set_config('app.facility_id', '', true)");
+  });
+
   it('criteria versions: each rule set version, what changed from the one before, and how many decisions used it', async () => {
     const r = await withFacts(['ventilator_use', 'no'], ['recent_aggression', 'no'], ['daily_skilled_need', 'yes']);
     await move(r.rid, U.reviewer, { action: 'submit' });

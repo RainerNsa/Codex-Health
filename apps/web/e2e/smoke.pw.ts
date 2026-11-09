@@ -181,6 +181,16 @@ for (const colorScheme of ['light', 'dark'] as const) {
       await expect(page.getByRole('heading', { name: /^Referral / })).toBeVisible();
     }
   });
+
+  test(`dashboard: ${colorScheme}`, async ({ browser }) => {
+    const page = await (await browser.newContext({ colorScheme, viewport: sizes[0] })).newPage();
+    await signIn(page);
+    await page.getByRole('button', { name: 'Dashboard' }).click();
+    await expect(page.getByRole('heading', { name: 'Dashboard', level: 1 })).toBeVisible();
+    await expect(page.getByRole('heading', { name: 'Needs staff' })).toBeVisible();
+    await expect(page.getByText(/^(Median .+ to its first decision|No referral has been decided)/)).toBeVisible();
+    await check(page, `${colorScheme}-dashboard`);
+  });
 }
 
 test('Needs Review: the queue groups it by reason, and Request information drafts a plain-text request, decisive items first', async ({ browser }) => {

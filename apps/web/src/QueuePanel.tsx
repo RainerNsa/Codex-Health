@@ -7,15 +7,20 @@ import { Panel, REASON_LABEL, Sub, type Tone } from './ui.tsx';
 
 /** How long something has waited, at the coarse grain a queue needs. */
 export function age(iso: string, now = Date.now()): string {
-  const minutes = Math.max(0, Math.floor((now - new Date(iso).getTime()) / 60_000));
+  return duration(Math.floor((now - new Date(iso).getTime()) / 60_000));
+}
+
+/** A span of whole minutes in words, as the queue shows waiting times. */
+export function duration(minutes: number): string {
+  minutes = Math.max(0, minutes);
   if (minutes < 1) return 'under a minute';
   if (minutes < 60) return `${minutes} min`;
   if (minutes < 48 * 60) return `${Math.floor(minutes / 60)} h`;
   return `${Math.floor(minutes / 1440)} days`;
 }
 
-const FILTER_LABEL: Record<QueueFilter, string> = { open: 'Needs staff', processing: 'Processing', closed: 'Decided' };
-const STATUS_LABEL: Record<string, string> = {
+export const FILTER_LABEL: Record<QueueFilter, string> = { open: 'Needs staff', processing: 'Processing', closed: 'Decided' };
+export const STATUS_LABEL: Record<string, string> = {
   draft: 'Draft', processing: 'Processing', partial_failure: 'Document failed', ready_for_review: 'Ready for review', on_hold: 'On hold',
   info_requested: 'Information requested', escalated: 'Escalated', finalized: 'Finalized', amended: 'Amended',
 };

@@ -1096,6 +1096,32 @@ export function registerRoutes(app: FastifyInstance, deps: { tx: Tx; storage: St
     } catch (err) { return fail(reply, err); }
   });
 
+  // --- dashboard (M6): live counts only, no fabricated stats. Referrals by status, and for referrals whose original
+  // decision fell in the last 30 days, the median time from the referral's creation to that decision. Aggregates only.
+  app.get<{ Params: { fid: string } }>('/api/facilities/:fid/dashboard', async (req, reply) => {
+    try {
+      const user = caller(req.headers);
+      const { fid } = ids(req.params);
+      return reply.send(await tx(async (q) => {
+        const who = await enter(q, fid, user);
+        if (!READ_ROLES.has(who.role)) throw new HttpError(403, 'forbidden');
+        const counts = Object.fromEntries((await q<{ status: string; n: number }>(
+          `SELECT s.status::text AS status, count(r.id)::int AS n
+           FROM unnest(enum_range(NULL::referral_status)) AS s(status)
+           LEFT JOIN referrals r ON r.facility_id = $1 AND r.status = s.status
+           GROUP BY s.status ORDER BY s.status`, [fid])).rows.map((r) => [r.status, r.n]));
+        // the original decision (amends_decision_id IS NULL) is unique per referral: its first decision
+        const decided = (await q<{ referrals: number; median_minutes: number | null }>(
+          `SELECT count(*)::int AS referrals,
+                  round(percentile_cont(0.5) WITHIN GROUP (ORDER BY extract(epoch FROM d.decided_at - r.created_at)) / 60)::int AS median_minutes
+           FROM decisions d JOIN referrals r ON r.facility_id = d.facility_id AND r.id = d.referral_id
+           WHERE d.facility_id = $1 AND d.amends_decision_id IS NULL AND d.decided_at > now() - interval '30 days'`, [fid])).rows[0]!;
+        await audit(q, fid, user, 'dashboard.viewed', 'facility', fid);
+        return { counts, decided: { days: 30, ...decided } };
+      }));
+    } catch (err) { return fail(reply, err); }
+  });
+
   // --- criteria versions (M6): the organisation's rule sets, what each changed from the one before, and how many of this
   // facility's decisions were made under each. Rule ids, names and kinds only; the full rules are on Facility settings.
   app.get<{ Params: { fid: string } }>('/api/facilities/:fid/criteria', async (req, reply) => {
